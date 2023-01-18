@@ -1,7 +1,7 @@
 /.git/
 /tmp/
 
-/bin/
+# /bin/
 /build/
 /examples/
 
