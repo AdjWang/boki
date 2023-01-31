@@ -46,8 +46,11 @@ public:
         return active_phylogs_.contains(sequencer_node_id);
     }
 
+    // get log space identifier: (view_id, sequencer_node_id), where node_id is
+    // consistent hash of user_logspace on log_space_hash_tokens_
     uint32_t LogSpaceIdentifier(uint32_t user_logspace) const {
         uint64_t h = hash::xxHash64(user_logspace, /* seed= */ log_space_hash_seed_);
+        // which sequencer to put the logspace
         uint16_t node_id = log_space_hash_tokens_[h % log_space_hash_tokens_.size()];
         DCHECK(sequencer_nodes_.contains(node_id));
         return bits::JoinTwo16(id_, node_id);

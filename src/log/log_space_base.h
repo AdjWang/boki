@@ -22,15 +22,19 @@ public:
         return bits::JoinTwo32(identifier(), seqnum_position_);
     }
 
+    // only FullMode mode
     std::optional<MetaLogProto> GetMetaLog(uint32_t pos) const;
 
     // Return true if metalog_position changed
+    // would fatal if returned false: "Failed to advance metalog position"
     bool ProvideMetaLog(const MetaLogProto& meta_log_proto);
 
     bool frozen() const { return state_ == kFrozen; }
     bool finalized() const { return state_ == kFinalized; }
 
+    // only Normal state
     void Freeze();
+    // only Normal or Frozen state
     bool Finalize(uint32_t final_metalog_position,
                   const std::vector<MetaLogProto>& tail_metalogs);
 
@@ -41,6 +45,10 @@ protected:
     enum State { kCreated, kNormal, kFrozen, kFinalized };
 
     LogSpaceBase(Mode mode, const View* view, uint16_t sequencer_id);
+
+    // invoked in LogProducer and LogStorage constructor
+    // add the idx of engine_id of the view to interested_shards_
+    // only Created state
     void AddInterestedShard(uint16_t engine_id);
 
     using OffsetVec = absl::FixedArray<uint32_t>;

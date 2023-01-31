@@ -198,16 +198,22 @@ void Engine::HandleLocalRead(LocalOp* op) {
             op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
     onging_reads_.PutChecked(op->id, op);
     const View::Sequencer* sequencer_node = nullptr;
+    // get log index by user_logspace
+    // index_ptr is nullptr if there's no local index found, otherwise index_ptr != nullptr
     LockablePtr<Index> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
+        // check if view is exerting, if not then pend and return
         ONHOLD_IF_SEEN_FUTURE_VIEW(op);
+        // logspace_id: (view_id, sequencer_node_id)
         uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
         sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
+        // [UNSURE] my_node(index node) can be primary or secondary?
         if (sequencer_node->IsIndexEngineNode(my_node_id())) {
             index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
         }
     }
+    // apply user settings
     bool use_local_index = true;
     if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
         use_local_index = false;
@@ -218,7 +224,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
             use_local_index = false;
         }
     }
-    if (index_ptr != nullptr && use_local_index) {
+    // perform read operation
+    if (index_ptr != nullptr && use_local_index) {              // use local index
         // Use local index
         IndexQuery query = BuildIndexQuery(op);
         Index::QueryResultVec query_results;
@@ -227,8 +234,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
             locked_index->MakeQuery(query);
             locked_index->PollQueryResults(&query_results);
         }
-        ProcessIndexQueryResults(query_results);
-    } else {
+        ProcessIndexQueryResults(query_results);    // inside which also send response by EgressHub
+    } else {                                                    // use remote index
         HVLOG_F(1, "There is no local index for sequencer {}, "
                    "will send request to remote engine node",
                 DCHECK_NOTNULL(sequencer_node)->node_id());

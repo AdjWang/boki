@@ -167,6 +167,14 @@ void LogProducer::PollAppendResults(AppendResultVec* results) {
     pending_append_results_.clear();
 }
 
+/* from void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log)
+ * Args:
+ *  metalog_seqnum: indicates metalog progress
+ *                  e.g. {1: (2,1,1), 2: (3,1,3)}, where 1, 2 is metalog_seqnum
+ *  start_seqnum:   view_id + sequencer_id + original start_seqnum
+ *  start_localid:  engine_node_id + shard_start
+ *  delta:          shard_start + delta items
+*/
 void LogProducer::OnNewLogs(uint32_t metalog_seqnum,
                             uint64_t start_seqnum, uint64_t start_localid,
                             uint32_t delta) {

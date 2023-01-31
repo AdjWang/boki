@@ -20,9 +20,12 @@ LogSpaceBase::~LogSpaceBase() {}
 void LogSpaceBase::AddInterestedShard(uint16_t engine_id) {
     DCHECK(state_ == kCreated);
     const View::NodeIdVec& engine_node_ids = view_->GetEngineNodes();
+    
+    // ensure engine_id is in engine_node_ids
     size_t idx = static_cast<size_t>(
         absl::c_find(engine_node_ids, engine_id) - engine_node_ids.begin());
     DCHECK_LT(idx, engine_node_ids.size());
+
     interested_shards_.insert(idx);
 }
 
@@ -156,6 +159,19 @@ bool LogSpaceBase::CanApplyMetaLog(const MetaLogProto& meta_log) {
     UNREACHABLE();
 }
 
+// metalog_seqnum = 2  XXXXXXXXXXXXXX  +   +     +   +
+//                           | 3 |  X  |   |     |   |
+//                           +---+  X  +---+  XXXXXXXXXXXXXX
+//                           | 2 |  X  |   |  X  | 6 |
+//                           +---+  XXXXXXXXXXX  +---+
+//                           | 1 |     | 4 |     | 5 |
+// metalog_seqnum = 1  XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+//                     start_seqnum = 1
+
+//                     engine 1  shard_start = 1  delta = 3
+//                     engine 2  shard_start = 4  delta = 1
+//                     engine 3  shard_start = 5  delta = 2
 void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
     switch (meta_log.type()) {
     case MetaLogProto::NEW_LOGS:

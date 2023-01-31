@@ -39,6 +39,7 @@ private:
 
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
+    // triggered by timer which is inited in SequencerBase
     void MarkNextCutIfDoable() override;
 
     DISALLOW_COPY_AND_ASSIGN(Sequencer);

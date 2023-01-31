@@ -211,6 +211,7 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
     }
 }
 
+// SHARD_PROG  = 0x13,  // Storage to Sequencer
 void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
                                     std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::SHARD_PROG);
@@ -229,6 +230,7 @@ void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
     }
 }
 
+// from the primary sequencer
 void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                   std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
