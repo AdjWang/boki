@@ -61,7 +61,7 @@ public:
     void RegisterConnection(ConnectionBase* connection);
 
     // Called by Connection for ONLY once
-    void OnConnectionClose(ConnectionBase* connection);
+    void OnConnectionClose(ConnectionBase* connection); // invoked in ConnectionBase::ScheduleClose()
 
     // Can only be called from this worker's event loop
     void NewWriteBuffer(std::span<char>* buf);

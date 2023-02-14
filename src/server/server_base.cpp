@@ -126,7 +126,7 @@ void ServerBase::EventLoopThreadMain() {
                     break;
                 } else if (connection_cbs_.contains(item.fd)) {
                     DoAcceptConnection(item.fd);
-                } else {
+                } else {    // pipe fds to workers, sent from IOWorker::OnConnectionClose()
                     DoReadClosedConnection(item.fd);
                 }
             } else {

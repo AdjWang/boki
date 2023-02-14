@@ -45,7 +45,7 @@ void IOWorker::Start(int pipe_to_server_fd) {
             PCHECK(status == 0);
             HVLOG(1) << "eventfd triggered";
             RunScheduledFunctions();
-            return true;
+            return true;    // bool repeat
         }
     ));
     // Setup pipe to server for receiving connections
@@ -63,7 +63,7 @@ void IOWorker::Start(int pipe_to_server_fd) {
             ConnectionBase* connection;
             memcpy(&connection, data.data(), __FAAS_PTR_SIZE);
             RegisterConnection(connection);
-            return true;
+            return true;    // bool repeat
         }
     ));
     // Start event loop thread
