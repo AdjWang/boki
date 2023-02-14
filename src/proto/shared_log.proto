@@ -114,11 +114,17 @@ message LogEntryProto {
 }
 
 message IndexDataProto {
+    // log_space_base::identifier() -> (view_id:16, sequencer_id:16)
     uint32 logspace_id  = 1;
 
+    // index table
     repeated uint32 seqnum_halves  = 2;
     repeated uint32 engine_ids     = 3;
     repeated uint32 user_logspaces = 4;
     repeated uint32 user_tag_sizes = 5;
     repeated uint64 user_tags      = 6;
+    // e.g. user_tag topology:
+    // user_tag_sizes:  [2, 3]
+    // user_tags:       [87, 894, 321, 54, 5]
+    // => user_tags is separated into 2 list: [87, 894] and [321, 54, 5]
 }

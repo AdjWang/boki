@@ -44,9 +44,12 @@ Index::~Index() {}
 
 class Index::PerSpaceIndex {
 public:
+    // logspace_id identifies system topology
+    // user_logspace identifies user log book
     PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace);
     ~PerSpaceIndex() {}
 
+    // seqnum:64 = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
     void Add(uint32_t seqnum_lowhalf, uint16_t engine_id, const UserTagVec& user_tags);
 
     bool FindPrev(uint64_t query_seqnum, uint64_t user_tag,
@@ -55,15 +58,20 @@ public:
                   uint64_t* seqnum, uint16_t* engine_id) const;
 
 private:
-    uint32_t logspace_id_;
+    // logspace_id identifies system topology
+    uint32_t logspace_id_;  // log_space_base::identifier() -> (view_id:16, sequencer_id:16)
+    // user_logspace identifies user log book
     uint32_t user_logspace_;
 
+    // engine_id by seqnum
     absl::flat_hash_map</* seqnum */ uint32_t, uint16_t> engine_ids_;
     std::vector<uint32_t> seqnums_;
     absl::flat_hash_map</* tag */ uint64_t, std::vector<uint32_t>> seqnums_by_tag_;
 
+    // find query_seqnum in seqnums by upper_bound
     bool FindPrev(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
                   uint32_t* result_seqnum) const;
+    // find query_seqnum in seqnums by lower_bound
     bool FindNext(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
                   uint32_t* result_seqnum) const;
 
@@ -76,16 +84,20 @@ Index::PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace
 
 void Index::PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
                                const UserTagVec& user_tags) {
+    // every seqnum is new
     DCHECK(!engine_ids_.contains(seqnum_lowhalf));
     engine_ids_[seqnum_lowhalf] = engine_id;
+    // seqnum is monotonic increasing
     DCHECK(seqnums_.empty() || seqnum_lowhalf > seqnums_.back());
     seqnums_.push_back(seqnum_lowhalf);
+    // separate seqnums by user_tag
     for (uint64_t user_tag : user_tags) {
         DCHECK_NE(user_tag, kEmptyLogTag);
         seqnums_by_tag_[user_tag].push_back(seqnum_lowhalf);
     }
 }
 
+// public
 bool Index::PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
                                     uint64_t* seqnum, uint16_t* engine_id) const {
     uint32_t seqnum_lowhalf;
@@ -108,6 +120,7 @@ bool Index::PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
     return true;
 }
 
+// public
 bool Index::PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
                                     uint64_t* seqnum, uint16_t* engine_id) const {
     uint32_t seqnum_lowhalf;
@@ -130,6 +143,8 @@ bool Index::PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
     return true;
 }
 
+// private
+// find query_seqnum in seqnums by upper_bound
 bool Index::PerSpaceIndex::FindPrev(const std::vector<uint32_t>& seqnums,
                                     uint64_t query_seqnum, uint32_t* result_seqnum) const {
     if (seqnums.empty() || bits::JoinTwo32(logspace_id_, seqnums.front()) > query_seqnum) {
@@ -153,6 +168,8 @@ bool Index::PerSpaceIndex::FindPrev(const std::vector<uint32_t>& seqnums,
     }
 }
 
+// private
+// find query_seqnum in seqnums by lower_bound
 bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
                                     uint64_t query_seqnum, uint32_t* result_seqnum) const {
     if (seqnums.empty() || bits::JoinTwo32(logspace_id_, seqnums.back()) < query_seqnum) {
@@ -185,10 +202,18 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
         size_t num_tags = index_data.user_tag_sizes(i);
         uint32_t seqnum = index_data.seqnum_halves(i);
         if (seqnum < indexed_seqnum_position_) {
+            // duplicated seqnum that had advanced, skip
             tag_iter += num_tags;
             continue;
         }
+        // else (seqnum >= indexed_seqnum_position_)
+        // accept IndexDataProto as IndexData to received_data_
         if (received_data_.count(seqnum) == 0) {
+            // contains all datas from IndexDataProto:
+            // seqnum_halves:32 (from seqnum) (key)
+            // engine_id:16
+            // user_logspace:32
+            // user_tags: [list:64]
             received_data_[seqnum] = IndexData {
                 .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
                 .user_logspace = index_data.user_logspaces(i),
@@ -206,10 +231,61 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
         }
         tag_iter += num_tags;
     }
+    // record the last received seqnum:32
     while (received_data_.count(data_received_seqnum_position_) > 0) {
         data_received_seqnum_position_++;
     }
     AdvanceIndexProgress();
+}
+
+void Index::AdvanceIndexProgress() {
+    while (!cuts_.empty()) {
+        uint32_t end_seqnum = cuts_.front().second;
+        if (data_received_seqnum_position_ < end_seqnum) {
+            break;
+        }
+        HVLOG_F(1, "Apply IndexData until seqnum {}", bits::HexStr0x(end_seqnum));
+        auto iter = received_data_.begin();
+        while (iter != received_data_.end()) {
+            uint32_t seqnum = iter->first;
+            if (seqnum >= end_seqnum) {
+                break;
+            }
+            const IndexData& index_data = iter->second;
+            GetOrCreateIndex(index_data.user_logspace)->Add(
+                seqnum, index_data.engine_id, index_data.user_tags);
+            iter = received_data_.erase(iter);
+        }
+        DCHECK_GT(end_seqnum, indexed_seqnum_position_);
+        indexed_seqnum_position_ = end_seqnum;
+        uint32_t metalog_seqnum = cuts_.front().first;
+        indexed_metalog_position_ = metalog_seqnum + 1;
+        cuts_.pop_front();
+    }
+    if (!blocking_reads_.empty()) {
+        int64_t current_timestamp = GetMonotonicMicroTimestamp();
+        std::vector<std::pair<int64_t, IndexQuery>> unfinished;
+        for (const auto& [start_timestamp, query] : blocking_reads_) {
+            if (!ProcessBlockingQuery(query)) {
+                if (current_timestamp - start_timestamp
+                        < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
+                    unfinished.push_back(std::make_pair(start_timestamp, query));
+                } else {
+                    pending_query_results_.push_back(BuildNotFoundResult(query));
+                }
+            }
+        }
+        blocking_reads_ = std::move(unfinished);
+    }
+    auto iter = pending_queries_.begin();
+    while (iter != pending_queries_.end()) {
+        if (iter->first > indexed_metalog_position_) {
+            break;
+        }
+        const IndexQuery& query = iter->second;
+        ProcessQuery(query);
+        iter = pending_queries_.erase(iter);
+    }
 }
 
 void Index::MakeQuery(const IndexQuery& query) {
@@ -277,61 +353,12 @@ void Index::OnFinalized(uint32_t metalog_position) {
     }
 }
 
-void Index::AdvanceIndexProgress() {
-    while (!cuts_.empty()) {
-        uint32_t end_seqnum = cuts_.front().second;
-        if (data_received_seqnum_position_ < end_seqnum) {
-            break;
-        }
-        HVLOG_F(1, "Apply IndexData until seqnum {}", bits::HexStr0x(end_seqnum));
-        auto iter = received_data_.begin();
-        while (iter != received_data_.end()) {
-            uint32_t seqnum = iter->first;
-            if (seqnum >= end_seqnum) {
-                break;
-            }
-            const IndexData& index_data = iter->second;
-            GetOrCreateIndex(index_data.user_logspace)->Add(
-                seqnum, index_data.engine_id, index_data.user_tags);
-            iter = received_data_.erase(iter);
-        }
-        DCHECK_GT(end_seqnum, indexed_seqnum_position_);
-        indexed_seqnum_position_ = end_seqnum;
-        uint32_t metalog_seqnum = cuts_.front().first;
-        indexed_metalog_position_ = metalog_seqnum + 1;
-        cuts_.pop_front();
-    }
-    if (!blocking_reads_.empty()) {
-        int64_t current_timestamp = GetMonotonicMicroTimestamp();
-        std::vector<std::pair<int64_t, IndexQuery>> unfinished;
-        for (const auto& [start_timestamp, query] : blocking_reads_) {
-            if (!ProcessBlockingQuery(query)) {
-                if (current_timestamp - start_timestamp
-                        < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
-                    unfinished.push_back(std::make_pair(start_timestamp, query));
-                } else {
-                    pending_query_results_.push_back(BuildNotFoundResult(query));
-                }
-            }
-        }
-        blocking_reads_ = std::move(unfinished);
-    }
-    auto iter = pending_queries_.begin();
-    while (iter != pending_queries_.end()) {
-        if (iter->first > indexed_metalog_position_) {
-            break;
-        }
-        const IndexQuery& query = iter->second;
-        ProcessQuery(query);
-        iter = pending_queries_.erase(iter);
-    }
-}
-
 Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
         return index_.at(user_logspace).get();
     }
     HVLOG_F(1, "Create index of user logspace {}", user_logspace);
+    // TODO: without reclimination???
     PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace);
     index_[user_logspace].reset(index);
     return index;

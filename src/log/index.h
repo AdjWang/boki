@@ -56,6 +56,7 @@ public:
 
 private:
     class PerSpaceIndex;
+    // hash_map: {user_logspace: PerSpaceIndex}
     absl::flat_hash_map</* user_logspace */ uint32_t,
                         std::unique_ptr<PerSpaceIndex>> index_;
 
@@ -67,8 +68,12 @@ private:
                           IndexQuery>> blocking_reads_;
     QueryResultVec pending_query_results_;
 
+    // comment for code intelligence
+    // std::deque<std::pair</* metalog_seqnum */ uint32_t,
+    //                      /* end_seqnum */ uint32_t>> cuts_;
     std::deque<std::pair</* metalog_seqnum */ uint32_t,
                          /* end_seqnum */ uint32_t>> cuts_;
+    
     uint32_t indexed_metalog_position_;
 
     struct IndexData {
@@ -76,10 +81,19 @@ private:
         uint32_t   user_logspace;
         UserTagVec user_tags;
     };
+    
+    // transfer data from ProvideIndexData(...) to AdvanceIndexProgress()
+    // record IndexData from IndexDataProto
     std::map</* seqnum */ uint32_t, IndexData> received_data_;
+
+    // monotonically increasing, record the last received seqnum data in IndexDataProto
+    // wrote in Index::ProvideIndexData(...)
+    // the type of seqnum same as seqnum_halves:32 in IndexDataProto
     uint32_t data_received_seqnum_position_;
+    
     uint32_t indexed_seqnum_position_;
 
+    // ((view_id:16, sequencer_id:16), indexed_metalog_position:32)
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);
     }

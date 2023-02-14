@@ -15,6 +15,7 @@ public:
 
     uint16_t view_id() const { return view_->id(); }
     uint16_t sequencer_id() const { return sequencer_node_->node_id(); }
+    // (view_id:16, sequencer_id:16)
     uint32_t identifier() const { return bits::JoinTwo16(view_id(), sequencer_id()); }
 
     uint32_t metalog_position() const { return metalog_position_; }
