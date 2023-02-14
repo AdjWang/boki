@@ -42,6 +42,31 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ConnectionBase);
 };
 
+// Implements async io scheduler based on io_uring.
+// Used by:
+// - engine
+// - message_connection
+// - grpc_connection
+// - http_connection
+// - server
+// - engine_base
+// - sequencer_base
+// - storage_base
+// - egress_hub
+// - ingress_connection
+// - io_worker
+// - server_base
+// - timer
+// Each io worker maps to one thread also one fd.
+// Functionalities:
+// - schedule functions. Functions are scheduled to a specific io worker, which
+//   is also a thread. Nightcore balances functions to multiple threads by round-
+//   robin on io workers.
+// - hold connections. Connections are registered to a io worker from ServerBase.
+//   IOWorker not listen to connections, only holds conn refs to be used by servers
+//   on demand.
+//   Connections in io worker are used to check if a function is able to run if
+//   its owner connection is still alive.
 class IOWorker final {
 public:
     IOWorker(std::string_view worker_name, size_t write_buffer_size);
@@ -58,6 +83,8 @@ public:
     void WaitForFinish();
     bool WithinMyEventLoopThread();
 
+    // connection comes from ServerBase::pipes_to_ioworker_
+    // directly pass the pointer as data[]
     void RegisterConnection(ConnectionBase* connection);
 
     // Called by Connection for ONLY once
@@ -75,6 +102,7 @@ public:
         return conn != nullptr ? conn->as_ptr<T>() : nullptr;
     }
 
+    // Where create_cb is the function to create a connection.
     template<class T>
     T* PickOrCreateConnection(int type, std::function<T*(IOWorker*)> create_cb);
 
@@ -96,7 +124,9 @@ private:
     IOUring io_uring_;
     static thread_local IOWorker* current_;
 
+    // a notifier to run scheduled functions
     int eventfd_;
+    // a socketpair connecting to ServerBase
     int pipe_to_server_fd_;
 
     std::string log_header_;

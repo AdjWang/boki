@@ -8,6 +8,7 @@
 namespace faas {
 namespace server {
 
+// Initialized in virtual ServerBase::OnRemoteMessageConn
 class IngressConnection : public ConnectionBase {
 public:
     IngressConnection(int type, int sockfd, size_t msghdr_size);

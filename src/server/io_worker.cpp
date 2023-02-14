@@ -180,6 +180,7 @@ void IOWorker::ScheduleFunction(ConnectionBase* owner, std::function<void()> fn)
         return;
     }
     ScheduledFunction function = {
+        // owner_id is used to check if the connection is still alive
         .owner_id = (owner == nullptr) ? -1 : owner->id(),
         .fn = fn
     };

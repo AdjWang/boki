@@ -90,6 +90,7 @@ void ServerBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake
 
 void ServerBase::EventLoopThreadMain() {
     std::vector<struct pollfd> pollfds;
+    // 3 types fds to handle
     // Add stop_eventfd_
     pollfds.push_back({ .fd = stop_eventfd_, .events = POLLIN, .revents = 0 });
     // Add all pipe fds to workers
@@ -100,6 +101,7 @@ void ServerBase::EventLoopThreadMain() {
     for (const auto& item : connection_cbs_) {
         pollfds.push_back({ .fd = item.first, .events = POLLIN, .revents = 0 });
     }
+
     HLOG(INFO) << "Event loop starts";
     bool stopped = false;
     while (!stopped) {
@@ -117,6 +119,7 @@ void ServerBase::EventLoopThreadMain() {
                     HLOG_F(FATAL, "Error happens on fd {}", item.fd);
                 }
             } else if (item.revents & POLLIN) {
+                // 3 types fds to handle, corresponding to poolfds items above.
                 if (item.fd == stop_eventfd_) {
                     HLOG(INFO) << "Receive stop event";
                     uint64_t value;
@@ -197,6 +200,7 @@ void ServerBase::RegisterConnection(IOWorker* io_worker, ConnectionBase* connect
     if (io_worker->WithinMyEventLoopThread()) {
         io_worker->RegisterConnection(connection);
     } else {
+        // dispatch the connection to the target io worker
         DCHECK(pipes_to_io_worker_.contains(io_worker));
         int pipe_to_worker = pipes_to_io_worker_.at(io_worker);
         ssize_t ret = write(pipe_to_worker, &connection, __FAAS_PTR_SIZE);
@@ -264,7 +268,7 @@ void ServerBase::DoReadClosedConnection(int pipefd) {
 void ServerBase::DoAcceptConnection(int server_sockfd) {
     DCHECK(WithinMyEventLoopThread());
     DCHECK(connection_cbs_.contains(server_sockfd));
-    while (true) {
+    while (true) {      // accept all conn requests in one loop
         int client_sockfd = accept4(server_sockfd, nullptr, nullptr, SOCK_CLOEXEC);
         if (client_sockfd < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
