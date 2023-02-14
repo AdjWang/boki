@@ -62,6 +62,10 @@ Engine::~Engine() {}
 void Engine::StartInternal() {
     // Load function config file
     CHECK(!func_config_file_.empty());
+    CHECK(fs_utils::Exists(func_config_file_))
+        << "File not exists " << func_config_file_;
+    CHECK(fs_utils::IsFile(func_config_file_))
+        << "Not a file  " << func_config_file_;
     CHECK(fs_utils::ReadContents(func_config_file_, &func_config_json_))
         << "Failed to read from file " << func_config_file_;
     CHECK(func_config_.Load(func_config_json_));

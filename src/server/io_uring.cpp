@@ -35,6 +35,8 @@ IOUring::IOUring()
           fmt::format("io_uring[{}] ev_loop_time", uring_id_))),
       average_op_time_stat_(stat::StatisticsCollector<int>::VerboseLogReportCallback<2>(
           fmt::format("io_uring[{}] average_op_time", uring_id_))) {
+
+    // initialize io uring
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
     if (absl::GetFlag(FLAGS_io_uring_sqpoll)) {
@@ -50,6 +52,8 @@ IOUring::IOUring()
     }
     CHECK((params.features & IORING_FEAT_FAST_POLL) != 0)
         << "IORING_FEAT_FAST_POLL not supported";
+
+    // initialize cqe wait timeout
     memset(&cqe_wait_timeout_, 0, sizeof(cqe_wait_timeout_));
     uint32_t wait_timeout_us = absl::GetFlag(FLAGS_io_uring_cq_wait_timeout_us);
     if (wait_timeout_us != 0) {
@@ -59,9 +63,11 @@ IOUring::IOUring()
         CHECK_EQ(absl::GetFlag(FLAGS_io_uring_cq_nr_wait), 1U)
             << "io_uring_cq_nr_wait should be set to 1 if timeout is 0";
     }
+    
+    // initialize io uring register fd slots
     size_t n_fd_slots = absl::GetFlag(FLAGS_io_uring_fd_slots);
     CHECK_GT(n_fd_slots, 0U);
-    std::vector<int> tmp;
+    std::vector<int> tmp;   // regist real fd later in IOUring::RegisterFd()
     tmp.resize(n_fd_slots, -1);
     ret = io_uring_register_files(&ring_, tmp.data(), gsl::narrow_cast<uint32_t>(n_fd_slots));
     if (ret != 0) {

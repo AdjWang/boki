@@ -315,6 +315,7 @@ public:
         return static_cast<MessageType>(message.message_type) == MessageType::SHARED_LOG_OP;
     }
 
+    // set message by func call
     static void SetFuncCall(Message* message, const FuncCall& func_call) {
         message->func_id = func_call.func_id;
         message->method_id = func_call.method_id;
@@ -322,6 +323,7 @@ public:
         message->call_id = func_call.call_id;
     }
 
+    // get func call from message
     static FuncCall GetFuncCall(const Message& message) {
         DCHECK(IsInvokeFunc(message) || IsDispatchFuncCall(message)
                 || IsFuncCallComplete(message) || IsFuncCallFailed(message)

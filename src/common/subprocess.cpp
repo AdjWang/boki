@@ -21,15 +21,21 @@ Subprocess::~Subprocess() {
 }
 
 void Subprocess::SetStandardFile(StandardPipe pipe, std::string_view file_path) {
+    #define ERRNO_LOGSTR(errno) fmt::format("{} [{}]", strerror(errno), errno)
+
     DCHECK(state_ == kCreated);
     DCHECK_EQ(std_fds_[pipe], -1);
     int fd;
     if (pipe == kStdin) {
         fd = open(std::string(file_path).c_str(), O_RDONLY);
-        PCHECK(fd != -1);
+        PCHECK(fd != -1)
+            << "open failed. file path: " << file_path
+            << "reason: " << ERRNO_LOGSTR(errno);
     } else {
         fd = creat(std::string(file_path).c_str(), __FAAS_FILE_CREAT_MODE);
-        PCHECK(fd != -1);
+        PCHECK(fd != -1)
+            << "open failed. file path: " << file_path
+            << "reason: " << ERRNO_LOGSTR(errno);
     }
     std_fds_[pipe] = fd;
 }
