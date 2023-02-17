@@ -7,7 +7,7 @@ SRC_EXT = cpp
 SRC_PATH = ./src
 # General compiler flags
 COMPILE_FLAGS = -std=c++17 -march=haswell -D__FAAS_SRC \
-	-Wall -Wextra -Werror -Wno-unused-parameter \
+	-Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
 	-fdata-sections -ffunction-sections
 # Additional release-specific flags
 RCOMPILE_FLAGS = -DNDEBUG -O3
