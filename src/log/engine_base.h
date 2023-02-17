@@ -25,16 +25,26 @@ public:
     void Start();
     void Stop();
 
+    // bind to engine::Engine::CreateSharedLogIngressConn, creating shared log IngressConnection
     // check types, then invoke MessageHandler(...)
     void OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
                                 const protocol::SharedLogMessage& message,
                                 std::span<const char> payload);
 
+    // bind to engine::Engine::OnExternalFuncCall
     void OnNewExternalFuncCall(const protocol::FuncCall& func_call, uint32_t log_space);
+
+    // bind to engine::Engine::HandleInvokeFuncMessage
     void OnNewInternalFuncCall(const protocol::FuncCall& func_call,
                                const protocol::FuncCall& parent_func_call);
+    
+    // bind to engine::Engine::HandleInvokeFuncMessage
+    // bind to engine::Engine::HandleFuncCallCompleteMessage
+    // bind to engine::Engine::HandleFuncCallFailedMessage
+    // bind to engine::Engine::OnExternalFuncCall
     void OnFuncCallCompleted(const protocol::FuncCall& func_call);
 
+    // bind to engine::Engine::HandleSharedLogOpMessage
     // must be invoked after the ctx created
     // build LocalOp by message, then invoke LocalOpHandler(...)
     void OnMessageFromFuncWorker(const protocol::Message& message);
@@ -82,6 +92,7 @@ protected:
 
     void LocalOpHandler(LocalOp* op);
 
+    // send log data to all storage nodes from this engine node
     // invoked by Engine::HandleLocalAppend(...)
     void ReplicateLogEntry(const View* view, const LogMetaData& log_metadata,
                            std::span<const uint64_t> user_tags,
