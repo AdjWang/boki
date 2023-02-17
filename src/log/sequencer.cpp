@@ -3,6 +3,8 @@
 #include "log/flags.h"
 #include "utils/bits.h"
 
+#include "common/otel_trace.h"
+
 namespace faas {
 namespace log {
 
@@ -182,6 +184,8 @@ void Sequencer::HandleTrimRequest(const SharedLogMessage& request) {
 
 void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::META_PROG);
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Sequencer::OnRecvMetaLogProgress"));
+
     const View* view = nullptr;
     absl::InlinedVector<MetaLogProto, 4> replicated_metalogs;
     {
@@ -215,6 +219,8 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
 void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
                                     std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::SHARD_PROG);
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Sequencer::OnRecvShardProgress"));
+
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
@@ -234,6 +240,8 @@ void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
 void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                   std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Sequencer::OnRecvNewMetaLogs"));
+
     uint32_t logspace_id = message.logspace_id;
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), logspace_id);

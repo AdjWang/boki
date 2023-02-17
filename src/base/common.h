@@ -108,6 +108,14 @@ __END_THIRD_PARTY_HEADERS
 
 #endif  // defined(__FAAS_HAVE_ABSL) && !defined(__FAAS_USED_IN_BINDING)
 
+// opentelemetry-cpp
+// https://github.com/open-telemetry/opentelemetry-cpp/issues/1319
+#define HAVE_ABSEIL
+#include <opentelemetry/exporters/zipkin/zipkin_exporter_factory.h>
+#include <opentelemetry/sdk/trace/simple_processor_factory.h>
+#include <opentelemetry/sdk/trace/tracer_provider_factory.h>
+#include <opentelemetry/trace/provider.h>
+
 #include "base/macro.h"
 #include "base/logging.h"
 #include "base/std_span.h"

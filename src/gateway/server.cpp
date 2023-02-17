@@ -8,6 +8,8 @@
 #include "server/constants.h"
 #include "gateway/flags.h"
 
+#include "common/otel_trace.h"
+
 #include <fcntl.h>
 #include <nlohmann/json.hpp>
 
@@ -139,6 +141,9 @@ void Server::OnNewHttpFuncCall(HttpConnection* connection, FuncCallContext* func
         connection->OnFuncCallFinished(func_call_context);
         return;
     }
+
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("gateway::Server::OnNewHttpFuncCall"));
+
     uint32_t call_id = next_call_id_.fetch_add(1, std::memory_order_relaxed);
     FuncCall func_call = FuncCallHelper::New(gsl::narrow_cast<uint16_t>(func_entry->func_id),
                                              /* client_id= */ 0, call_id);

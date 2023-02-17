@@ -6,6 +6,8 @@
 #include "utils/io.h"
 #include "utils/timerfd.h"
 
+#include "common/otel_trace.h"
+
 namespace faas {
 namespace log {
 
@@ -150,9 +152,12 @@ void Storage::HandleReadAtRequest(const SharedLogMessage& request) {
     ProcessReadResults(results);
 }
 
+// from Engine::HandleLocalAppend -> EngineBase::ReplicateLogEntry
 void Storage::HandleReplicateRequest(const SharedLogMessage& message,
                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::REPLICATE);
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Storage::HandleReplicateRequest"));
+
     LogMetaData metadata = log_utils::GetMetaDataFromMessage(message);
     std::span<const uint64_t> user_tags;
     std::span<const char> log_data;
@@ -176,6 +181,8 @@ void Storage::HandleReplicateRequest(const SharedLogMessage& message,
 void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                 std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Storage::OnRecvNewMetaLogs"));
+
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
     const View* view = nullptr;
