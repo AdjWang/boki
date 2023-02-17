@@ -6,6 +6,7 @@
 #include "utils/procfs.h"
 #include "utils/env_variables.h"
 #include "engine/engine.h"
+#include "common/otel_trace.h"
 
 ABSL_FLAG(int, engine_tcp_port, -1,
           "If set, Launcher and FuncWorker will communicate with engine via localhost TCP socket");
@@ -16,6 +17,7 @@ ABSL_FLAG(std::string, root_path_for_ipc, "/dev/shm/faas_ipc",
           "Root directory for IPCs used by FaaS");
 ABSL_FLAG(std::string, func_config_file, "", "Path to function config file");
 ABSL_FLAG(bool, enable_shared_log, false, "If to enable shared log.");
+ABSL_FLAG(std::string, tracer_exporter_endpoint, "", "Endpoint of opentelemetry exporter.");
 
 namespace faas {
 
@@ -55,6 +57,14 @@ void EngineMain(int argc, char* argv[]) {
     if (node_id == -1) {
         node_id = GenerateNodeId();
     }
+
+    // setup tracer
+    otel::InitTracer(absl::GetFlag(FLAGS_tracer_exporter_endpoint),
+                     /* service_name= */ fmt::format("engine_{}", node_id));
+    {
+        auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("EngineMain tracer init test"));
+    }
+
     auto engine = std::make_unique<engine::Engine>(node_id);
     engine->set_engine_tcp_port(absl::GetFlag(FLAGS_engine_tcp_port));
     engine->set_func_config_file(absl::GetFlag(FLAGS_func_config_file));

@@ -5,6 +5,8 @@
 #include "utils/bits.h"
 #include "utils/random.h"
 
+#include "common/otel_trace.h"
+
 namespace faas {
 namespace log {
 
@@ -162,6 +164,8 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
 
 void Engine::HandleLocalAppend(LocalOp* op) {
     DCHECK(op->type == SharedLogOpType::APPEND);
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Engine::HandleLocalAppend"));
+
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
     const View* view = nullptr;
@@ -318,6 +322,8 @@ void Engine::HandleRemoteRead(const SharedLogMessage& request) {
 void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Engine::OnRecvNewMetaLogs"));
+
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
     LogProducer::AppendResultVec append_results;

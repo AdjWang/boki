@@ -2,9 +2,11 @@
 #include "base/common.h"
 #include "utils/env_variables.h"
 #include "log/sequencer.h"
+#include "common/otel_trace.h"
 
 ABSL_FLAG(int, node_id, -1,
           "My node ID. Also settable through environment variable FAAS_NODE_ID.");
+ABSL_FLAG(std::string, tracer_exporter_endpoint, "", "Endpoint of opentelemetry exporter.");
 
 namespace faas {
 
@@ -27,6 +29,13 @@ void SequencerMain(int argc, char* argv[]) {
     if (node_id == -1) {
         LOG(FATAL) << "Node ID not set!";
     }
+    // setup tracer
+    otel::InitTracer(absl::GetFlag(FLAGS_tracer_exporter_endpoint),
+                     /* service_name= */ fmt::format("sequencer_{}", node_id));
+    {
+        auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("SequencerMain tracer init test"));
+    }
+
     auto sequencer = std::make_unique<log::Sequencer>(node_id);
 
     sequencer->Start();

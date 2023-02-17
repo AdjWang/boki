@@ -12,6 +12,10 @@
 
 FROM ubuntu:focal as release
 
+# install curl for opentelemetry which requires libcurl.so
+RUN apt update && \
+    apt install -y curl
+
 COPY . /src/boki
 
 COPY ./bin/release/gateway    /boki/gateway

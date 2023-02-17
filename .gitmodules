@@ -43,3 +43,6 @@
 [submodule "deps/tkrzw"]
 	path = deps/tkrzw
 	url = https://github.com/estraier/tkrzw.git
+[submodule "deps/opentelemetry-cpp"]
+	path = deps/opentelemetry-cpp
+	url = https://github.com/open-telemetry/opentelemetry-cpp.git

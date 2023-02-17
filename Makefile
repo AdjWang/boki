@@ -23,13 +23,16 @@ INCLUDES = -I$(SRC_PATH) -I./include -I./deps/out/include \
 PROTOC = ./deps/out/bin/protoc
 # General linker settings
 ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
-		| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
+	| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
+OTEL_LIBRARIES = $(shell find deps/out/lib/libopentelemetry_*.a -printf '%f\n' \
+	| sed -e 's/libopentelemetry_\([a-z0-9_]\+\)\.a/-lopentelemetry_\1/g')
 LINK_FLAGS = -Ldeps/out/lib \
 	-Wl,-Bstatic -luv_a -lhttp_parser -lnghttp2 \
 	-luring -lprotobuf-lite -lrocksdb -ltkrzw -lzookeeper_st \
 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
+	-Wl,--start-group $(OTEL_LIBRARIES) -Wl,--end-group \
 	-lzstd -ljemalloc \
-	-Wl,-Bdynamic -lpthread -ldl \
+	-Wl,-Bdynamic -lpthread -ldl -lcurl \
 	-Wl,--gc-sections
 # Additional release-specific linker settings
 RLINK_FLAGS =
@@ -39,7 +42,7 @@ DLINK_FLAGS =
 
 # These options can be overridden in config.mk
 DISABLE_STAT = 1
-DEBUG_BUILD = 1
+DEBUG_BUILD = 0
 BUILD_BENCH = 0
 FORCE_DCHECK = 0
 

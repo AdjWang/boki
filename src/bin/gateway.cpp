@@ -1,10 +1,12 @@
 #include "base/init.h"
 #include "base/common.h"
 #include "gateway/server.h"
+#include "common/otel_trace.h"
 
 ABSL_FLAG(int, http_port, 8080, "Port for HTTP connections");
 ABSL_FLAG(int, grpc_port, 50051, "Port for gRPC connections");
 ABSL_FLAG(std::string, func_config_file, "", "Path to function config file");
+ABSL_FLAG(std::string, tracer_exporter_endpoint, "", "Endpoint of opentelemetry exporter.");
 
 namespace faas {
 
@@ -19,6 +21,13 @@ static void StopServerHandler() {
 void GatewayMain(int argc, char* argv[]) {
     base::InitMain(argc, argv);
     base::SetInterruptHandler(StopServerHandler);
+
+    // setup tracer
+    otel::InitTracer(absl::GetFlag(FLAGS_tracer_exporter_endpoint),
+                     /* service_name= */ "gateway");
+    {
+        auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("GatewayMain tracer init test"));
+    }
 
     auto server = std::make_unique<gateway::Server>();
     server->set_http_port(absl::GetFlag(FLAGS_http_port));
