@@ -330,6 +330,15 @@ void IOUring::EventLoopRunOnce(size_t* inflight_ops) {
         average_op_time_stat_.AddSample(gsl::narrow_cast<int>(elasped_time / count));
         completed_ops_counter_.Tick(count);
         completed_ops_stat_.AddSample(gsl::narrow_cast<int>(count));
+
+        std::vector<Op*> temp;
+        temp.reserve(pending_ops_.size());
+        for(const auto& [op_id, op] : pending_ops_) {
+            temp.push_back(op);
+        }
+        for(Op* op : temp) {
+            EnqueueOp(op);
+        }
     }
     if (VLOG_IS_ON(2)) {
         VLOG(2) << "Inflight ops:";
@@ -434,9 +443,18 @@ void IOUring::UnregisterFd(Descriptor* desc) {
 #endif
 
 void IOUring::EnqueueOp(Op* op) {
+    CHECK(op != nullptr) << "invalid op";
+    CHECK_LT(op_type(op), sizeof(kOpTypeStr)/sizeof(const char*)) << "invalid op type";
     VLOG_F(2, "EnqueueOp: id={}, type={}, fd={}",
            (op->id >> 8), kOpTypeStr[op_type(op)], op_fd(op));
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_);
+    // CHECK(sqe != NULL) << "io_uring_get_sqe failed";
+    if(!sqe) {
+        if(!pending_ops_.contains(op->id)) {
+            pending_ops_[op->id] = op;
+        }
+        return;
+    }
     switch (op_type(op)) {
     case kConnect:
         io_uring_prep_connect(sqe, op_fd_idx(op), op->addr, op->addrlen);
@@ -463,7 +481,8 @@ void IOUring::EnqueueOp(Op* op) {
         io_uring_prep_close(sqe, op->fd);
         break;
     case kCancel:
-        VLOG_F(1, "Going to cancel op {} (type {}): ",
+        CHECK_LT((op->root_op & 0xff), sizeof(kOpTypeStr)/sizeof(const char*));
+        VLOG_F(2, "Going to cancel op {} (type {}): ",
                (op->root_op >> 8), kOpTypeStr[op->root_op & 0xff]);
         io_uring_prep_cancel(sqe, reinterpret_cast<void*>(op->root_op), 0);
         break;
@@ -471,6 +490,10 @@ void IOUring::EnqueueOp(Op* op) {
         UNREACHABLE();
     }
     io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(op->id));
+
+    if(pending_ops_.contains(op->id)) {
+        pending_ops_.erase(op->id);
+    }
 }
 
 #ifdef __CLANG_CONVERSION_DIAGNOSTIC_ENABLED

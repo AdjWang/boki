@@ -114,6 +114,7 @@ private:
     uint64_t next_op_id_;
     utils::SimpleObjectPool<Op> op_pool_;
     absl::flat_hash_map</* op_id */ uint64_t, Op*> ops_;
+    absl::flat_hash_map</* op_id */ uint64_t, Op*> pending_ops_;
 
     absl::flat_hash_map</* op_id */ uint64_t, ConnectCallback> connect_cbs_;
     absl::flat_hash_map</* op_id */ uint64_t, ReadCallback> read_cbs_;
