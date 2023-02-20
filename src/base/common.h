@@ -111,10 +111,14 @@ __END_THIRD_PARTY_HEADERS
 // opentelemetry-cpp
 // https://github.com/open-telemetry/opentelemetry-cpp/issues/1319
 #define HAVE_ABSEIL
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wall"
+#pragma GCC diagnostic ignored "-Wextra"
 #include <opentelemetry/exporters/zipkin/zipkin_exporter_factory.h>
 #include <opentelemetry/sdk/trace/simple_processor_factory.h>
 #include <opentelemetry/sdk/trace/tracer_provider_factory.h>
 #include <opentelemetry/trace/provider.h>
+#pragma GCC diagnostic pop
 
 #include "base/macro.h"
 #include "base/logging.h"

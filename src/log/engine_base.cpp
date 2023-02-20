@@ -228,11 +228,14 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
 void EngineBase::ReplicateLogEntry(const View* view, const LogMetaData& log_metadata,
                                    std::span<const uint64_t> user_tags,
                                    std::span<const char> log_data) {
+    // prepare message to send
     SharedLogMessage message = SharedLogMessageHelper::NewReplicateMessage();
     log_utils::PopulateMetaDataToMessage(log_metadata, &message);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(
         user_tags.size() * sizeof(uint64_t) + log_data.size());
+    
+    // iterate and send message to all replicating mapped storage nodes
     const View::Engine* engine_node = view->GetEngineNode(node_id_);
     for (uint16_t storage_id : engine_node->GetStorageNodes()) {
         engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,

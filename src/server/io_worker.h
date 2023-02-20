@@ -62,9 +62,10 @@ private:
 // - schedule functions. Functions are scheduled to a specific io worker, which
 //   is also a thread. Nightcore balances functions to multiple threads by round-
 //   robin on io workers.
-// - hold connections. Connections are registered to a io worker from ServerBase.
-//   IOWorker not listen to connections, only holds conn refs to be used by servers
-//   on demand.
+// - hold connections
+//   Connections are registered to a io worker from ServerBase by calling RegisterConnection(...).
+//   - IOWorker listen to connections with callback defined in class IngressConnection.
+//   - Server get a connection as class EgressHub to send messages on demand.
 //   Connections in io worker are used to check if a function is able to run if
 //   its owner connection is still alive.
 class IOWorker final {
@@ -83,8 +84,10 @@ public:
     void WaitForFinish();
     bool WithinMyEventLoopThread();
 
+    // Register a connection to this io worker.
     // connection comes from ServerBase::pipes_to_ioworker_
     // directly pass the pointer as data[]
+    // binds connection fd to io_uring with callback IngressConnection::OnRecvData(...)
     void RegisterConnection(ConnectionBase* connection);
 
     // Called by Connection for ONLY once

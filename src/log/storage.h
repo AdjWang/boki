@@ -26,6 +26,7 @@ private:
     void OnViewCreated(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
+    // 4 types of requests
     void HandleReadAtRequest(const protocol::SharedLogMessage& request) override;
     void HandleReplicateRequest(const protocol::SharedLogMessage& message,
                                 std::span<const char> payload) override;
@@ -34,8 +35,11 @@ private:
     void OnRecvLogAuxData(const protocol::SharedLogMessage& message,
                           std::span<const char> payload) override;
 
+    // helpers
     void ProcessReadResults(const LogStorage::ReadResultVec& results);
     void ProcessReadFromDB(const protocol::SharedLogMessage& request);
+
+    // process 4 types of requests
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void SendEngineLogResult(const protocol::SharedLogMessage& request,
@@ -43,8 +47,14 @@ private:
                              std::span<const char> tags_data,
                              std::span<const char> log_data);
 
+    // set up flush timer
     void BackgroundThreadMain() override;
+    
+    // period at pace of FLAGS_slog_local_cut_interval_us which is applied in StorageBase::SetupTimers()
     void SendShardProgressIfNeeded() override;
+
+    // period at pace of FLAGS_slog_storage_bgthread_interval_ms which is applied in BackgroundThreadMain()
+    // flush to db
     void FlushLogEntries();
 
     DISALLOW_COPY_AND_ASSIGN(Storage);
