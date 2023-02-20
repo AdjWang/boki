@@ -9,6 +9,8 @@ namespace faas {
 namespace server {
 
 // Initialized in virtual ServerBase::OnRemoteMessageConn
+// Glue class, receive stream data from fd and remove msg header, give meg body
+// to user defined callback function.
 class IngressConnection : public ConnectionBase {
 public:
     IngressConnection(int type, int sockfd, size_t msghdr_size);
@@ -24,11 +26,17 @@ public:
         buf_size_  = buf_size;
     }
 
+    // input: data header
+    // output: full data size including header
     using MessageFullSizeCallback = std::function<size_t(std::span<const char> /* header */)>;
     void SetMessageFullSizeCallback(MessageFullSizeCallback cb);
 
+    // input: full data (header + body)
+    // output: none
     using NewMessageCallback = std::function<void(std::span<const char> /* message */)>;
     void SetNewMessageCallback(NewMessageCallback cb);
+
+    // selectable message handler strategies as MessageFullSizeCallback
 
     static size_t GatewayMessageFullSizeCallback(std::span<const char> header);
     static NewMessageCallback BuildNewGatewayMessageCallback(
@@ -43,9 +51,13 @@ public:
 private:
     enum State { kCreated, kRunning, kClosing, kClosed };
 
+    // io worker is used to do thread assertation only here
     IOWorker* io_worker_;
+    // connection state
     State state_;
+    // every ingress connection binds to a sockfd
     int sockfd_;
+    // const size of message header, defined in common/protocol.h
     size_t msghdr_size_;
 
     uint16_t buf_group_;
@@ -57,7 +69,10 @@ private:
     std::string log_header_;
     utils::AppendableBuffer read_buffer_;
 
+    // try to process messages after OnRecvData. can fails if data stream is 
+    // not ending
     void ProcessMessages();
+    // invoked from io_uring from socket fd
     bool OnRecvData(int status, std::span<const char> data);
 
     static std::string GetLogHeader(int type, int sockfd);

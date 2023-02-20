@@ -45,6 +45,7 @@ Dispatcher::~Dispatcher() {}
 bool Dispatcher::OnFuncWorkerConnected(std::shared_ptr<FuncWorker> func_worker) {
     DCHECK_EQ(func_id_, func_worker->func_id());
     uint16_t client_id = func_worker->client_id();
+
     absl::MutexLock lk(&mu_);
     DCHECK(!workers_.contains(client_id));
     workers_[client_id] = func_worker;
@@ -64,6 +65,7 @@ bool Dispatcher::OnFuncWorkerConnected(std::shared_ptr<FuncWorker> func_worker) 
 void Dispatcher::OnFuncWorkerDisconnected(FuncWorker* func_worker) {
     DCHECK_EQ(func_id_, func_worker->func_id());
     uint16_t client_id = func_worker->client_id();
+
     absl::MutexLock lk(&mu_);
     if (running_workers_.contains(client_id)) {
         // TODO: how to handle this?
@@ -210,6 +212,9 @@ FuncWorker* Dispatcher::PickIdleWorker() {
     size_t max_concurrency = DetermineConcurrencyLimit();
     max_concurrency_stat_.AddSample(gsl::narrow_cast<uint32_t>(max_concurrency));
     if (running_workers_.size() >= max_concurrency) {
+        HVLOG_F(1, 
+                "PickIdleWorker failed: too many running workers: max_concurrency={}, running_workers size={}, idle_workers size={}",
+                max_concurrency, running_workers_.size(), idle_workers_.size());
         return nullptr;
     }
     while (!idle_workers_.empty()) {
@@ -220,6 +225,8 @@ FuncWorker* Dispatcher::PickIdleWorker() {
         }
     }
     MayRequestNewFuncWorker();
+    HVLOG_F(1, "PickIdleWorker failed: max_concurrency={}, running_workers size={}, idle_workers size={}",
+            max_concurrency, running_workers_.size(), idle_workers_.size());
     return nullptr;
 }
 
@@ -236,10 +243,15 @@ void Dispatcher::UpdateWorkerLoadStat() {
 size_t Dispatcher::DetermineExpectedConcurrency() {
     double average_processing_time = engine_->tracer()->GetAverageProcessingTime2(func_id_);
     double average_instant_rps = engine_->tracer()->GetAverageInstantRps(func_id_);
+    HVLOG_F(1, "DetermineExpectedConcurrency: avg_process_time={}, avg_instant_rps={}",
+            average_processing_time, average_instant_rps);
     if (average_processing_time > 0 && average_instant_rps > 0) {
         double estimated_concurrency = absl::GetFlag(FLAGS_expected_concurrency_coef)
                                      * average_processing_time * average_instant_rps / 1e6;
         estimated_rps_stat_.AddSample(gsl::narrow_cast<float>(average_instant_rps));
+        HVLOG_F(1, 
+                "DetermineExpectedConcurrency: expected_concurrency_coef={}, estimated_concurrency={}",
+                estimated_concurrency, absl::GetFlag(FLAGS_expected_concurrency_coef));
         return gsl::narrow_cast<size_t>(0.5 + estimated_concurrency);
     } else {
         return 0;
@@ -264,7 +276,9 @@ size_t Dispatcher::DetermineConcurrencyLimit() {
 }
 
 void Dispatcher::MayRequestNewFuncWorker() {
+    HLOG(INFO) << "MayRequestNewFuncWorker";
     if (workers_.size() + requested_workers_.size() >= max_workers_) {
+        HLOG(INFO) << "Skip MayRequestNewFuncWorker due to max workers reached";
         return;
     }
     int64_t current_timestamp = GetMonotonicMicroTimestamp();
@@ -272,6 +286,7 @@ void Dispatcher::MayRequestNewFuncWorker() {
     if (last_request_worker_timestamp_ != -1 && min_worker_request_interval_ms > 0
           && current_timestamp > last_request_worker_timestamp_
                                  + min_worker_request_interval_ms * 1000) {
+        HLOG(INFO) << "Request new FuncWorker failed due to timestamp assertion failed";
         return;
     }
     if (absl::GetFlag(FLAGS_always_request_worker_if_possible)) {
@@ -279,6 +294,9 @@ void Dispatcher::MayRequestNewFuncWorker() {
     } else {
         size_t expected_concurrency = DetermineExpectedConcurrency();
         if (workers_.size() + requested_workers_.size() >= expected_concurrency) {
+            HLOG_F(INFO, 
+                "Request new FuncWorker failed due to concurrency overflow: workers={}, requested_workers={}, expected_concurrency={}",
+                workers_.size(), requested_workers_.size(), expected_concurrency);
             return;
         }
         HLOG(INFO) << "Request new FuncWorker: expected_concurrency=" << expected_concurrency;

@@ -66,6 +66,7 @@ static void ZKLogCallback(const char *message) {
 
 void ZKSession::Start() {
     DCHECK(state_.load() == kCreated);
+    HLOG_F(INFO, "zk Start. host={}, recv_timeout={}", host_, absl::GetFlag(FLAGS_zk_recv_timeout_ms));
     handle_ = zookeeper_init2(
         /* host= */         host_.c_str(),
         /* watcher_fn= */   nullptr,

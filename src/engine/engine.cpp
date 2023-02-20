@@ -703,6 +703,7 @@ bool Engine::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_nod
     if (hub == nullptr) {
         return false;
     }
+    // header data
     std::span<const char> data(reinterpret_cast<const char*>(&message),
                                sizeof(SharedLogMessage));
     hub->SendMessage(data, payload1, payload2, payload3);

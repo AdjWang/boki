@@ -34,6 +34,7 @@ void ViewWatcher::InstallNextView(const ViewProto& view_proto) {
     if (view_proto.view_id() != next_view_id()) {
         HLOG_F(FATAL, "Non-consecutive view_id {}", view_proto.view_id());
     }
+    HLOG(INFO) << "ViewWatcher::InstallNextView\n" << view_proto.DebugString() << "\n";
     View* view = new View(view_proto);
     views_.emplace_back(view);
     if (view_created_cb_) {

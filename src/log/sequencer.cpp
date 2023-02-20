@@ -219,19 +219,24 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
 void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
                                     std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::SHARD_PROG);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Sequencer::OnRecvShardProgress"));
+    auto raw_span = otel::get_tracer()->StartSpan("log::Sequencer::OnRecvShardProgress");
+    auto scoped_span = trace::Scope(raw_span);
 
     {
+        raw_span->AddEvent("lock view");    // log to tracer
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
         auto logspace_ptr = primary_collection_.GetLogSpaceChecked(message.logspace_id);
         {
+            raw_span->AddEvent("lock logspace");    // log to tracer
             auto locked_logspace = logspace_ptr.Lock();
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
             std::vector<uint32_t> progress(payload.size() / sizeof(uint32_t), 0);
             memcpy(progress.data(), payload.data(), payload.size());
+            raw_span->AddEvent("logspace update storage progress start");    // log to tracer
             locked_logspace->UpdateStorageProgress(message.origin_node_id, progress);
+            raw_span->AddEvent("logspace update storage progress end");    // log to tracer
         }
     }
 }

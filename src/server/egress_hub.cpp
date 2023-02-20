@@ -55,6 +55,8 @@ void EgressHub::SetHandshakeMessageCallback(HandshakeMessageCallback cb) {
     handshake_message_cb_ = cb;
 }
 
+// part1: header
+// other parts: payloads
 void EgressHub::SendMessage(std::span<const char> part1, std::span<const char> part2,
                             std::span<const char> part3, std::span<const char> part4) {
     DCHECK(io_worker_->WithinMyEventLoopThread());
@@ -143,6 +145,7 @@ void EgressHub::SocketReady(int sockfd) {
     HLOG_F(INFO, "Socket {} is ready", sockfd);
     connections_for_pick_.Add(sockfd);
     if (!write_buffer_.empty()) {
+        HLOG_F(WARNING, "ScheduleSendFunction. {} pending", write_buffer_.length());
         ScheduleSendFunction();
     }
 }
@@ -189,10 +192,11 @@ void EgressHub::SendPendingMessages() {
 
     int sockfd = -1;
     if (!connections_for_pick_.PickNext(&sockfd)) {
-        HLOG(WARNING) << "No ready connections";
+        HLOG_F(WARNING, "No ready connections. {} pending", write_buffer_.length());
         return;
     }
     DCHECK(sockfd >= 0);
+    HLOG_F(INFO, "Socket {} is picked", sockfd);
 
     while (!write_buffer_.empty()) {
         std::span<char> buf;
@@ -211,6 +215,7 @@ void EgressHub::SendPendingMessages() {
         ));
         write_buffer_.ConsumeFront(copy_size);
     }
+    HLOG_F(INFO, "Pending messages sent. {} pending", write_buffer_.length());
 }
 
 std::string EgressHub::GetLogHeader(int type) {

@@ -26,9 +26,17 @@ ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
 	| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
 OTEL_LIBRARIES = $(shell find deps/out/lib/libopentelemetry_*.a -printf '%f\n' \
 	| sed -e 's/libopentelemetry_\([a-z0-9_]\+\)\.a/-lopentelemetry_\1/g')
+# LINK_FLAGS = -Ldeps/out/lib \
+# 	-Wl,-Bstatic -luv_a -lhttp_parser -lnghttp2 \
+# 	-luring -lprotobuf-lite -lrocksdb -ltkrzw -lzookeeper_st \
+# 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
+# 	-Wl,--start-group $(OTEL_LIBRARIES) -Wl,--end-group \
+# 	-lzstd -ljemalloc \
+# 	-Wl,-Bdynamic -lpthread -ldl -lcurl \
+# 	-Wl,--gc-sections
 LINK_FLAGS = -Ldeps/out/lib \
 	-Wl,-Bstatic -luv_a -lhttp_parser -lnghttp2 \
-	-luring -lprotobuf-lite -lrocksdb -ltkrzw -lzookeeper_st \
+	-luring -lprotobuf -lrocksdb -ltkrzw -lzookeeper_st \
 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
 	-Wl,--start-group $(OTEL_LIBRARIES) -Wl,--end-group \
 	-lzstd -ljemalloc \

@@ -24,18 +24,23 @@ IngressConnection::~IngressConnection() {
 void IngressConnection::Start(IOWorker* io_worker) {
     DCHECK(state_ == kCreated);
     DCHECK(io_worker->WithinMyEventLoopThread());
+    // do thread identification
     io_worker_ = io_worker;
+    // setup stream data buffer
     current_io_uring()->PrepareBuffers(buf_group_, buf_size_);
+    // set tcp config
     if (absl::GetFlag(FLAGS_tcp_enable_nodelay)) {
         CHECK(utils::SetTcpSocketNoDelay(sockfd_));
     }
     if (absl::GetFlag(FLAGS_tcp_enable_keepalive)) {
         CHECK(utils::SetTcpSocketKeepAlive(sockfd_));
     }
+    // bind sockfd to io uring
     URING_DCHECK_OK(current_io_uring()->RegisterFd(sockfd_));
     URING_DCHECK_OK(current_io_uring()->StartRecv(
         sockfd_, buf_group_,
         absl::bind_front(&IngressConnection::OnRecvData, this)));
+    // rock and roll!
     state_ = kRunning;
 }
 
@@ -54,20 +59,26 @@ void IngressConnection::ScheduleClose() {
     state_ = kClosing;
 }
 
+// register callback, which is used to retrive data length
 void IngressConnection::SetMessageFullSizeCallback(MessageFullSizeCallback cb) {
     message_full_size_cb_ = cb;
 }
 
+// register callback, which is used to handle message (header + body)
 void IngressConnection::SetNewMessageCallback(NewMessageCallback cb) {
     new_message_cb_ = cb;
 }
 
+// try to process messages, if data stream is not end, return and wait.
 void IngressConnection::ProcessMessages() {
     DCHECK(io_worker_->WithinMyEventLoopThread());
     while (read_buffer_.length() >= msghdr_size_) {
+        // clip
         std::span<const char> header(read_buffer_.data(), msghdr_size_);
+        // retrive data size
         size_t full_size = message_full_size_cb_(header);
         DCHECK_GE(full_size, msghdr_size_);
+        // try process
         if (read_buffer_.length() >= full_size) {
             new_message_cb_(std::span<const char>(read_buffer_.data(), full_size));
             read_buffer_.ConsumeFront(full_size);
@@ -77,6 +88,7 @@ void IngressConnection::ProcessMessages() {
     }
 }
 
+// raw data stream from sockfd
 bool IngressConnection::OnRecvData(int status, std::span<const char> data) {
     DCHECK(io_worker_->WithinMyEventLoopThread());
     if (status != 0) {

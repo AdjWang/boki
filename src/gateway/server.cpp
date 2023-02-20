@@ -238,6 +238,7 @@ void Server::TryDispatchingPendingFuncCalls() {
 
 bool Server::SendMessageToEngine(uint16_t node_id, const GatewayMessage& message,
                                  std::span<const char> payload) {
+    HLOG_F(INFO, "SendMessageToEngine: {}", node_id);
     server::EgressHub* hub = CurrentIOWorkerChecked()->PickOrCreateConnection<server::EgressHub>(
         kEngineEgressHubTypeId + node_id,
         absl::bind_front(&Server::CreateEngineEgressHub, this, node_id));

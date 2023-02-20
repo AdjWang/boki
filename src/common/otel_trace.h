@@ -17,7 +17,10 @@
 // }
 // 
 // void foo_library() {
-//   auto scoped_span = trace::Scope(faas::otel::get_tracer()->StartSpan("library"));
+//   auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan(
+//     "library",
+//     {{"key", "val"}}
+//   ));
 // 
 //   f2();
 // }
