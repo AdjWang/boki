@@ -13,8 +13,14 @@ namespace engine {
 class Engine;
 class FuncWorker;
 
+// Created from Engine::GetOrCreateDispatcherLocked(uint16_t func_id)
 class Dispatcher {
 public:
+    // use engine to perform
+    // - const FuncConfig::Entry* func_entry = engine_->func_config()->find_by_func_id(func_id);
+    // - tracer()->...
+    // - DiscardFuncCall(func_call)
+    // - worker_manager()->RequestNewFuncWorker(...)
     Dispatcher(Engine* engine, uint16_t func_id);
     ~Dispatcher();
 

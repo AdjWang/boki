@@ -45,14 +45,19 @@ protected:
     static IOWorker* CurrentIOWorker() { return IOWorker::current(); }
     static IOWorker* CurrentIOWorkerChecked() { return DCHECK_NOTNULL(IOWorker::current()); }
 
-    // connections
+    // connections listened by IOWorker
+    // only listen client connections(sockfd), which is generated from server sockfd by accept4()
     void RegisterConnection(IOWorker* io_worker, ConnectionBase* connection);
 
+    // connections listened by ServerBase itself, using poll()
+    // only listen server connections
     using ConnectionCallback = std::function<void(int /* client_sockfd */)>;
     void ListenForNewConnections(int server_sockfd, ConnectionCallback cb);
 
     // timer
     Timer* CreateTimer(int timer_type, IOWorker* io_worker, Timer::Callback cb);
+    // for each IOWorker. Load balance to all io workers by set interval to
+    // interval*io_workers_.size() .
     void CreatePeriodicTimer(int timer_type, absl::Duration interval, Timer::Callback cb);
 
     // interfaces exposed to inherited classes

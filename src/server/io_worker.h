@@ -32,6 +32,8 @@ public:
 
 protected:
     int type_;
+    // monotonically increasing when registered in
+    // ServerBase::RegisterConnection
     int id_;
 
     static IOUring* current_io_uring();

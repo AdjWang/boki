@@ -161,6 +161,8 @@ void ServerBase::SetupIOWorkers() {
 
 void ServerBase::SetupMessageServer() {
     DCHECK(state_.load() == kBootstrapping);
+
+    // setup external listening on iface
     std::string listen_iface = absl::GetFlag(FLAGS_listen_iface);
     std::string iface_ip;
     CHECK(utils::ResolveInterfaceIp(listen_iface, &iface_ip))
@@ -174,6 +176,7 @@ void ServerBase::SetupMessageServer() {
     HLOG_F(INFO, "Listen on {}:{} for message connections", iface_ip, message_port);
     ListenForNewConnections(
         message_sockfd_, absl::bind_front(&ServerBase::OnNewMessageConnection, this));
+
     // Save my host address to ZooKeeper for others to connect
     std::string my_addr(fmt::format("{}:{}", iface_ip, message_port));
     std::string znode_path = fmt::format("node/{}", node_name_);

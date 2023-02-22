@@ -162,9 +162,9 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
         }                                                                 \
     } while (0)
 
+// Get result at Engine::OnRecvNewMetaLogs
 void Engine::HandleLocalAppend(LocalOp* op) {
     DCHECK(op->type == SharedLogOpType::APPEND);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Engine::HandleLocalAppend"));
 
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
@@ -319,10 +319,10 @@ void Engine::HandleRemoteRead(const SharedLogMessage& request) {
     ProcessIndexQueryResults(query_results);
 }
 
+// Requests started from Engine::HandleLocalAppend
 void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Engine::OnRecvNewMetaLogs"));
 
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
@@ -332,6 +332,7 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
+        // handle append
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_producer = producer_ptr.Lock();
@@ -340,6 +341,7 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
             }
             locked_producer->PollAppendResults(&append_results);
         }
+        // handle query
         if (current_view_->GetEngineNode(my_node_id())->HasIndexFor(message.sequencer_id)) {
             auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
             {

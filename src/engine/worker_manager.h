@@ -10,10 +10,14 @@ namespace engine {
 class Engine;
 class FuncWorker;
 
+// Part of engine, act as a private field.
 class WorkerManager {
 public:
     static constexpr int kDefaultMinWorkersPerFunc = 4;
 
+    // use engine to perform
+    // - Engine::GetOrCreateDispatcherLocked(...)
+    // - const FuncConfig::Entry* func_entry = engine_->func_config()->find_by_func_id(func_id);
     explicit WorkerManager(Engine* engine);
     ~WorkerManager();
 

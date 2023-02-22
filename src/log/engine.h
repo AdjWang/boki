@@ -36,6 +36,8 @@ private:
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
+    // 8 shared log interfaces exposed by EngineBase
+
     void HandleLocalAppend(LocalOp* op) override;
     void HandleLocalTrim(LocalOp* op) override;
     void HandleLocalRead(LocalOp* op) override;

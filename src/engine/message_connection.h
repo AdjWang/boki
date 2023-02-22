@@ -12,6 +12,7 @@ namespace engine {
 
 class Engine;
 
+// Created in Engine::OnNewLocalIpcConn(int sockfd)
 class MessageConnection final : public server::ConnectionBase {
 public:
     static constexpr size_t kBufSize = __FAAS_MESSAGE_SIZE * 4;

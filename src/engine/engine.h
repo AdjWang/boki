@@ -39,12 +39,16 @@ public:
     Monitor* monitor() { return &monitor_.value(); }
     Tracer* tracer() { return &tracer_; }
 
+    // Callbacks invoked from MessageConnection, which are created in
+    // Engine::OnNewLocalIpcConn(int sockfd)
     // Must be thread-safe
     bool OnNewHandshake(MessageConnection* connection,
                         const protocol::Message& handshake_message,
                         protocol::Message* response,
                         std::span<const char>* response_payload);
     void OnRecvMessage(MessageConnection* connection, const protocol::Message& message);
+
+    // Invoked from WorkerManager
     Dispatcher* GetOrCreateDispatcher(uint16_t func_id);
     void DiscardFuncCall(const protocol::FuncCall& func_call);
 
