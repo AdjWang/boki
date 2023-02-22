@@ -4,9 +4,12 @@
 #include "common/protocol.h"
 #include "utils/appendable_buffer.h"
 #include "server/io_worker.h"
+#include "common/otel_trace.h"
 
 namespace faas {
 namespace server {
+
+namespace ingress_conn_impl {
 
 // Initialized in virtual ServerBase::OnRemoteMessageConn
 // Glue class, receive stream data from fd and remove msg header, give meg body
@@ -37,13 +40,20 @@ public:
     void SetNewMessageCallback(NewMessageCallback cb);
 
     // selectable message handler strategies as MessageFullSizeCallback
+    // static functions are selected by caller by conn type, set to Set...Callback(cb)
 
+    // default gateway msg full size callback
     static size_t GatewayMessageFullSizeCallback(std::span<const char> header);
+    // new meg callback wrapper, separate msg header and payload then pass to
+    // the callback.
     static NewMessageCallback BuildNewGatewayMessageCallback(
         std::function<void(const protocol::GatewayMessage&,
                            std::span<const char> /* payload */)> cb);
 
+    // default shared log msg full size callback
     static size_t SharedLogMessageFullSizeCallback(std::span<const char> header);
+    // new meg callback wrapper, separate msg header and payload then pass to
+    // the callback.
     static NewMessageCallback BuildNewSharedLogMessageCallback(
         std::function<void(const protocol::SharedLogMessage&,
                            std::span<const char> /* payload */)> cb);
@@ -76,6 +86,49 @@ private:
     bool OnRecvData(int status, std::span<const char> data);
 
     static std::string GetLogHeader(int type, int sockfd);
+
+    DISALLOW_COPY_AND_ASSIGN(IngressConnection);
+};
+
+}   // namespace ingress_conn_impl
+
+// A wrapper to original IngressConnection. Add trace context propagation support.
+class IngressConnection : public ingress_conn_impl::IngressConnection {
+public:
+    IngressConnection(int type, int sockfd, size_t msghdr_size)
+        : ingress_conn_impl::IngressConnection(type, sockfd, msghdr_size) {}
+
+    // default msg full size callback
+    static size_t GatewayMessageFullSizeCallback(std::span<const char> header) {
+        return MessageFullSizeCallback(header);
+    }
+    static size_t SharedLogMessageFullSizeCallback(std::span<const char> header) {
+        return MessageFullSizeCallback(header);
+    }
+
+    static NewMessageCallback BuildNewGatewayMessageCallback(
+        std::function<void(otel::context&,
+                           const protocol::GatewayMessage&,
+                           std::span<const char> /* payload */)> cb) {
+        return BuildNewMessageCallback<protocol::GatewayMessage>(cb);
+    }
+
+    static NewMessageCallback BuildNewSharedLogMessageCallback(
+        std::function<void(otel::context&,
+                           const protocol::SharedLogMessage&,
+                           std::span<const char> /* payload */)> cb) {
+        return BuildNewMessageCallback<protocol::SharedLogMessage>(cb);
+    }
+
+private:
+    static size_t MessageFullSizeCallback(std::span<const char> header);
+
+    // typename be protocol::SharedLogMessage or protocol::GatewayMessage
+    template<typename T>
+    static NewMessageCallback BuildNewMessageCallback(
+        std::function<void(otel::context&,
+                           const T&,
+                           std::span<const char> /* payload */)> cb);
 
     DISALLOW_COPY_AND_ASSIGN(IngressConnection);
 };

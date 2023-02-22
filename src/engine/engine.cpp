@@ -237,7 +237,8 @@ void Engine::OnLocalIpcConnClosed(MessageConnection* conn) {
     }
 }
 
-void Engine::OnRecvGatewayMessage(const GatewayMessage& message,
+void Engine::OnRecvGatewayMessage(otel::context& ctx,
+                                  const GatewayMessage& message,
                                   std::span<const char> payload) {
     if (GatewayMessageHelper::IsDispatchFuncCall(message)) {
         FuncCall func_call = GatewayMessageHelper::GetFuncCall(message);
@@ -540,7 +541,8 @@ void Engine::SendGatewayMessage(const GatewayMessage& message, std::span<const c
     }
     std::span<const char> data(reinterpret_cast<const char*>(&message),
                                sizeof(GatewayMessage));
-    hub->SendMessage(data, payload);
+    otel::context ctx(otel::get_context());
+    hub->SendMessage(ctx, data, payload);
 }
 
 bool Engine::SendFuncWorkerMessage(uint16_t client_id, Message* message) {
@@ -690,6 +692,8 @@ void Engine::OnNewLocalIpcConn(int sockfd) {
     message_connections_[connection->id()] = std::move(connection);
 }
 
+// Shared log message sent would be responed to log::EngineBase::OnRecvSharedLogMessage
+// which is registered in engine::Engine::CreateSharedLogIngressConn(...)
 bool Engine::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
                                   const SharedLogMessage& message,
                                   std::span<const char> payload1,
@@ -706,7 +710,8 @@ bool Engine::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_nod
     // header data
     std::span<const char> data(reinterpret_cast<const char*>(&message),
                                sizeof(SharedLogMessage));
-    hub->SendMessage(data, payload1, payload2, payload3);
+    otel::context ctx(otel::get_context());
+    hub->SendMessage(ctx, data, payload1, payload2, payload3);
     return true;
 }
 

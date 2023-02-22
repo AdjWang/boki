@@ -12,6 +12,10 @@ namespace resource  = opentelemetry::sdk::resource;
 namespace faas {
 namespace otel {
 
+context get_context() {
+    return opentelemetry::context::RuntimeContext::GetCurrent();
+}
+
 // One tracer per service is enough for now.
 nostd::shared_ptr<trace::Tracer> get_tracer() {
     auto provider = trace::Provider::GetTracerProvider();
@@ -44,6 +48,6 @@ void CleanupTracer() {
     std::shared_ptr<opentelemetry::trace::TracerProvider> none;
     trace::Provider::SetTracerProvider(none);
 }
-    
+
 } // namespace otel
 } // namespace faas

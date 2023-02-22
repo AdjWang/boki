@@ -7,6 +7,8 @@
 namespace faas {
 namespace server {
 
+namespace ingress_conn_impl {
+
 IngressConnection::IngressConnection(int type, int sockfd, size_t msghdr_size)
     : ConnectionBase(type),
       io_worker_(nullptr),
@@ -163,6 +165,52 @@ IngressConnection::NewMessageCallback IngressConnection::BuildNewSharedLogMessag
             payload = data.subspan(sizeof(SharedLogMessage));
         }
         cb(*message, payload);
+    };
+}
+
+}   // namespace ingress_conn_impl
+
+
+size_t IngressConnection::MessageFullSizeCallback(std::span<const char> header) {
+    using protocol::TraceCtxMessage;
+    DCHECK_EQ(header.size(), sizeof(TraceCtxMessage));
+    const TraceCtxMessage* message = reinterpret_cast<const TraceCtxMessage*>(
+        header.data());
+    return sizeof(TraceCtxMessage) + message->payload_size;
+}
+
+template<typename T>
+IngressConnection::NewMessageCallback IngressConnection::BuildNewMessageCallback(
+    std::function<void(otel::context&,
+                       const T&,
+                       std::span<const char> /* payload */)> cb) {
+    using protocol::TraceCtxMessage;
+    return [cb] /*IngressConnection::NewMessageCallback*/ (std::span<const char> data) {
+        // data layout:
+        // | ctx header | ctx payload | message header | message payload |
+        // where ctx_header->payload_size = ctx_payload.size() + msg_header.size() + msg_payload.size()
+
+        // context header
+        DCHECK_GE(data.size(), sizeof(TraceCtxMessage));
+        const TraceCtxMessage* ctx_header = reinterpret_cast<const TraceCtxMessage*>(data.data());
+        std::span<const char> ctx_payload = data.subspan(sizeof(TraceCtxMessage), ctx_header->payload_size);
+        DCHECK_EQ(ctx_header->payload_size, ctx_payload.size());
+
+        auto propagator = trace::propagation::HttpTraceContext();
+        auto carrier = otel::StringTextMapCarrier::Deserialize(std::string(ctx_payload.data(), ctx_payload.size()));
+        otel::context ctx(otel::get_context());
+        ctx = propagator.Extract(carrier, ctx);
+
+        std::span<const char> message_data = data.subspan(sizeof(TraceCtxMessage)+ctx_payload.size());
+
+        // shared log message
+        DCHECK_GE(message_data.size(), sizeof(T));
+        const T* message_header = reinterpret_cast<const T*>(message_data.data());
+        std::span<const char> payload;
+        if (data.size() > sizeof(T)) {
+            payload = message_data.subspan(sizeof(T));
+        }
+        cb(ctx, *message_header, payload);
     };
 }
 

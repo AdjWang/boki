@@ -6,6 +6,7 @@
 #include "server/server_base.h"
 #include "server/ingress_connection.h"
 #include "server/egress_hub.h"
+#include "common/otel_trace.h"
 
 namespace faas {
 namespace log {
@@ -66,6 +67,7 @@ private:
                              int sockfd) override;
 
     void OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
+                                otel::context& ctx,
                                 const protocol::SharedLogMessage& message,
                                 std::span<const char> payload);
     bool SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,

@@ -247,7 +247,8 @@ bool Server::SendMessageToEngine(uint16_t node_id, const GatewayMessage& message
     }
     std::span<const char> data(reinterpret_cast<const char*>(&message),
                                sizeof(GatewayMessage));
-    hub->SendMessage(data, payload);
+    otel::context ctx(otel::get_context());
+    hub->SendMessage(ctx, data, payload);
     return true;
 }
 
@@ -325,7 +326,9 @@ void Server::HandleFuncCallCompleteOrFailedMessage(uint16_t node_id,
     TryDispatchingPendingFuncCalls();
 }
 
-void Server::OnRecvEngineMessage(uint16_t node_id, const GatewayMessage& message,
+void Server::OnRecvEngineMessage(uint16_t node_id,
+                                 otel::context& ctx,
+                                 const GatewayMessage& message,
                                  std::span<const char> payload) {
     if (GatewayMessageHelper::IsFuncCallComplete(message)
             || GatewayMessageHelper::IsFuncCallFailed(message)) {

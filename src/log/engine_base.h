@@ -10,6 +10,8 @@
 #include "utils/object_pool.h"
 #include "utils/appendable_buffer.h"
 
+#include "common/otel_trace.h"
+
 namespace faas {
 
 // Forward declaration
@@ -28,6 +30,7 @@ public:
     // bind to engine::Engine::CreateSharedLogIngressConn, creating shared log IngressConnection
     // check types, then invoke MessageHandler(...)
     void OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
+                                otel::context& ctx,
                                 const protocol::SharedLogMessage& message,
                                 std::span<const char> payload);
 

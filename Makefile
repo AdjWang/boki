@@ -6,8 +6,14 @@ SRC_EXT = cpp
 # Path to the source directory, relative to the makefile
 SRC_PATH = ./src
 # General compiler flags
+# -Wno-unknown-pragmas is for #pragma region <region name>, it is very useful
+# to manage code scopes. For now it is unavailable, but this feature would be
+# integrated into GCC from v13.0
+# details see:
+# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=85487
 COMPILE_FLAGS = -std=c++17 -march=haswell -D__FAAS_SRC \
 	-Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
+	-Wno-unknown-pragmas \
 	-fdata-sections -ffunction-sections
 # Additional release-specific flags
 RCOMPILE_FLAGS = -DNDEBUG -O3
@@ -20,7 +26,7 @@ INCLUDES = -I$(SRC_PATH) -I./include -I./deps/out/include \
 	-I./deps/json/single_include \
 	-I./deps/xxHash
 # Protobuf compiler
-PROTOC = ./deps/out/bin/protoc
+PROTOC = LD_LIBRARY_PATH=./deps/out/lib/ ./deps/out/bin/protoc
 # General linker settings
 ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
 	| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
@@ -37,6 +43,7 @@ OTEL_LIBRARIES = $(shell find deps/out/lib/libopentelemetry_*.a -printf '%f\n' \
 LINK_FLAGS = -Ldeps/out/lib \
 	-Wl,-Bstatic -luv_a -lhttp_parser -lnghttp2 \
 	-luring -lprotobuf -lrocksdb -ltkrzw -lzookeeper_st \
+	-lprofiler \
 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
 	-Wl,--start-group $(OTEL_LIBRARIES) -Wl,--end-group \
 	-lzstd -ljemalloc \
@@ -120,6 +127,7 @@ OBJECTS = $(SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
 OBJECTS += $(PROTO_OBJECTS)
 # Set the dependency files that will be used to add header dependencies
 DEPS = $(OBJECTS:.o=.d)
+SHARED_LIBS = deps/out/lib/libprofiler.so
 
 BIN_OBJECTS = $(BIN_SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
 NON_BIN_OBJECTS = $(filter-out $(BIN_OBJECTS),$(OBJECTS))
@@ -143,6 +151,7 @@ END_TIME = read st < $(TIME_FILE) ; \
 .PHONY: all
 all: dirs
 	@echo "Beginning $(BUILD_NAME) build"
+	@cp -t $(BIN_PATH) $(SHARED_LIBS)
 	@$(START_TIME)
 	@$(MAKE) binary --no-print-directory
 	@echo -n "Total build time: "

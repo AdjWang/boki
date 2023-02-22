@@ -1,11 +1,13 @@
 #include "server/egress_hub.h"
 
+#include "common/protocol.h"
 #include "common/flags.h"
 #include "server/constants.h"
 
 namespace faas {
 namespace server {
 
+namespace egress_hub_impl{
 EgressHub::EgressHub(int type, const struct sockaddr_in* addr, size_t num_conn)
     : ConnectionBase(type),
       io_worker_(nullptr),
@@ -232,6 +234,34 @@ std::string EgressHub::GetLogHeader(int type) {
     default:
         return fmt::format("EgressHub[{}]: ", type);
     }
+}
+}  // namespace EgressHubImpl
+
+void EgressHub::SendMessage(otel::context& ctx,
+                            std::span<const char> part1,
+                            std::span<const char> part2,
+                            std::span<const char> part3,
+                            std::span<const char> part4) {
+    // serialize ctx
+    auto propagator = trace::propagation::HttpTraceContext();
+    otel::StringTextMapCarrier carrier;
+    propagator.Inject(carrier, ctx);
+    std::span<const char> ctx_data = gsl::make_span(carrier.Serialize());
+
+    // make temp buffer
+    std::vector<char> ctx_part1;
+    ctx_part1.reserve(sizeof(protocol::TraceCtxMessage) + ctx_data.size() + part1.size());
+
+    // make ctx head
+    auto ctx_message = protocol::TraceCtxMessageHelper::NewTraceCtxMessage(ctx_data.size() + part1.size());
+    const char* ctx_head = reinterpret_cast<const char*>(&ctx_message);
+    std::copy(ctx_head, ctx_head + sizeof(protocol::TraceCtxMessage), std::back_inserter(ctx_part1));
+    // make ctx data
+    std::copy(ctx_data.data(), ctx_data.data() + ctx_data.size(), std::back_inserter(ctx_part1));
+    // plus original part1
+    std::copy(part1.data(), part1.data() + part1.size(), std::back_inserter(ctx_part1));
+
+    egress_hub_impl::EgressHub::SendMessage(gsl::make_span(ctx_part1), part2, part3, part4);
 }
 
 }  // namespace server

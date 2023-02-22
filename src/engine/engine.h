@@ -145,7 +145,8 @@ private:
     void HandleFuncCallFailedMessage(const protocol::Message& message);
     void HandleSharedLogOpMessage(const protocol::Message& message);
 
-    void OnRecvGatewayMessage(const protocol::GatewayMessage& message,
+    void OnRecvGatewayMessage(otel::context& ctx,
+                              const protocol::GatewayMessage& message,
                               std::span<const char> payload);
     void SendGatewayMessage(const protocol::GatewayMessage& message,
                             std::span<const char> payload = EMPTY_CHAR_SPAN);

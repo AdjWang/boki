@@ -188,6 +188,7 @@ bool StorageBase::SendEngineResponse(const SharedLogMessage& request,
 }
 
 void StorageBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
+                                         otel::context& ctx,
                                          const SharedLogMessage& message,
                                          std::span<const char> payload) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
@@ -215,7 +216,8 @@ bool StorageBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t ds
     }
     std::span<const char> data(reinterpret_cast<const char*>(&message),
                                sizeof(SharedLogMessage));
-    hub->SendMessage(data, payload1, payload2, payload3);
+    otel::context ctx(otel::get_context());
+    hub->SendMessage(ctx, data, payload1, payload2, payload3);
     return true;
 }
 

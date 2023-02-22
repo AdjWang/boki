@@ -37,7 +37,9 @@ public:
     void OnNewHttpFuncCall(HttpConnection* connection, FuncCallContext* func_call_context);
     void OnNewGrpcFuncCall(GrpcConnection* connection, FuncCallContext* func_call_context);
     void DiscardFuncCall(FuncCallContext* func_call_context);
-    void OnRecvEngineMessage(uint16_t node_id, const protocol::GatewayMessage& message,
+    void OnRecvEngineMessage(uint16_t node_id,
+                             otel::context& ctx,
+                             const protocol::GatewayMessage& message,
                              std::span<const char> payload);
 
 private:

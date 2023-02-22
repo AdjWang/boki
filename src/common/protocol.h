@@ -81,7 +81,8 @@ enum class MessageType : uint16_t {
     DISPATCH_FUNC_CALL    = 7,
     FUNC_CALL_COMPLETE    = 8,
     FUNC_CALL_FAILED      = 9,
-    SHARED_LOG_OP         = 10
+    SHARED_LOG_OP         = 10,
+    CONTEXT_HEAD          = 11      // magic id for TraceCtxMessage
 };
 
 enum class SharedLogOpType : uint16_t {
@@ -276,6 +277,17 @@ struct SharedLogMessage {
 } __attribute__ (( packed, aligned(__FAAS_CACHE_LINE_SIZE) ));
 
 static_assert(sizeof(SharedLogMessage) == 64, "Unexpected SharedLogMessage size");
+
+// Context wrap to original buffer passed to EgressHub
+// | TraceCtxMessage | trace ctx payload | original message metadata | original message payload |
+struct TraceCtxMessage {
+    uint16_t message_type;
+    // NOTE: all payload size, including original message
+    // payload_size = ctx_data.size() + rest_data.size()
+    uint32_t payload_size;
+} __attribute__ ((packed));
+
+static_assert(sizeof(TraceCtxMessage) == 6, "Unexpected TraceCtxMessage size");
 
 class MessageHelper {
 public:
@@ -637,6 +649,24 @@ public:
 
 private:
     DISALLOW_IMPLICIT_CONSTRUCTORS(SharedLogMessageHelper);
+};
+
+class TraceCtxMessageHelper{
+public:
+    static bool IsTraceCtxMessage(const TraceCtxMessage& message) {
+        return static_cast<MessageType>(message.message_type) == MessageType::CONTEXT_HEAD;
+    }
+
+#define NEW_EMPTY_MESSAGE(MSG_VAR) \
+    TraceCtxMessage MSG_VAR; memset(&MSG_VAR, 0, sizeof(TraceCtxMessage))
+
+    static TraceCtxMessage NewTraceCtxMessage(uint32_t payload_size) {
+        NEW_EMPTY_MESSAGE(message);
+        message.message_type = static_cast<uint16_t>(MessageType::CONTEXT_HEAD);
+        message.payload_size = payload_size;
+        return message;
+    }
+#undef NEW_EMPTY_MESSAGE
 };
 
 }  // namespace protocol

@@ -209,7 +209,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     LocalOpHandler(op);
 }
 
+// Registered in engine::Engine::CreateSharedLogIngressConn(...)
 void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
+                                        otel::context& ctx,
                                         const SharedLogMessage& message,
                                         std::span<const char> payload) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
