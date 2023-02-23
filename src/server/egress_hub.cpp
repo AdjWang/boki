@@ -246,14 +246,19 @@ void EgressHub::SendMessage(otel::context& ctx,
     auto propagator = trace::propagation::HttpTraceContext();
     otel::StringTextMapCarrier carrier;
     propagator.Inject(carrier, ctx);
-    std::span<const char> ctx_data = gsl::make_span(carrier.Serialize());
+    std::string ctx_str(carrier.Serialize());
+    DLOG(INFO) << "ctx string: " << ctx_str;
+    std::span<const char> ctx_data = gsl::make_span(ctx_str);
 
     // make temp buffer
-    std::vector<char> ctx_part1;
+    std::vector<char> ctx_part1;    // ctx + part1
+    // concatenate ctx and part1 to new part1
     ctx_part1.reserve(sizeof(protocol::TraceCtxMessage) + ctx_data.size() + part1.size());
 
     // make ctx head
-    auto ctx_message = protocol::TraceCtxMessageHelper::NewTraceCtxMessage(ctx_data.size() + part1.size());
+    size_t ctx_payload_size = ctx_data.size();
+    size_t message_size = part1.size() + part2.size() + part3.size() + part4.size();
+    auto ctx_message = protocol::TraceCtxMessageHelper::NewTraceCtxMessage(ctx_payload_size, message_size);
     const char* ctx_head = reinterpret_cast<const char*>(&ctx_message);
     std::copy(ctx_head, ctx_head + sizeof(protocol::TraceCtxMessage), std::back_inserter(ctx_part1));
     // make ctx data

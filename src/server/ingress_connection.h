@@ -95,8 +95,9 @@ private:
 // A wrapper to original IngressConnection. Add trace context propagation support.
 class IngressConnection : public ingress_conn_impl::IngressConnection {
 public:
+    // since all message are wrapped by ctx, just discard original msghdr_size
     IngressConnection(int type, int sockfd, size_t msghdr_size)
-        : ingress_conn_impl::IngressConnection(type, sockfd, msghdr_size) {}
+        : ingress_conn_impl::IngressConnection(type, sockfd, sizeof(protocol::TraceCtxMessage)) {}
 
     // default msg full size callback
     static size_t GatewayMessageFullSizeCallback(std::span<const char> header) {
@@ -121,14 +122,60 @@ public:
     }
 
 private:
-    static size_t MessageFullSizeCallback(std::span<const char> header);
+    // typename be protocol::SharedLogMessage or protocol::GatewayMessage
+    static size_t MessageFullSizeCallback(std::span<const char> header) {
+        using protocol::TraceCtxMessage;
+        DCHECK_EQ(header.size(), sizeof(TraceCtxMessage));
+        const TraceCtxMessage* message = reinterpret_cast<const TraceCtxMessage*>(
+            header.data());
+        VLOG_F(1, "MessageFullSizeCallback message payload_size={}, message_size={}",
+                message->payload_size, message->message_size);
+        return sizeof(TraceCtxMessage) + message->payload_size + message->message_size;
+    }
 
     // typename be protocol::SharedLogMessage or protocol::GatewayMessage
     template<typename T>
     static NewMessageCallback BuildNewMessageCallback(
         std::function<void(otel::context&,
                            const T&,
-                           std::span<const char> /* payload */)> cb);
+                           std::span<const char> /* payload */)> cb) {
+        using protocol::TraceCtxMessage;
+        return [cb] /*IngressConnection::NewMessageCallback*/ (std::span<const char> data) {
+            // data layout:
+            // | ctx header | ctx payload | message header | message payload |
+            // where:
+            // ctx_header->payload_size = ctx_payload.size()
+            // ctx_header->message_size = message_header.size() + message_payload.size()
+
+            // context header
+            DCHECK_GE(data.size(), sizeof(TraceCtxMessage));
+            const TraceCtxMessage* ctx_header = reinterpret_cast<const TraceCtxMessage*>(data.data());
+            VLOG_F(1, "BuildNewMessageCallback data size={}, message payload_size={}, message_size={}",
+                    data.size(), ctx_header->payload_size, ctx_header->message_size);
+            DCHECK_EQ(data.size(), sizeof(TraceCtxMessage)+ctx_header->payload_size+ctx_header->message_size);
+            std::span<const char> ctx_payload = data.subspan(sizeof(TraceCtxMessage), ctx_header->payload_size);
+            DCHECK_EQ(ctx_header->payload_size, ctx_payload.size());
+
+            auto propagator = trace::propagation::HttpTraceContext();
+            auto carrier = otel::StringTextMapCarrier::Deserialize(std::string(ctx_payload.data(), ctx_payload.size()));
+            otel::context ctx(otel::get_context());
+            ctx = propagator.Extract(carrier, ctx);
+
+            std::span<const char> message_data = data.subspan(sizeof(TraceCtxMessage)+ctx_payload.size());
+
+            // shared log message
+            DCHECK_GE(message_data.size(), sizeof(T));
+            const T* message_header = reinterpret_cast<const T*>(message_data.data());
+            std::span<const char> payload = message_data.subspan(sizeof(T));
+            DCHECK_EQ(message_header->payload_size, payload.size());
+
+            // assert protocol metadata
+            DCHECK_EQ(data.size(), sizeof(TraceCtxMessage)+ctx_header->payload_size+sizeof(T)+message_header->payload_size);
+            DCHECK_EQ(sizeof(T)+message_header->payload_size, ctx_header->message_size);
+
+            cb(ctx, *message_header, payload);
+        };
+    }
 
     DISALLOW_COPY_AND_ASSIGN(IngressConnection);
 };

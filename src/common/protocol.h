@@ -282,12 +282,14 @@ static_assert(sizeof(SharedLogMessage) == 64, "Unexpected SharedLogMessage size"
 // | TraceCtxMessage | trace ctx payload | original message metadata | original message payload |
 struct TraceCtxMessage {
     uint16_t message_type;
-    // NOTE: all payload size, including original message
-    // payload_size = ctx_data.size() + rest_data.size()
+    // NOTE: payload_size not includes self or original message
+    // payload_size = ctx_payload.size()
     uint32_t payload_size;
+    // message_size = original_message_(header + body).size()
+    uint32_t message_size;
 } __attribute__ ((packed));
 
-static_assert(sizeof(TraceCtxMessage) == 6, "Unexpected TraceCtxMessage size");
+static_assert(sizeof(TraceCtxMessage) == 10, "Unexpected TraceCtxMessage size");
 
 class MessageHelper {
 public:
@@ -660,10 +662,11 @@ public:
 #define NEW_EMPTY_MESSAGE(MSG_VAR) \
     TraceCtxMessage MSG_VAR; memset(&MSG_VAR, 0, sizeof(TraceCtxMessage))
 
-    static TraceCtxMessage NewTraceCtxMessage(uint32_t payload_size) {
+    static TraceCtxMessage NewTraceCtxMessage(uint32_t payload_size, uint32_t message_size) {
         NEW_EMPTY_MESSAGE(message);
         message.message_type = static_cast<uint16_t>(MessageType::CONTEXT_HEAD);
         message.payload_size = payload_size;
+        message.message_size = message_size;
         return message;
     }
 #undef NEW_EMPTY_MESSAGE

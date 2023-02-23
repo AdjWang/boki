@@ -13,6 +13,7 @@ __BEGIN_THIRD_PARTY_HEADERS
 #include <absl/flags/parse.h>
 #include <absl/debugging/symbolize.h>
 #include <absl/debugging/failure_signal_handler.h>
+#include <absl/debugging/stacktrace.h>
 
 __END_THIRD_PARTY_HEADERS
 
@@ -41,6 +42,16 @@ static void RaiseToDefaultHandler(int signo) {
     raise(signo);
 }
 
+static void ShowStackframe() {
+    void *trace[100];
+    int i, trace_size = 0;
+    trace_size = absl::GetStackTrace(trace, 100, 0);
+    fprintf(stderr, "[bt] Execution path: %d\n", trace_size);
+    for (i=0; i<trace_size; ++i) {
+        fprintf(stderr, "[bt] %s\n", (char*)trace[i]);
+    }
+}
+
 static void SignalHandler(int signo) {
     if (signo == SIGTERM || signo == SIGABRT) {
         size_t n = next_cleanup_fn.load();
@@ -49,6 +60,7 @@ static void SignalHandler(int signo) {
             cleanup_fns[i]();
         }
         fprintf(stderr, "Exit with failure\n");
+        ShowStackframe();
         exit(EXIT_FAILURE);
     } else if (signo == SIGINT) {
         if (sigint_handler) {

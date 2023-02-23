@@ -114,8 +114,11 @@ public:
     std::string Serialize() {
         return json(headers_).dump();
     }
-    static StringTextMapCarrier Deserialize(std::string ctx_str) {
-        json ctx = json::parse(ctx_str);
+    static StringTextMapCarrier Deserialize(const std::string& ctx_str) {
+        json ctx = json::parse(ctx_str, /*parser_callback*/nullptr,
+                               /*allow_exceptions*/false,
+                               /*ignore_comments*/true);
+        DCHECK(!ctx.is_discarded()) << "json parse failed: " << ctx_str;
         return StringTextMapCarrier(ctx.get<std::multimap<std::string, std::string>>());
     }
 
