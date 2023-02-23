@@ -638,7 +638,8 @@ void Engine::CreateGatewayIngressConn(int sockfd) {
         &IngressConnection::GatewayMessageFullSizeCallback);
     connection->SetNewMessageCallback(
         IngressConnection::BuildNewGatewayMessageCallback(
-            absl::bind_front(&Engine::OnRecvGatewayMessage, this)));
+            absl::bind_front(&Engine::OnRecvGatewayMessage, this),
+        "GATEWAY_TO_ENGINE"));
     RegisterConnection(PickIOWorkerForConnType(connection->type()), connection.get());
     DCHECK_GE(connection->id(), 0);
     DCHECK(!gateway_ingress_conns_.contains(connection->id()));
@@ -656,7 +657,8 @@ void Engine::CreateSharedLogIngressConn(int sockfd, protocol::ConnType type,
         IngressConnection::BuildNewSharedLogMessageCallback(
             absl::bind_front(&log::EngineBase::OnRecvSharedLogMessage,
                              DCHECK_NOTNULL(shared_log_engine_.get()),
-                             conn_type_id & kConnectionTypeMask, src_node_id)));
+                             conn_type_id & kConnectionTypeMask, src_node_id),
+            protocol::ConnTypeUtils::ToStr(type)));
     RegisterConnection(PickIOWorkerForConnType(conn_type_id), connection.get());
     DCHECK_GE(connection->id(), 0);
     DCHECK(!ingress_conns_.contains(connection->id()));
@@ -724,7 +726,8 @@ EgressHub* Engine::CreateEgressHub(protocol::ConnType conn_type,
     }
     auto egress_hub = std::make_unique<EgressHub>(
         ServerBase::GetEgressHubTypeId(conn_type, dst_node_id),
-        &addr, absl::GetFlag(FLAGS_message_conn_per_worker));
+        &addr, absl::GetFlag(FLAGS_message_conn_per_worker),
+        protocol::ConnTypeUtils::ToStr(conn_type));
     uint16_t src_node_id = node_id_;
     egress_hub->SetHandshakeMessageCallback(
         [conn_type, src_node_id] (std::string* handshake) {

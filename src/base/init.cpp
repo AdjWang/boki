@@ -42,13 +42,23 @@ static void RaiseToDefaultHandler(int signo) {
     raise(signo);
 }
 
+// Print a program counter and its symbol name.
+// https://github.com/abseil/abseil-cpp/blob/master/absl/debugging/symbolize.h
+static void DumpPCAndSymbol(void *pc) {
+    char tmp[1024];
+    const char *symbol = "(unknown)";
+    if (absl::Symbolize(pc, tmp, sizeof(tmp))) {
+        symbol = tmp;
+    }
+    fprintf(stderr, "%p  %s\n", pc, symbol);
+}
 static void ShowStackframe() {
     void *trace[100];
     int i, trace_size = 0;
     trace_size = absl::GetStackTrace(trace, 100, 0);
-    fprintf(stderr, "[bt] Execution path: %d\n", trace_size);
+    fprintf(stderr, "[bt] Execution depth: %d\n", trace_size);
     for (i=0; i<trace_size; ++i) {
-        fprintf(stderr, "[bt] %s\n", (char*)trace[i]);
+        DumpPCAndSymbol(trace[i]);
     }
 }
 

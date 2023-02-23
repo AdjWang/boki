@@ -527,7 +527,8 @@ void Server::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake, in
         &server::IngressConnection::GatewayMessageFullSizeCallback);
     connection->SetNewMessageCallback(
         server::IngressConnection::BuildNewGatewayMessageCallback(
-            absl::bind_front(&Server::OnRecvEngineMessage, this, node_id)));
+            absl::bind_front(&Server::OnRecvEngineMessage, this, node_id),
+            "ENGINE_TO_GATEWAY"));
 
     RegisterConnection(PickIOWorkerForConnType(connection->type()), connection.get());
     DCHECK_GE(connection->id(), 0);
@@ -567,7 +568,8 @@ server::EgressHub* Server::CreateEngineEgressHub(uint16_t node_id,
     }
     auto egress_hub = std::make_unique<server::EgressHub>(
         kEngineEgressHubTypeId + node_id,
-        &addr, absl::GetFlag(FLAGS_message_conn_per_worker));
+        &addr, absl::GetFlag(FLAGS_message_conn_per_worker),
+        "GATEWAY_TO_ENGINE");
     egress_hub->SetHandshakeMessageCallback([] (std::string* handshake) {
         *handshake = protocol::EncodeHandshakeMessage(
             protocol::ConnType::GATEWAY_TO_ENGINE);

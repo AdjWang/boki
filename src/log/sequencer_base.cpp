@@ -236,7 +236,8 @@ void SequencerBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handsh
     connection->SetNewMessageCallback(
         IngressConnection::BuildNewSharedLogMessageCallback(
             absl::bind_front(&SequencerBase::OnRecvSharedLogMessage, this,
-                             conn_type_id & kConnectionTypeMask, src_node_id)));
+                             conn_type_id & kConnectionTypeMask, src_node_id),
+                             protocol::ConnTypeUtils::ToStr(type)));
     RegisterConnection(PickIOWorkerForConnType(conn_type_id), connection.get());
     DCHECK_GE(connection->id(), 0);
     DCHECK(!ingress_conns_.contains(connection->id()));
@@ -276,7 +277,8 @@ EgressHub* SequencerBase::CreateEgressHub(protocol::ConnType conn_type,
     }
     auto egress_hub = std::make_unique<EgressHub>(
         ServerBase::GetEgressHubTypeId(conn_type, dst_node_id),
-        &addr, absl::GetFlag(FLAGS_message_conn_per_worker));
+        &addr, absl::GetFlag(FLAGS_message_conn_per_worker),
+        protocol::ConnTypeUtils::ToStr(conn_type));
     uint16_t src_node_id = node_id_;
     egress_hub->SetHandshakeMessageCallback(
         [conn_type, src_node_id] (std::string* handshake) {

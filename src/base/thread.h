@@ -25,7 +25,16 @@ public:
     const char* name() const { return name_.c_str(); }
     int tid() const { return tid_; }
 
-    static Thread* current() { return DCHECK_NOTNULL(current_); }
+    // DO NOT use any LOG macro here. This function is invoked in LogMessage
+    // which is the implementation of LOG macro. Use LOG in LOG constructor
+    // causes endless recursive.
+    static Thread* current() {
+        if (current_ == NULL) {
+            perror("main thread not registered. call Thread::RegisterMainThread() to fix.");
+            exit(1);
+        }
+        return current_;
+    }
 
     static void RegisterMainThread();
 

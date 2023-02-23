@@ -185,26 +185,41 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->user_tags.clear();
     op->data.Reset();
 
+    std::string op_type_str;
     switch (op->type) {
     case SharedLogOpType::APPEND:
         PopulateLogTagsAndData(message, op);
+        op_type_str = "append";
         break;
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
+        op_type_str = "read";
         break;
     case SharedLogOpType::TRIM:
         op->seqnum = message.log_seqnum;
+        op_type_str = "trim";
         break;
     case SharedLogOpType::SET_AUXDATA:
         op->seqnum = message.log_seqnum;
         op->data.AppendData(MessageHelper::GetInlineData(message));
+        op_type_str = "set auxdata";
         break;
     default:
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
     }
+
+    auto trace_span = otel::get_tracer()->StartSpan("engine base:: on message from func worker");
+    trace_span->SetAttribute("op type", op_type_str);
+
+    op->trace_span = trace_span;
+    op->trace_scope = std::make_unique<trace::Scope>(otel::get_tracer()->WithActiveSpan(trace_span));
+
+    // DEBUG print
+    otel::context trace_ctx(otel::get_context());
+    otel::PrintSpanContextFromContext(trace_ctx);
 
     LocalOpHandler(op);
 }
@@ -275,6 +290,12 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
     }
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
+
+    // end op span to finish tracing
+    // here should be the only exit point of an op
+    op->trace_span->End();
+    op->trace_scope = nullptr;  // delete scope to deactivate span
+
     log_op_pool_.Return(op);
 }
 

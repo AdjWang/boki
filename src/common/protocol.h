@@ -84,6 +84,29 @@ enum class MessageType : uint16_t {
     SHARED_LOG_OP         = 10,
     CONTEXT_HEAD          = 11      // magic id for TraceCtxMessage
 };
+class MessageTypeUtils {
+public:
+    static std::string ToStr(uint16_t type_id) {
+        return ToStr(static_cast<MessageType>(type_id));
+    }
+    static std::string ToStr(MessageType type_id) {
+        switch (type_id){
+            case MessageType::INVALID:               return "INVALID";
+            case MessageType::ENGINE_HANDSHAKE:      return "ENGINE_HANDSHAKE";
+            case MessageType::LAUNCHER_HANDSHAKE:    return "LAUNCHER_HANDSHAKE";
+            case MessageType::FUNC_WORKER_HANDSHAKE: return "FUNC_WORKER_HANDSHAKE";
+            case MessageType::HANDSHAKE_RESPONSE:    return "HANDSHAKE_RESPONSE";
+            case MessageType::CREATE_FUNC_WORKER:    return "CREATE_FUNC_WORKER";
+            case MessageType::INVOKE_FUNC:           return "INVOKE_FUNC";
+            case MessageType::DISPATCH_FUNC_CALL:    return "DISPATCH_FUNC_CALL";
+            case MessageType::FUNC_CALL_COMPLETE:    return "FUNC_CALL_COMPLETE";
+            case MessageType::FUNC_CALL_FAILED:      return "FUNC_CALL_FAILED";
+            case MessageType::SHARED_LOG_OP:         return "SHARED_LOG_OP";
+            case MessageType::CONTEXT_HEAD:          return "CONTEXT_HEAD";
+            default: return fmt::format("unknown MessageType {}", static_cast<uint16_t>(type_id));
+        }
+    }
+};
 
 enum class SharedLogOpType : uint16_t {
     INVALID     = 0x00,
@@ -101,6 +124,31 @@ enum class SharedLogOpType : uint16_t {
     META_PROG   = 0x15,  // Sequencer to Sequencer
     RESPONSE    = 0x20
 };
+class SharedLogOpTypeUtils {
+public:
+    static std::string ToStr(uint16_t type_id) {
+        return ToStr(static_cast<SharedLogOpType>(type_id));
+    }
+    static std::string ToStr(SharedLogOpType type_id) {
+        switch (type_id){
+            case SharedLogOpType::INVALID:       return "INVALID";
+            case SharedLogOpType::APPEND:        return "APPEND";
+            case SharedLogOpType::READ_NEXT:     return "READ_NEXT";
+            case SharedLogOpType::READ_PREV:     return "READ_PREV";
+            case SharedLogOpType::TRIM:          return "TRIM";
+            case SharedLogOpType::SET_AUXDATA:   return "SET_AUXDATA";
+            case SharedLogOpType::READ_NEXT_B:   return "READ_NEXT_B";
+            case SharedLogOpType::READ_AT:       return "READ_AT";
+            case SharedLogOpType::REPLICATE:     return "REPLICATE";
+            case SharedLogOpType::INDEX_DATA:    return "INDEX_DATA";
+            case SharedLogOpType::SHARD_PROG:    return "SHARD_PROG";
+            case SharedLogOpType::METALOGS:      return "METALOGS";
+            case SharedLogOpType::META_PROG:     return "META_PROG";
+            case SharedLogOpType::RESPONSE:      return "RESPONSE";
+            default: return fmt::format("unknown SharedLogOpType {}", static_cast<uint16_t>(type_id));
+        }
+    }
+};
 
 enum class SharedLogResultType : uint16_t {
     INVALID     = 0x00,
@@ -116,6 +164,28 @@ enum class SharedLogResultType : uint16_t {
     EMPTY       = 0x32,  // Cannot find log entries satisfying requirements
     DATA_LOST   = 0x33,  // Failed to extract log data
     TRIM_FAILED = 0x34
+};
+class SharedLogResultTypeUtils {
+public:
+    static std::string ToStr(uint16_t type_id) {
+        return ToStr(static_cast<SharedLogResultType>(type_id));
+    }
+    static std::string ToStr(SharedLogResultType type_id) {
+        switch (type_id){
+            case SharedLogResultType::INVALID:            return "INVALID";     
+            case SharedLogResultType::APPEND_OK:          return "APPEND_OK";   
+            case SharedLogResultType::READ_OK:            return "READ_OK";     
+            case SharedLogResultType::TRIM_OK:            return "TRIM_OK";     
+            case SharedLogResultType::LOCALID:            return "LOCALID";     
+            case SharedLogResultType::AUXDATA_OK:         return "AUXDATA_OK";  
+            case SharedLogResultType::BAD_ARGS:           return "BAD_ARGS";    
+            case SharedLogResultType::DISCARDED:          return "DISCARDED";   
+            case SharedLogResultType::EMPTY:              return "EMPTY";       
+            case SharedLogResultType::DATA_LOST:          return "DATA_LOST";   
+            case SharedLogResultType::TRIM_FAILED:        return "TRIM_FAILED"; 
+            default: return fmt::format("unknown SharedLogResultType {}", static_cast<uint16_t>(type_id));
+        }
+    }
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -184,6 +254,27 @@ enum class ConnType : uint16_t {
     STORAGE_TO_ENGINE      = 7,   // Read result
     SEQUENCER_TO_STORAGE   = 8,   // Meta log
     STORAGE_TO_SEQUENCER   = 9    // Meta log propagation
+};
+class ConnTypeUtils {
+public:
+    static std::string ToStr(uint16_t type_id) {
+        return ToStr(static_cast<ConnType>(type_id));
+    }
+    static std::string ToStr(ConnType type_id) {
+        switch (type_id){
+            case ConnType::GATEWAY_TO_ENGINE:            return "GATEWAY_TO_ENGINE";      
+            case ConnType::ENGINE_TO_GATEWAY:            return "ENGINE_TO_GATEWAY";      
+            case ConnType::SLOG_ENGINE_TO_ENGINE:        return "SLOG_ENGINE_TO_ENGINE";  
+            case ConnType::ENGINE_TO_SEQUENCER:          return "ENGINE_TO_SEQUENCER";    
+            case ConnType::SEQUENCER_TO_ENGINE:          return "SEQUENCER_TO_ENGINE";    
+            case ConnType::SEQUENCER_TO_SEQUENCER:       return "SEQUENCER_TO_SEQUENCER"; 
+            case ConnType::ENGINE_TO_STORAGE:            return "ENGINE_TO_STORAGE";      
+            case ConnType::STORAGE_TO_ENGINE:            return "STORAGE_TO_ENGINE";      
+            case ConnType::SEQUENCER_TO_STORAGE:         return "SEQUENCER_TO_STORAGE";   
+            case ConnType::STORAGE_TO_SEQUENCER:         return "STORAGE_TO_SEQUENCER";   
+            default: return fmt::format("unknown ConnType {}", static_cast<uint16_t>(type_id));
+        }
+    }
 };
 
 struct HandshakeMessage {

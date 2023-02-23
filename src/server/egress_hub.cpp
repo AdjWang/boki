@@ -118,20 +118,23 @@ void EgressHub::OnSocketConnected(int sockfd, int status) {
         }
     ));
     std::string handshake;
+    // encode handshake msg by conn type
     if (handshake_message_cb_) {
         handshake_message_cb_(&handshake);
     }
+    // no handshake mode
     if (handshake.empty()) {
         SocketReady(sockfd);
         return;
     }
+    // send handshake msg
     std::span<char> buf;
-    io_worker_->NewWriteBuffer(&buf);
+    io_worker_->NewWriteBuffer(&buf);               // allocate from buf pool
     CHECK_LE(handshake.size(), buf.size());
     URING_DCHECK_OK(current_io_uring()->SendAll(
         sockfd, CopyToBuffer(buf, STRING_AS_SPAN(handshake)),
         [this, sockfd, buf] (int status) {
-            io_worker_->ReturnWriteBuffer(buf);
+            io_worker_->ReturnWriteBuffer(buf);     // reclaim to buf pool
             if (status != 0) {
                 HPLOG(ERROR) << "Failed to send handshake";
                 RemoveSocket(sockfd);
@@ -242,6 +245,10 @@ void EgressHub::SendMessage(otel::context& ctx,
                             std::span<const char> part2,
                             std::span<const char> part3,
                             std::span<const char> part4) {
+    VLOG_F(1, "EgressHub::SendMessage conn_type={}", conn_type_hint_);
+    // DEBUG print
+    otel::PrintSpanContextFromContext(ctx);
+
     // serialize ctx
     auto propagator = trace::propagation::HttpTraceContext();
     otel::StringTextMapCarrier carrier;

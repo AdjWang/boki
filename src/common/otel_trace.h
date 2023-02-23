@@ -46,6 +46,12 @@ namespace faas {
 namespace otel {
 
 using context = opentelemetry::context::Context;
+
+#pragma region debug_utils
+extern void PrintSpanContextFromContext(context& ctx);
+#pragma endregion
+
+
 extern context get_context();
 
 extern nostd::shared_ptr<trace::Tracer> get_tracer();
@@ -92,13 +98,6 @@ public:
     virtual opentelemetry::nostd::string_view Get(
         opentelemetry::nostd::string_view key) const noexcept override {
         std::string key_to_compare = key.data();
-        // Header's first letter seems to be  automatically capitaliazed by our test http-server, so
-        // compare accordingly.
-        if (key == opentelemetry::trace::propagation::kTraceParent) {
-            key_to_compare = "Traceparent";
-        } else if (key == opentelemetry::trace::propagation::kTraceState) {
-            key_to_compare = "Tracestate";
-        }
         auto it = headers_.find(key_to_compare);
         if (it != headers_.end()) {
             return it->second;

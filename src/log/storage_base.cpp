@@ -199,7 +199,17 @@ void StorageBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::SET_AUXDATA)
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);
+
+    // DEBUG print
+    otel::PrintSpanContextFromContext(ctx);
+
+    trace::StartSpanOptions options;
+    options.parent = trace::GetSpan(ctx)->GetContext();
+    auto trace_span = otel::get_tracer()->StartSpan("storage base: on recv shared log message", options);
+    auto trace_scope = otel::get_tracer()->WithActiveSpan(trace_span);
+
     MessageHandler(message, payload);
+    trace_span->End();
 }
 
 bool StorageBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
@@ -245,7 +255,8 @@ void StorageBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshak
     connection->SetNewMessageCallback(
         IngressConnection::BuildNewSharedLogMessageCallback(
             absl::bind_front(&StorageBase::OnRecvSharedLogMessage, this,
-                             conn_type_id & kConnectionTypeMask, src_node_id)));
+                             conn_type_id & kConnectionTypeMask, src_node_id),
+                             protocol::ConnTypeUtils::ToStr(type)));
     RegisterConnection(PickIOWorkerForConnType(conn_type_id), connection.get());
     DCHECK_GE(connection->id(), 0);
     DCHECK(!ingress_conns_.contains(connection->id()));
@@ -283,7 +294,8 @@ EgressHub* StorageBase::CreateEgressHub(protocol::ConnType conn_type,
     }
     auto egress_hub = std::make_unique<EgressHub>(
         ServerBase::GetEgressHubTypeId(conn_type, dst_node_id),
-        &addr, absl::GetFlag(FLAGS_message_conn_per_worker));
+        &addr, absl::GetFlag(FLAGS_message_conn_per_worker),
+        protocol::ConnTypeUtils::ToStr(conn_type));
     uint16_t src_node_id = node_id_;
     egress_hub->SetHandshakeMessageCallback(
         [conn_type, src_node_id] (std::string* handshake) {

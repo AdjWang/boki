@@ -59,8 +59,10 @@ private:
 // A wrapper to original EgressHub. Add trace context propagation support.
 class EgressHub : public egress_hub_impl::EgressHub {
 public:
-    EgressHub(int type, const struct sockaddr_in* addr, size_t num_conn)
-        : egress_hub_impl::EgressHub(type, addr, num_conn) {}
+    EgressHub(int type, const struct sockaddr_in* addr, size_t num_conn,
+              const std::string& type_hint)
+        : egress_hub_impl::EgressHub(type, addr, num_conn), \
+          conn_type_hint_(type_hint) {}
 
     // void SendMessage(std::span<const char> part1,
     //                  std::span<const char> part2 = EMPTY_CHAR_SPAN,
@@ -77,6 +79,8 @@ public:
                      std::span<const char> part4 = EMPTY_CHAR_SPAN);
 
 private:
+    std::string conn_type_hint_;
+
     DISALLOW_COPY_AND_ASSIGN(EgressHub);
 };
 
