@@ -63,8 +63,8 @@ private:
         DCHECK(op->type == protocol::SharedLogOpType::APPEND);
         return LogMetaData {
             .user_logspace = op->user_logspace,
-            .seqnum = kInvalidLogSeqNum,
-            .localid = 0,
+            .seqnum = kInvalidLogSeqNum,        // undefined as default
+            .localid = 0,                       // undefined as default
             .num_tags = op->user_tags.size(),
             .data_size = op->data.length()
         };

@@ -182,7 +182,9 @@ void Sequencer::HandleTrimRequest(const SharedLogMessage& request) {
     NOT_IMPLEMENTED();
 }
 
+// handler of responses from secondary nodes
 void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
+    // constructor: static SharedLogMessage NewMetaLogProgressMessage(uint32_t logspace_id, uint32_t progress) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::META_PROG);
     auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Sequencer::OnRecvMetaLogProgress"));
 
@@ -200,6 +202,7 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
             uint32_t old_position = locked_logspace->replicated_metalog_position();
             locked_logspace->UpdateReplicaProgress(
                 message.origin_node_id, message.metalog_position);
+            // metalog_position that had exceeded over a half of nodes
             uint32_t new_position = locked_logspace->replicated_metalog_position();
             for (uint32_t pos = old_position; pos < new_position; pos++) {
                 if (auto metalog = locked_logspace->GetMetaLog(pos); metalog.has_value()) {
@@ -211,6 +214,7 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
         }
     }
     for (const MetaLogProto& metalog_proto : replicated_metalogs) {
+        // to storage nodes and engine nodes
         PropagateMetaLog(DCHECK_NOTNULL(view), metalog_proto);
     }
 }
@@ -241,11 +245,13 @@ void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
     }
 }
 
-// from the primary sequencer
+// handle the primary sequencer requests on secondary nodes
+// type:        SharedLogOpType::METALOGS
+// constructor: SharedLogMessage NewMetaLogsMessage(uint32_t logspace_id)
 void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                   std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Sequencer::OnRecvNewMetaLogs"));
+    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::sequencer::on recv new meta logs"));
 
     uint32_t logspace_id = message.logspace_id;
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
@@ -268,6 +274,9 @@ void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
         }
     }
     if (new_metalog_position > old_metalog_position) {
+        // send response to the primary node
+        // type:    message.op_type = static_cast<uint16_t>(SharedLogOpType::META_PROG);
+        // handler: void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
         SharedLogMessage response = SharedLogMessageHelper::NewMetaLogProgressMessage(
             logspace_id, new_metalog_position);
         SendSequencerMessage(message.sequencer_id, &response);
@@ -304,6 +313,7 @@ void Sequencer::MarkNextCutIfDoable() {
         }
     }
     if (meta_log_proto.has_value()) {
+        // replicate to secondary nodes
         ReplicateMetaLog(view, *meta_log_proto);
     }
 }

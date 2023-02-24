@@ -165,8 +165,12 @@ private:
     std::atomic<uint64_t> next_local_op_id_;
 
     struct FnCallContext {
+        // set in gateway::HttpConnection::OnNewHttpRequest by app
         uint32_t user_logspace;
+        // initalize as 0 for external function call in log::EngineBase
+        // inherit parent for internal function call in log::EngineBase
         uint64_t metalog_progress;
+
         uint64_t parent_call_id;
     };
 

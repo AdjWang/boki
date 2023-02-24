@@ -14,6 +14,8 @@ public:
     uint32_t replicated_metalog_position() const {
         return replicated_metalog_position_;
     }
+    // had replicated to all replica nodes
+    // algorithm see void MetaLogPrimary::UpdateMetaLogReplicatedPosition() {
     bool all_metalog_replicated() const {
         return replicated_metalog_position_ == metalog_position();
     }

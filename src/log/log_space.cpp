@@ -58,9 +58,11 @@ void MetaLogPrimary::UpdateStorageProgress(uint16_t storage_id,
 
 void MetaLogPrimary::UpdateReplicaProgress(uint16_t sequencer_id,
                                            uint32_t metalog_position) {
+    // the replica response must be from a secondary node
     if (!sequencer_node_->IsReplicaSequencerNode(sequencer_id)) {
         HLOG_F(FATAL, "Should not receive META_PROG message from sequencer {}", sequencer_id);
     }
+    // a secondary should never be newer than the primary
     if (metalog_position > metalog_position_) {
         HLOG_F(FATAL, "Receive future position: received={}, current={}",
                metalog_position, metalog_position_);
@@ -113,6 +115,7 @@ void MetaLogPrimary::UpdateMetaLogReplicatedPosition() {
     if (metalog_progresses_.empty()) {
         return;
     }
+    // set replication progress to most replicas, neither the min nor the max.
     std::vector<uint32_t> tmp;
     tmp.reserve(metalog_progresses_.size());
     for (const auto& [sequencer_id, progress] : metalog_progresses_) {

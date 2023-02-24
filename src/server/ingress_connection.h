@@ -130,8 +130,8 @@ private:
         DCHECK_EQ(header.size(), sizeof(TraceCtxMessage));
         const TraceCtxMessage* message = reinterpret_cast<const TraceCtxMessage*>(
             header.data());
-        // VLOG_F(1, "MessageFullSizeCallback message payload_size={}, message_size={}",
-        //         message->payload_size, message->message_size);
+        VLOG_F(1, "MessageFullSizeCallback message payload_size={}, message_size={}",
+                message->payload_size, message->message_size);
         return sizeof(TraceCtxMessage) + message->payload_size + message->message_size;
     }
 
@@ -143,7 +143,7 @@ private:
                            std::span<const char> /* payload */)> cb,
         const std::string& conn_type_hint) {
         using protocol::TraceCtxMessage;
-        return [&conn_type_hint, cb] /*IngressConnection::NewMessageCallback*/ (std::span<const char> data) {
+        return [conn_type_hint, cb] /*IngressConnection::NewMessageCallback*/ (std::span<const char> data) {
             // data layout:
             // | ctx header | ctx payload | message header | message payload |
             // where:

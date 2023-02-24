@@ -40,7 +40,8 @@ protected:
     void LogCachePutAuxData(uint64_t seqnum, std::span<const char> data);
     std::optional<std::string> LogCacheGetAuxData(uint64_t seqnum);
 
-    void MessageHandler(const protocol::SharedLogMessage& message,
+    void MessageHandler(otel::context& ctx,
+                        const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
     std::optional<LogEntryProto> GetLogEntryFromDB(uint64_t seqnum);
     void PutLogEntryToDB(const LogEntry& log_entry);

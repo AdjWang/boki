@@ -31,7 +31,7 @@ public:
     static Thread* current() {
         if (current_ == NULL) {
             perror("main thread not registered. call Thread::RegisterMainThread() to fix.");
-            exit(1);
+            abort();
         }
         return current_;
     }

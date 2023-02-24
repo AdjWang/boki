@@ -153,7 +153,8 @@ void Storage::HandleReadAtRequest(const SharedLogMessage& request) {
 }
 
 // from Engine::HandleLocalAppend -> EngineBase::ReplicateLogEntry
-void Storage::HandleReplicateRequest(const SharedLogMessage& message,
+void Storage::HandleReplicateRequest(otel::context& ctx,
+                                     const SharedLogMessage& message,
                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::REPLICATE);
     auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Storage::HandleReplicateRequest"));

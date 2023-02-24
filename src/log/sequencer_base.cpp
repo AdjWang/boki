@@ -92,12 +92,16 @@ static std::string SerializedMetaLogs(const MetaLogProto& metalog) {
 
 void SequencerBase::ReplicateMetaLog(const View* view, const MetaLogProto& metalog) {
     uint32_t logspace_id = metalog.logspace_id();
-    DCHECK_EQ(bits::LowHalf32(logspace_id), my_node_id());
+    DCHECK_EQ(bits::LowHalf32(logspace_id), my_node_id()); // check sequencer id
+    // replicate to other secondary nodes
+    // message.op_type = static_cast<uint16_t>(SharedLogOpType::METALOGS);
+    // handler: void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
     SharedLogMessage message = SharedLogMessageHelper::NewMetaLogsMessage(logspace_id);
     std::string payload = SerializedMetaLogs(metalog);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
     const View::Sequencer* sequencer_node = view->GetSequencerNode(my_node_id());
+    // not containing self
     for (uint16_t sequencer_id : sequencer_node->GetReplicaSequencerNodes()) {
         bool success = SendSharedLogMessage(
             protocol::ConnType::SEQUENCER_TO_SEQUENCER, sequencer_id,

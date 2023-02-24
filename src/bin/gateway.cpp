@@ -41,6 +41,7 @@ void GatewayMain(int argc, char* argv[]) {
 
 }  // namespace faas
 
+
 int main(int argc, char* argv[]) {
     faas::GatewayMain(argc, argv);
     return 0;

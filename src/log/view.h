@@ -53,6 +53,7 @@ public:
         // which sequencer to put the logspace
         uint16_t node_id = log_space_hash_tokens_[h % log_space_hash_tokens_.size()];
         DCHECK(sequencer_nodes_.contains(node_id));
+        // <view_id:16, sequencer_id:16>
         return bits::JoinTwo16(id_, node_id);
     }
 
@@ -109,6 +110,7 @@ public:
         const View* view() const { return view_; }
         uint16_t node_id() const { return node_id_; }
 
+        // not containing self
         const View::NodeIdVec& GetReplicaSequencerNodes() const {
             return replica_sequencer_nodes_;
         }

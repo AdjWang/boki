@@ -37,9 +37,11 @@ struct SharedLogRequest {
 using UserTagVec = absl::InlinedVector<uint64_t, 4>;
 
 struct LogMetaData {
-    uint32_t user_logspace;
-    uint64_t seqnum;
-    uint64_t localid;
+    uint32_t user_logspace;     // log book id
+    // seqnum:64 = <view_id:16, sequencer_id:16, global_seqnum:32>
+    uint64_t seqnum;            // global total order
+    // localid:64 = <engine_id:32, monotonic_counter:32>
+    uint64_t localid;           // context id to map request and response
     size_t   num_tags;
     size_t   data_size;
 };
