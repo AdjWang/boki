@@ -1,6 +1,7 @@
 #pragma once
 
 #include "log/log_space_base.h"
+#include "common/otel_trace.h"
 
 namespace faas {
 namespace log {
@@ -20,7 +21,7 @@ public:
         return replicated_metalog_position_ == metalog_position();
     }
 
-    void UpdateStorageProgress(uint16_t storage_id,
+    void UpdateStorageProgress(otel::context& ctx, uint16_t storage_id,
                                const std::vector<uint32_t>& progress);
     void UpdateReplicaProgress(uint16_t sequencer_id, uint32_t metalog_position);
     std::optional<MetaLogProto> MarkNextCut();
@@ -89,7 +90,8 @@ public:
     LogStorage(uint16_t storage_id, const View* view, uint16_t sequencer_id);
     ~LogStorage();
 
-    bool Store(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
+    bool Store(otel::context& ctx, 
+               const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
                std::span<const char> log_data);
     void ReadAt(const protocol::SharedLogMessage& request);
 

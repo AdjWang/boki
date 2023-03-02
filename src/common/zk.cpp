@@ -76,7 +76,7 @@ void ZKSession::Start() {
         /* flags= */        0,
         /* log_callback= */ &ZKLogCallback);
     if (handle_ == nullptr) {
-        PLOG(FATAL) << "zookeeper_init failed";
+        PLOG(FATAL) << fmt::format("zookeeper_init failed ({})", errno);
     }
     event_loop_thread_.Start();
     state_.store(kRunning);

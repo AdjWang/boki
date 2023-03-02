@@ -27,7 +27,8 @@ protected:
     virtual void OnViewFinalized(const FinalizedView* finalized_view) = 0;
 
     virtual void HandleReadAtRequest(const protocol::SharedLogMessage& request) = 0;
-    virtual void HandleReplicateRequest(const protocol::SharedLogMessage& message,
+    virtual void HandleReplicateRequest(otel::context& ctx, 
+                                        const protocol::SharedLogMessage& message,
                                         std::span<const char> payload) = 0;
     virtual void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                                    std::span<const char> payload) = 0;

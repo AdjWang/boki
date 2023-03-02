@@ -211,16 +211,6 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
     }
 
-    auto trace_span = otel::get_tracer()->StartSpan("engine base:: on message from func worker");
-    trace_span->SetAttribute("op type", op_type_str);
-
-    op->trace_span = trace_span;
-    op->trace_scope = std::make_unique<trace::Scope>(otel::get_tracer()->WithActiveSpan(trace_span));
-
-    // DEBUG print
-    otel::context trace_ctx(otel::get_context());
-    otel::PrintSpanContextFromContext(trace_ctx);
-
     LocalOpHandler(op);
 }
 
@@ -271,6 +261,7 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
         log_metadata.seqnum);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(aux_data.size());
+
     for (uint16_t storage_id : engine_node->GetStorageNodes()) {
         engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,
                                       storage_id, message, aux_data);
@@ -290,11 +281,6 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
     }
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
-
-    // end op span to finish tracing
-    // here should be the only exit point of an op
-    op->trace_span->End();
-    op->trace_scope = nullptr;  // delete scope to deactivate span
 
     log_op_pool_.Return(op);
 }

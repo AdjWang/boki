@@ -25,14 +25,14 @@ protected:
 
     virtual void HandleTrimRequest(const protocol::SharedLogMessage& message) = 0;
     virtual void OnRecvMetaLogProgress(const protocol::SharedLogMessage& message) = 0;
-    virtual void OnRecvShardProgress(const protocol::SharedLogMessage& message,
+    virtual void OnRecvShardProgress(otel::context& ctx, const protocol::SharedLogMessage& message,
                                      std::span<const char> payload) = 0;
     virtual void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                                    std::span<const char> payload) = 0;
 
     virtual void MarkNextCutIfDoable() = 0;
 
-    void MessageHandler(const protocol::SharedLogMessage& message,
+    void MessageHandler(otel::context& ctx, const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
 
     void ReplicateMetaLog(const View* view, const MetaLogProto& metalog);

@@ -157,7 +157,6 @@ void Storage::HandleReplicateRequest(otel::context& ctx,
                                      const SharedLogMessage& message,
                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::REPLICATE);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Storage::HandleReplicateRequest"));
 
     LogMetaData metadata = log_utils::GetMetaDataFromMessage(message);
     std::span<const uint64_t> user_tags;
@@ -172,7 +171,7 @@ void Storage::HandleReplicateRequest(otel::context& ctx,
         {
             auto locked_storage = storage_ptr.Lock();
             RETURN_IF_LOGSPACE_FINALIZED(locked_storage);
-            if (!locked_storage->Store(metadata, user_tags, log_data)) {
+            if (!locked_storage->Store(ctx, metadata, user_tags, log_data)) {
                 HLOG(ERROR) << "Failed to store log entry";
             }
         }
@@ -182,7 +181,6 @@ void Storage::HandleReplicateRequest(otel::context& ctx,
 void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                 std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Storage::OnRecvNewMetaLogs"));
 
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
@@ -276,8 +274,9 @@ void Storage::ProcessReadFromDB(const SharedLogMessage& request) {
 }
 
 void Storage::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
+    otel::context ctx(otel::get_context());
     for (const SharedLogRequest& request : requests) {
-        MessageHandler(request.message, STRING_AS_SPAN(request.payload));
+        MessageHandler(ctx, request.message, STRING_AS_SPAN(request.payload));
     }
 }
 

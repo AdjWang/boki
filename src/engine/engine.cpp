@@ -712,7 +712,12 @@ bool Engine::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_nod
     // header data
     std::span<const char> data(reinterpret_cast<const char*>(&message),
                                sizeof(SharedLogMessage));
+
+    auto current_span = otel::g_span_collector.GetSpan(message.localid);
     otel::context ctx(otel::get_context());
+    if(current_span.has_value()){
+        ctx = trace::SetSpan(ctx, current_span.value());
+    }
     hub->SendMessage(ctx, data, payload1, payload2, payload3);
     return true;
 }

@@ -142,7 +142,7 @@ void Server::OnNewHttpFuncCall(HttpConnection* connection, FuncCallContext* func
         return;
     }
 
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("gateway::Server::OnNewHttpFuncCall"));
+    // auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("gateway::Server::OnNewHttpFuncCall"));
 
     uint32_t call_id = next_call_id_.fetch_add(1, std::memory_order_relaxed);
     FuncCall func_call = FuncCallHelper::New(gsl::narrow_cast<uint16_t>(func_entry->func_id),

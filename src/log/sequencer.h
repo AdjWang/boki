@@ -32,7 +32,7 @@ private:
 
     void HandleTrimRequest(const protocol::SharedLogMessage& request) override;
     void OnRecvMetaLogProgress(const protocol::SharedLogMessage& message) override;
-    void OnRecvShardProgress(const protocol::SharedLogMessage& message,
+    void OnRecvShardProgress(otel::context& ctx, const protocol::SharedLogMessage& message,
                              std::span<const char> payload) override;
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                            std::span<const char> payload) override;

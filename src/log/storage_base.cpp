@@ -201,20 +201,7 @@ void StorageBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);
 
-    trace::StartSpanOptions options;
-    auto parent_span = trace::GetSpan(ctx);
-    auto trace_scope = otel::get_tracer()->WithActiveSpan(parent_span);
-
-    // TODO: the new span and scope should end at log_space::Storage::OnNewLogs();
-
-    // the REPLICATE operation ctx should be propagate to sequencer and then
-    // pass back to the engine; storage not directly pass it back to the engine,
-    // e.t. there's no response of REPLICATE from storage to engine
-    auto trace_span = otel::get_tracer()->StartSpan("storage base:: on recv shared log message");
-    trace_scope = otel::get_tracer()->WithActiveSpan(trace_span);
-
     MessageHandler(ctx, message, payload);
-    trace_span->End();
 }
 
 bool StorageBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
@@ -231,7 +218,14 @@ bool StorageBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t ds
     }
     std::span<const char> data(reinterpret_cast<const char*>(&message),
                                sizeof(SharedLogMessage));
+
+    // no localid here, only storage node id
+    // the storage and the sequencer are not sync components
+    // auto current_span = otel::g_span_collector.GetSpan(message.localid);
     otel::context ctx(otel::get_context());
+    // if(current_span.has_value()){
+    //     ctx = trace::SetSpan(ctx, current_span.value());
+    // }
     hub->SendMessage(ctx, data, payload1, payload2, payload3);
     return true;
 }

@@ -14,6 +14,10 @@ namespace resource  = opentelemetry::sdk::resource;
 namespace faas {
 namespace otel {
 
+#pragma region global_vars
+SpanCollector g_span_collector;
+#pragma endregion
+
 #pragma region debug_utils
 
 // Print a program counter and its symbol name.

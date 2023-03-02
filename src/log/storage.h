@@ -28,7 +28,8 @@ private:
 
     // 4 types of requests
     void HandleReadAtRequest(const protocol::SharedLogMessage& request) override;
-    void HandleReplicateRequest(const protocol::SharedLogMessage& message,
+    void HandleReplicateRequest(otel::context& ctx,
+                                const protocol::SharedLogMessage& message,
                                 std::span<const char> payload) override;
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                            std::span<const char> payload) override;

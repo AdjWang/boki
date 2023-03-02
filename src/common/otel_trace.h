@@ -47,6 +47,34 @@ namespace otel {
 
 using context = opentelemetry::context::Context;
 
+class SpanCollector {
+public:
+    void HoldSpan(uint64_t id, nostd::shared_ptr<trace::Span> span) {
+        span_collection_.emplace(id, span);
+    }
+    std::optional<nostd::shared_ptr<trace::Span>> GetSpan(uint64_t id) {
+        if(span_collection_.find(id) == span_collection_.end()) {
+            return std::nullopt;
+        }
+        return span_collection_[id];
+    }
+    void RemoveSpan(uint64_t id) {
+        span_collection_.erase(id);
+    }
+    void foreach(std::function<void(uint64_t, nostd::shared_ptr<trace::Span>)> cb) {
+        for(auto& [id, span] : span_collection_) { cb(id, span); }
+    }
+    size_t size() { return span_collection_.size(); }
+
+private:
+    absl::flat_hash_map<uint64_t, nostd::shared_ptr<trace::Span>> span_collection_;
+};
+
+
+#pragma region global_vars
+extern SpanCollector g_span_collector;
+#pragma endregion
+
 #pragma region debug_utils
 extern void PrintSpanContextFromContext(context& ctx);
 #pragma endregion

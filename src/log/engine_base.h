@@ -86,9 +86,6 @@ protected:
         int64_t start_timestamp;        // generated
         UserTagVec user_tags;           // initialized as empty vec; used by SharedLogOpType::APPEND
         utils::AppendableBuffer data;   // initialized as empty buffer; used by SharedLogOpType::APPEND,SET_AUXDATA
-
-        nostd::shared_ptr<trace::Span> trace_span;  // for distributed tracing
-        nostd::unique_ptr<trace::Scope> trace_scope;  // for distributed tracing
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;

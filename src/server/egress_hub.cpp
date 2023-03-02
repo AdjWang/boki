@@ -246,8 +246,9 @@ void EgressHub::SendMessage(otel::context& ctx,
                             std::span<const char> part3,
                             std::span<const char> part4) {
     VLOG_F(1, "EgressHub::SendMessage conn_type={}", conn_type_hint_);
+
     // DEBUG print
-    otel::PrintSpanContextFromContext(ctx);
+    // otel::PrintSpanContextFromContext(ctx);
 
     // serialize ctx
     auto propagator = trace::propagation::HttpTraceContext();

@@ -59,7 +59,7 @@ void SequencerBase::SetupTimers() {
     );
 }
 
-void SequencerBase::MessageHandler(const SharedLogMessage& message,
+void SequencerBase::MessageHandler(otel::context& ctx, const SharedLogMessage& message,
                                    std::span<const char> payload) {
     switch (SharedLogMessageHelper::GetOpType(message)) {
     case SharedLogOpType::TRIM:
@@ -69,7 +69,7 @@ void SequencerBase::MessageHandler(const SharedLogMessage& message,
         OnRecvMetaLogProgress(message);
         break;
     case SharedLogOpType::SHARD_PROG:
-        OnRecvShardProgress(message, payload);
+        OnRecvShardProgress(ctx, message, payload);
         break;
     case SharedLogOpType::METALOGS:
         OnRecvNewMetaLogs(message, payload);
@@ -119,6 +119,7 @@ void SequencerBase::PropagateMetaLog(const View* view, const MetaLogProto& metal
     absl::flat_hash_set<uint16_t> storage_nodes;
     switch (metalog.type()) {
     case MetaLogProto::NEW_LOGS:
+    {
         for (size_t i = 0; i < view->num_engine_nodes(); i++) {
             uint16_t engine_id = view->GetEngineNodes().at(i);
             const View::Engine* engine_node = view->GetEngineNode(engine_id);
@@ -133,7 +134,33 @@ void SequencerBase::PropagateMetaLog(const View* view, const MetaLogProto& metal
                 engine_nodes.insert(engine_id);
             }
         }
+        // start in MetaLogPrimary::UpdateStorageProgress(...)
+        // resolve trace spans by its ordering progress
+        absl::flat_hash_map<uint32_t/*engine_id*/, uint32_t/*local_seqnum*/> seqnums;
+        seqnums.reserve(view->num_engine_nodes());
+        const auto& new_logs = metalog.new_logs_proto();
+        for (size_t i = 0; i < view->num_engine_nodes(); i++) {
+            uint32_t shard_start = new_logs.shard_starts(static_cast<int>(i));
+            uint32_t delta = new_logs.shard_deltas(static_cast<int>(i));
+            // uint64_t start_localid = bits::JoinTwo32(engine_node_ids[i], shard_start);
+            // uint64_t end_localid = bits::JoinTwo32(engine_node_ids[i], shard_start+delta);
+            seqnums.emplace(view->GetEngineNodes().at(i), shard_start+delta);
+        }
+        std::vector<uint64_t> to_erase;
+        to_erase.reserve(otel::g_span_collector.size());
+        otel::g_span_collector.foreach([&seqnums, &to_erase](uint64_t localid, auto trace_span) {
+            uint32_t engine_id = bits::HighHalf64(localid);
+            uint32_t local_seqnum = bits::LowHalf64(localid);
+            if (seqnums.find(engine_id) != seqnums.end() && seqnums[engine_id] >= local_seqnum) {
+                trace_span->End();
+                to_erase.push_back(localid);
+            }
+        });
+        for(uint64_t localid : to_erase) {
+            otel::g_span_collector.RemoveSpan(localid);
+        }
         break;
+    }
     case MetaLogProto::TRIM:
         NOT_IMPLEMENTED();
         break;
@@ -194,7 +221,7 @@ void SequencerBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::SHARD_PROG)
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);
-    MessageHandler(message, payload);
+    MessageHandler(ctx, message, payload);
 }
 
 bool SequencerBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,

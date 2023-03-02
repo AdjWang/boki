@@ -177,7 +177,7 @@ private:
             DCHECK_EQ(sizeof(T)+message_header->payload_size, ctx_header->message_size);
 
             // DEBUG print
-            otel::PrintSpanContextFromContext(ctx);
+            // otel::PrintSpanContextFromContext(ctx);
 
             cb(ctx, *message_header, payload);
         };

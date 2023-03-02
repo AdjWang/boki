@@ -186,7 +186,6 @@ void Sequencer::HandleTrimRequest(const SharedLogMessage& request) {
 void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
     // constructor: static SharedLogMessage NewMetaLogProgressMessage(uint32_t logspace_id, uint32_t progress) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::META_PROG);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::Sequencer::OnRecvMetaLogProgress"));
 
     const View* view = nullptr;
     absl::InlinedVector<MetaLogProto, 4> replicated_metalogs;
@@ -220,27 +219,21 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
 }
 
 // SHARD_PROG  = 0x13,  // Storage to Sequencer
-void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
+void Sequencer::OnRecvShardProgress(otel::context& ctx, const SharedLogMessage& message,
                                     std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::SHARD_PROG);
-    auto raw_span = otel::get_tracer()->StartSpan("log::Sequencer::OnRecvShardProgress");
-    auto scoped_span = trace::Scope(raw_span);
-
     {
-        raw_span->AddEvent("lock view");    // log to tracer
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
         auto logspace_ptr = primary_collection_.GetLogSpaceChecked(message.logspace_id);
         {
-            raw_span->AddEvent("lock logspace");    // log to tracer
             auto locked_logspace = logspace_ptr.Lock();
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
+
             std::vector<uint32_t> progress(payload.size() / sizeof(uint32_t), 0);
             memcpy(progress.data(), payload.data(), payload.size());
-            raw_span->AddEvent("logspace update storage progress start");    // log to tracer
-            locked_logspace->UpdateStorageProgress(message.origin_node_id, progress);
-            raw_span->AddEvent("logspace update storage progress end");    // log to tracer
+            locked_logspace->UpdateStorageProgress(ctx, message.origin_node_id, progress);
         }
     }
 }
@@ -251,7 +244,6 @@ void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
 void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                   std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
-    auto scoped_span = trace::Scope(otel::get_tracer()->StartSpan("log::sequencer::on recv new meta logs"));
 
     uint32_t logspace_id = message.logspace_id;
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
@@ -288,8 +280,9 @@ void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
 #undef IGNORE_IF_FROM_PAST_VIEW
 
 void Sequencer::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
+    otel::context ctx(otel::get_context());
     for (const SharedLogRequest& request : requests) {
-        MessageHandler(request.message, STRING_AS_SPAN(request.payload));
+        MessageHandler(ctx, request.message, STRING_AS_SPAN(request.payload));
     }
 }
 
