@@ -224,7 +224,12 @@ void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
             std::vector<uint32_t> progress(payload.size() / sizeof(uint32_t), 0);
             memcpy(progress.data(), payload.data(), payload.size());
-            locked_logspace->UpdateStorageProgress(message.origin_node_id, progress);
+            locked_logspace->UpdateStorageProgress([&](uint64_t local_id){
+                {
+                    absl::MutexLock lk(&prof_map_mu_);
+                    prof_records_[local_id] = std::chrono::system_clock::now();
+                }
+            }, message.origin_node_id, progress);
         }
     }
 }

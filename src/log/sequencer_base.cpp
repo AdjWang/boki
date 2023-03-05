@@ -115,6 +115,7 @@ void SequencerBase::PropagateMetaLog(const View* view, const MetaLogProto& metal
     absl::flat_hash_set<uint16_t> storage_nodes;
     switch (metalog.type()) {
     case MetaLogProto::NEW_LOGS:
+    {
         for (size_t i = 0; i < view->num_engine_nodes(); i++) {
             uint16_t engine_id = view->GetEngineNodes().at(i);
             const View::Engine* engine_node = view->GetEngineNode(engine_id);
@@ -129,7 +130,43 @@ void SequencerBase::PropagateMetaLog(const View* view, const MetaLogProto& metal
                 engine_nodes.insert(engine_id);
             }
         }
+        // prof
+        // start in MetaLogPrimary::UpdateStorageProgress(...)
+        // resolve trace spans by its ordering progress
+        absl::flat_hash_map<uint32_t/*engine_id*/, uint32_t/*local_seqnum*/> seqnums;
+        seqnums.reserve(view->num_engine_nodes());
+        const auto& new_logs = metalog.new_logs_proto();
+        for (size_t i = 0; i < view->num_engine_nodes(); i++) {
+            uint32_t shard_start = new_logs.shard_starts(static_cast<int>(i));
+            uint32_t delta = new_logs.shard_deltas(static_cast<int>(i));
+            // uint64_t start_localid = bits::JoinTwo32(engine_node_ids[i], shard_start);
+            // uint64_t end_localid = bits::JoinTwo32(engine_node_ids[i], shard_start+delta);
+            seqnums.emplace(view->GetEngineNodes().at(i), shard_start+delta);
+        }
+        
+        {
+            absl::MutexLock lk(&prof_map_mu_);
+            for(auto iter = prof_records_.begin(); iter != prof_records_.end(); ) {
+                uint64_t localid = iter->first;
+
+                uint32_t engine_id = bits::HighHalf64(localid);
+                uint32_t local_seqnum = bits::LowHalf64(localid);
+                if (seqnums.find(engine_id) != seqnums.end() && seqnums[engine_id] >= local_seqnum) {
+                    auto start = iter->second;
+                    auto end = std::chrono::system_clock::now();
+                    std::chrono::duration<double> duration = end - start;
+                    HLOG_F(INFO, "[PROF] Sequencer localid={:016X}, duration={}", localid, duration.count());
+                    iter = prof_records_.erase(iter);
+                } else {
+                    // for(auto& [engine_id, seqnum] : seqnums){
+                    //     HLOG_F(INFO, "[PROF] Sequencer engineid={}, seqnum={}", engine_id, seqnum);
+                    // }
+                    iter++;
+                }
+            }
+        }
         break;
+    }
     case MetaLogProto::TRIM:
         NOT_IMPLEMENTED();
         break;

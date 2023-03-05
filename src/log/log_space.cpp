@@ -24,12 +24,15 @@ MetaLogPrimary::MetaLogPrimary(const View* view, uint16_t sequencer_id)
         HLOG(WARNING) << "No meta log replication";
     }
     state_ = kNormal;
+    HLOG(INFO) << "primary sequencer initialized";
 }
 
 MetaLogPrimary::~MetaLogPrimary() {}
 
-void MetaLogPrimary::UpdateStorageProgress(uint16_t storage_id,
-                                           const std::vector<uint32_t>& progress) {
+void MetaLogPrimary::UpdateStorageProgress(
+        std::function<void(uint64_t)> localid_progress_cb,
+        uint16_t storage_id,
+        const std::vector<uint32_t>& progress) {
     if (!view_->contains_storage_node(storage_id)) {
         HLOG_F(FATAL, "View {} does not has storage node {}", view_->id(), storage_id);
     }
@@ -52,6 +55,15 @@ void MetaLogPrimary::UpdateStorageProgress(uint16_t storage_id,
                         storage_id, engine_id, bits::HexStr0x(current_position));
                 dirty_shards_.insert(engine_id);
             }
+            // prof
+            // end in SequencerBase::PropagateMetaLog(...)
+            // start a span by <engine_id, current_position> with attr (current_pos-last_cut_)
+            uint64_t local_id = bits::JoinTwo32(static_cast<uint32_t>(engine_id), current_position);
+            //  trace_span->SetAttribute("origin storage node", fmt::format("{}", storage_id));
+            //  trace_span->SetAttribute("engine_id", fmt::format("{}", engine_id));
+            //  trace_span->SetAttribute("current progress", fmt::format("{}", last_cut_.at(engine_id)));
+            //  trace_span->SetAttribute("target progress", fmt::format("{}", current_position));
+            localid_progress_cb(local_id);
         }
     }
 }
@@ -158,6 +170,9 @@ LogProducer::~LogProducer() {}
 void LogProducer::LocalAppend(void* caller_data, uint64_t* localid) {
     DCHECK(!pending_appends_.contains(next_localid_));
     HVLOG_F(1, "LocalAppend with localid {}", bits::HexStr0x(next_localid_));
+
+    prof_records_[next_localid_] = std::chrono::system_clock::now();
+
     pending_appends_[next_localid_] = caller_data;
     *localid = next_localid_++;
 }
@@ -177,6 +192,13 @@ void LogProducer::OnNewLogs(uint32_t metalog_seqnum,
             HLOG_F(FATAL, "Cannot find pending log entry for localid {}",
                    bits::HexStr0x(localid));
         }
+        // print prof
+        auto start = prof_records_[localid];
+        auto end = std::chrono::system_clock::now();
+        std::chrono::duration<double> duration = end - start;
+        HLOG_F(INFO, "[PROF] LocalAppend localid={:016X}, duration={}", localid, duration.count());
+        prof_records_.erase(localid);
+
         pending_append_results_.push_back(AppendResult {
             .seqnum = seqnum,
             .localid = localid,
@@ -227,6 +249,9 @@ bool LogStorage::Store(const LogMetaData& log_metadata, std::span<const uint64_t
                storage_node_->node_id(), engine_id);
         return false;
     }
+
+    prof_records_[localid] = std::chrono::system_clock::now();
+
     pending_log_entries_[localid].reset(new LogEntry {
         .metadata = log_metadata,
         .user_tags = UserTagVec(user_tags.begin(), user_tags.end()),
@@ -338,6 +363,14 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
         pending_log_entries_.erase(localid);
         HVLOG_F(1, "Finalize the log entry (seqnum={}, localid={})",
                 bits::HexStr0x(seqnum), bits::HexStr0x(localid));
+
+        // print prof
+        auto start = prof_records_[localid];
+        auto end = std::chrono::system_clock::now();
+        std::chrono::duration<double> duration = end - start;
+        HLOG_F(INFO, "[PROF] Storage localid={:016X}, duration={}", localid, duration.count());
+        prof_records_.erase(localid);
+
         log_entry->metadata.seqnum = seqnum;
         std::shared_ptr<const LogEntry> log_entry_ptr(log_entry);
         // Add the new entry to index data

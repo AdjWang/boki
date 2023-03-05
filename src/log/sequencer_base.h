@@ -16,6 +16,11 @@ public:
     virtual ~SequencerBase();
 
 protected:
+    
+    absl::Mutex prof_map_mu_;
+    std::unordered_map</* localid */ uint64_t,
+                        /* timestamp */ std::chrono::time_point<std::chrono::system_clock>> prof_records_;
+
     uint16_t my_node_id() const { return node_id_; }
 
     virtual void OnViewCreated(const View* view) = 0;

@@ -18,8 +18,10 @@ public:
         return replicated_metalog_position_ == metalog_position();
     }
 
-    void UpdateStorageProgress(uint16_t storage_id,
-                               const std::vector<uint32_t>& progress);
+    void UpdateStorageProgress(
+        std::function<void(uint64_t)> localid_progress_cb,
+        uint16_t storage_id,
+        const std::vector<uint32_t>& progress);
     void UpdateReplicaProgress(uint16_t sequencer_id, uint32_t metalog_position);
     std::optional<MetaLogProto> MarkNextCut();
 
@@ -71,6 +73,10 @@ private:
     uint64_t next_localid_;
     absl::flat_hash_map</* localid */ uint64_t,
                         /* caller_data */ void*> pending_appends_;
+
+    absl::flat_hash_map</* localid */ uint64_t,
+                        /* timestamp */ std::chrono::time_point<std::chrono::system_clock>> prof_records_;
+
     AppendResultVec pending_append_results_;
 
     void OnNewLogs(uint32_t metalog_seqnum,
@@ -114,6 +120,9 @@ private:
     bool shard_progrss_dirty_;
     absl::flat_hash_map</* engine_id */ uint16_t,
                         /* localid */ uint32_t> shard_progrsses_;
+
+    absl::flat_hash_map</* localid */ uint64_t,
+                        /* timestamp */ std::chrono::time_point<std::chrono::system_clock>> prof_records_;
 
     uint64_t persisted_seqnum_position_;
     std::deque<uint64_t> live_seqnums_;

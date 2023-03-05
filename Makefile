@@ -20,7 +20,8 @@ INCLUDES = -I$(SRC_PATH) -I./include -I./deps/out/include \
 	-I./deps/json/single_include \
 	-I./deps/xxHash
 # Protobuf compiler
-PROTOC = ./deps/out/bin/protoc
+# PROTOC = ./deps/out/bin/protoc
+PROTOC = LD_LIBRARY_PATH=./deps/out/lib/ ./deps/out/bin/protoc
 # General linker settings
 ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
 		| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
