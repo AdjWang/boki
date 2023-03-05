@@ -286,15 +286,16 @@ void Sequencer::MarkNextCutIfDoable() {
         {
             auto locked_logspace = current_primary_.Lock();
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
-            if (!locked_logspace->all_metalog_replicated()) {
-                HLOG(INFO) << "Not all meta log replicated, will not mark new cut";
-                return;
-            }
+            // if (!locked_logspace->all_metalog_replicated()) {
+            //     HLOG(INFO) << "Not all meta log replicated, will not mark new cut";
+            //     return;
+            // }
             meta_log_proto = locked_logspace->MarkNextCut();
         }
     }
     if (meta_log_proto.has_value()) {
-        ReplicateMetaLog(view, *meta_log_proto);
+        // ReplicateMetaLog(view, *meta_log_proto);
+        PropagateMetaLog(view, *meta_log_proto);
     }
 }
 
