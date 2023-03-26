@@ -45,6 +45,14 @@ public:
         }
     }
 
+    const std::string list_functions() const {
+        std::string result;
+        for(const auto& entry : entries_){
+            result.append(fmt::format("func_name={}, func_id={}\n", entry->func_name, entry->func_id));
+        }
+        return result;
+    }
+
 private:
     std::vector<std::unique_ptr<Entry>> entries_;
     std::unordered_map<std::string, Entry*> entires_by_func_name_;
