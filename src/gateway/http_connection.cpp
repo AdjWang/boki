@@ -281,7 +281,7 @@ void HttpConnection::OnNewHttpRequest(std::string_view method, std::string_view 
     } else if (absl::StartsWith(path, "/asyncFunction/")) {
         func_name = absl::StripPrefix(path, "/asyncFunction/");
         async = true;
-    } else if(absl::StartsWith(path, "/list_functions/")) {
+    } else if(absl::StartsWith(path, "/list_functions")) {
         SendHttpResponse(HttpStatus::OK, server_->func_config()->list_functions());
         return;
     } else {
