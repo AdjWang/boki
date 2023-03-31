@@ -82,6 +82,7 @@ protected:
     void PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
                           std::span<const char> aux_data);
 
+    void IntermediateLocalOpWithResponse(LocalOp* op, protocol::Message* response);
     void FinishLocalOpWithResponse(LocalOp* op, protocol::Message* response,
                                    uint64_t metalog_progress);
     void FinishLocalOpWithFailure(LocalOp* op, protocol::SharedLogResultType result,

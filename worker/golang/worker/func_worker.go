@@ -8,11 +8,11 @@ import (
 	"log"
 	"net"
 	"os"
-	"time"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	common "cs.utexas.edu/zjia/faas/common"
 	config "cs.utexas.edu/zjia/faas/config"
@@ -35,16 +35,18 @@ type FuncWorker struct {
 	inputPipe            *os.File
 	outputPipe           *os.File                 // protected by mux
 	outgoingFuncCalls    map[uint64](chan []byte) // protected by mux
-	outgoingLogOps       map[uint64](chan []byte) // protected by mux
-	handler              types.FuncHandler
-	grpcHandler          types.GrpcFuncHandler
-	nextCallId           uint32
-	nextLogOpId          uint64
-	currentCall          uint64
-	uidHighHalf          uint32
-	nextUidLowHalf       uint32
-	sharedLogReadCount   int32
-	mux                  sync.Mutex
+	// an async request returns twice, first to asyncOutgoing, second to outgoing
+	asyncOutgoingLogOps map[uint64](chan []byte) // protected by mux
+	outgoingLogOps      map[uint64](chan []byte) // protected by mux
+	handler             types.FuncHandler
+	grpcHandler         types.GrpcFuncHandler
+	nextCallId          uint32
+	nextLogOpId         uint64
+	currentCall         uint64
+	uidHighHalf         uint32
+	nextUidLowHalf      uint32
+	sharedLogReadCount  int32
+	mux                 sync.Mutex
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -62,6 +64,7 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		useFifoForNestedCall: false,
 		newFuncCallChan:      make(chan []byte, 4),
 		outgoingFuncCalls:    make(map[uint64](chan []byte)),
+		asyncOutgoingLogOps:  make(map[uint64](chan []byte)),
 		outgoingLogOps:       make(map[uint64](chan []byte)),
 		nextCallId:           0,
 		nextLogOpId:          0,
@@ -101,9 +104,20 @@ func (w *FuncWorker) Run() {
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			w.mux.Lock()
-			if ch, exists := w.outgoingLogOps[id]; exists {
-				ch <- message
-				delete(w.outgoingLogOps, id)
+			if protocol.IsSharedLogAsyncResult(message) {
+				if ch, exists := w.asyncOutgoingLogOps[id]; exists {
+					ch <- message
+					delete(w.asyncOutgoingLogOps, id)
+				} else {
+					log.Printf("[WARN] Unexpected log message id for async ops: %d", id)
+				}
+			} else {
+				if ch, exists := w.outgoingLogOps[id]; exists {
+					ch <- message
+					delete(w.outgoingLogOps, id)
+				} else {
+					log.Printf("[WARN] Unexpected log message id for sync ops: %d", id)
+				}
 			}
 			w.mux.Unlock()
 		} else {
@@ -542,14 +556,14 @@ func checkAndDuplicateTags(tags []uint64) ([]uint64, error) {
 // Implement types.Environment
 func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []byte) (uint64, error) {
 	if len(data) == 0 {
-		return 0, fmt.Errorf("Data cannot be empty")
+		return 0, fmt.Errorf("data cannot be empty")
 	}
 	tags, err := checkAndDuplicateTags(tags)
 	if err != nil {
 		return 0, err
 	}
 	if len(data)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
-		return 0, fmt.Errorf("Data too larger (size=%d, num_tags=%d), expect no more than %d bytes", len(data), len(tags), protocol.MessageInlineDataSize)
+		return 0, fmt.Errorf("data too larger (size=%d, num_tags=%d), expect no more than %d bytes", len(data), len(tags), protocol.MessageInlineDataSize)
 	}
 
 	sleepDuration := 5 * time.Millisecond
@@ -587,10 +601,70 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 				remainingRetries--
 				continue
 			} else {
-				return 0, fmt.Errorf("Failed to append log")
+				return 0, fmt.Errorf("failed to append log, exceeds maximum number of retries")
 			}
 		} else {
-			return 0, fmt.Errorf("Failed to append log")
+			return 0, fmt.Errorf("failed to append log, unacceptable result type: %d", result)
+		}
+	}
+}
+
+// Implement types.Environment
+func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, data []byte) (types.Future, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("data cannot be empty")
+	}
+	tags, err := checkAndDuplicateTags(tags)
+	if err != nil {
+		return nil, err
+	}
+	if len(data)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
+		return nil, fmt.Errorf("data too larger (size=%d, num_tags=%d), expect no more than %d bytes",
+			len(data), len(tags), protocol.MessageInlineDataSize)
+	}
+
+	sleepDuration := 5 * time.Millisecond
+	remainingRetries := 4
+
+	for {
+		id := atomic.AddUint64(&w.nextLogOpId, 1)
+		currentCallId := atomic.LoadUint64(&w.currentCall)
+		message := protocol.NewAsyncSharedLogAppendMessage(currentCallId, w.clientId, uint16(len(tags)), id)
+		if len(tags) == 0 {
+			protocol.FillInlineDataInMessage(message, data)
+		} else {
+			tagBuffer := protocol.BuildLogTagsBuffer(tags)
+			protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, data}, nil /* sep */))
+		}
+
+		w.mux.Lock()
+		asyncOutputChan := make(chan []byte, 1)
+		w.asyncOutgoingLogOps[id] = asyncOutputChan
+		outputChan := make(chan []byte, 1)
+		w.outgoingLogOps[id] = outputChan
+		_, err = w.outputPipe.Write(message)
+		w.mux.Unlock()
+		if err != nil {
+			return nil, err
+		}
+
+		response := <-asyncOutputChan // should return immediately
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_ASYNC_APPEND_OK {
+			localId := protocol.GetLogSeqNumFromMessage(response)
+			return types.NewFuture(localId, outputChan), nil
+		} else if result == protocol.SharedLogResultType_DISCARDED {
+			log.Printf("[ERROR] Append discarded, will retry")
+			if remainingRetries > 0 {
+				time.Sleep(sleepDuration)
+				sleepDuration *= 2
+				remainingRetries--
+				continue
+			} else {
+				return nil, fmt.Errorf("failed to append log, exceeds maximum number of retries")
+			}
+		} else {
+			return nil, fmt.Errorf("failed to append log, unacceptable result type: %d", result)
 		}
 	}
 }

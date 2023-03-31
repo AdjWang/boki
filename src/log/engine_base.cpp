@@ -106,6 +106,7 @@ void EngineBase::OnFuncCallCompleted(const FuncCall& func_call) {
 void EngineBase::LocalOpHandler(LocalOp* op) {
     switch (op->type) {
     case SharedLogOpType::APPEND:
+    case SharedLogOpType::ASYNC_APPEND:
         HandleLocalAppend(op);
         break;
     case SharedLogOpType::READ_NEXT:
@@ -147,7 +148,8 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
 }
 
 void EngineBase::PopulateLogTagsAndData(const Message& message, LocalOp* op) {
-    DCHECK(op->type == SharedLogOpType::APPEND);
+    DCHECK(op->type == SharedLogOpType::APPEND
+        || op->type == SharedLogOpType::ASYNC_APPEND);
     DCHECK_EQ(message.log_aux_data_size, 0U);
     std::span<const char> data = MessageHelper::GetInlineData(message);
     size_t num_tags = message.log_num_tags;
@@ -187,6 +189,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
+    case SharedLogOpType::ASYNC_APPEND:
         PopulateLogTagsAndData(message, op);
         break;
     case SharedLogOpType::READ_NEXT:
@@ -255,6 +258,12 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
         engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,
                                       storage_id, message, aux_data);
     }
+}
+
+// Used to send the first response to async operations.
+void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response) {
+    response->log_client_data = op->client_data;
+    engine_->SendFuncWorkerMessage(op->client_id, response);
 }
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,

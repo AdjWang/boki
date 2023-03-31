@@ -48,13 +48,14 @@ const (
 
 // SharedLogOpType enum
 const (
-	SharedLogOpType_INVALID     uint16 = 0x00
-	SharedLogOpType_APPEND      uint16 = 0x01
-	SharedLogOpType_READ_NEXT   uint16 = 0x02
-	SharedLogOpType_READ_PREV   uint16 = 0x03
-	SharedLogOpType_TRIM        uint16 = 0x04
-	SharedLogOpType_SET_AUXDATA uint16 = 0x05
-	SharedLogOpType_READ_NEXT_B uint16 = 0x06
+	SharedLogOpType_INVALID      uint16 = 0x00
+	SharedLogOpType_APPEND       uint16 = 0x01
+	SharedLogOpType_ASYNC_APPEND uint16 = 0x02
+	SharedLogOpType_READ_NEXT    uint16 = 0x03
+	SharedLogOpType_READ_PREV    uint16 = 0x04
+	SharedLogOpType_TRIM         uint16 = 0x05
+	SharedLogOpType_SET_AUXDATA  uint16 = 0x06
+	SharedLogOpType_READ_NEXT_B  uint16 = 0x07
 )
 
 // SharedLogResultType enum
@@ -66,12 +67,14 @@ const (
 	SharedLogResultType_TRIM_OK    uint16 = 0x22
 	SharedLogResultType_LOCALID    uint16 = 0x23
 	SharedLogResultType_AUXDATA_OK uint16 = 0x24
+	// Async successful results
+	SharedLogResultType_ASYNC_APPEND_OK uint16 = 0x30
 	// Error results
-	SharedLogResultType_BAD_ARGS    uint16 = 0x30
-	SharedLogResultType_DISCARDED   uint16 = 0x31
-	SharedLogResultType_EMPTY       uint16 = 0x32
-	SharedLogResultType_DATA_LOST   uint16 = 0x33
-	SharedLogResultType_TRIM_FAILED uint16 = 0x34
+	SharedLogResultType_BAD_ARGS    uint16 = 0x40
+	SharedLogResultType_DISCARDED   uint16 = 0x41
+	SharedLogResultType_EMPTY       uint16 = 0x42
+	SharedLogResultType_DATA_LOST   uint16 = 0x43
+	SharedLogResultType_TRIM_FAILED uint16 = 0x44
 )
 
 const MaxLogSeqnum = uint64(0xffff000000000000)
@@ -160,6 +163,12 @@ func IsSharedLogOpMessage(buffer []byte) bool {
 	return getMessageType(buffer) == MessageType_SHARED_LOG_OP
 }
 
+func IsSharedLogAsyncResult(buffer []byte) bool {
+	resultType := GetSharedLogResultTypeFromMessage(buffer)
+	return resultType >= SharedLogResultType_ASYNC_APPEND_OK &&
+		resultType < SharedLogResultType_BAD_ARGS
+}
+
 func NewEmptyMessage() []byte {
 	return make([]byte, MessageFullByteSize)
 }
@@ -204,6 +213,17 @@ func NewSharedLogAppendMessage(currentCallId uint64, myClientId uint16, numTags 
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
 	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_APPEND)
+	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
+	binary.LittleEndian.PutUint16(buffer[36:38], numTags)
+	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	return buffer
+}
+
+func NewAsyncSharedLogAppendMessage(currentCallId uint64, myClientId uint16, numTags uint16, clientData uint64) []byte {
+	buffer := NewEmptyMessage()
+	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
+	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
+	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_ASYNC_APPEND)
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint16(buffer[36:38], numTags)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)

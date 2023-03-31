@@ -58,7 +58,8 @@ private:
                                     Index::QueryResultVec* more_results);
 
     inline LogMetaData MetaDataFromAppendOp(LocalOp* op) {
-        DCHECK(op->type == protocol::SharedLogOpType::APPEND);
+        DCHECK(op->type == protocol::SharedLogOpType::APPEND
+            || op->type == protocol::SharedLogOpType::ASYNC_APPEND);
         return LogMetaData {
             .user_logspace = op->user_logspace,
             .seqnum = kInvalidLogSeqNum,

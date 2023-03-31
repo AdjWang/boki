@@ -85,36 +85,40 @@ enum class MessageType : uint16_t {
 };
 
 enum class SharedLogOpType : uint16_t {
-    INVALID     = 0x00,
-    APPEND      = 0x01,  // FuncWorker to Engine
-    READ_NEXT   = 0x02,  // FuncWorker to Engine, Engine to Index
-    READ_PREV   = 0x03,  // FuncWorker to Engine, Engine to Index
-    TRIM        = 0x04,  // FuncWorker to Engine, Engine to Sequencer
-    SET_AUXDATA = 0x05,  // FuncWorker to Engine, Engine to Storage
-    READ_NEXT_B = 0x06,  // FuncWorker to Engine, Engine to Index
-    READ_AT     = 0x10,  // Index to Storage
-    REPLICATE   = 0x11,  // Engine to Storage
-    INDEX_DATA  = 0x12,  // Engine to Index
-    SHARD_PROG  = 0x13,  // Storage to Sequencer
-    METALOGS    = 0x14,  // Sequencer to Sequencer, Engine, Storage, Index
-    META_PROG   = 0x15,  // Sequencer to Sequencer
-    RESPONSE    = 0x20
+    INVALID           = 0x00,
+    APPEND            = 0x01,  // FuncWorker to Engine
+    ASYNC_APPEND      = 0x02,  // FuncWorker to Engine
+    READ_NEXT         = 0x03,  // FuncWorker to Engine, Engine to Index
+    READ_PREV         = 0x04,  // FuncWorker to Engine, Engine to Index
+    TRIM              = 0x05,  // FuncWorker to Engine, Engine to Sequencer
+    SET_AUXDATA       = 0x06,  // FuncWorker to Engine, Engine to Storage
+    READ_NEXT_B       = 0x07,  // FuncWorker to Engine, Engine to Index
+    READ_AT           = 0x11,  // Index to Storage
+    REPLICATE         = 0x12,  // Engine to Storage
+    INDEX_DATA        = 0x13,  // Engine to Index
+    SHARD_PROG        = 0x14,  // Storage to Sequencer
+    METALOGS          = 0x15,  // Sequencer to Sequencer, Engine, Storage, Index
+    META_PROG         = 0x16,  // Sequencer to Sequencer
+
+    RESPONSE          = 0x20
 };
 
 enum class SharedLogResultType : uint16_t {
     INVALID     = 0x00,
     // Successful results
-    APPEND_OK   = 0x20,
-    READ_OK     = 0x21,
-    TRIM_OK     = 0x22,
-    LOCALID     = 0x23,
-    AUXDATA_OK  = 0x24,
+    APPEND_OK         = 0x20,
+    READ_OK           = 0x21,
+    TRIM_OK           = 0x22,
+    LOCALID           = 0x23,
+    AUXDATA_OK        = 0x24,
+    // Async successful results
+    ASYNC_APPEND_OK   = 0x30,
     // Error results
-    BAD_ARGS    = 0x30,
-    DISCARDED   = 0x31,  // Log to append is discarded
-    EMPTY       = 0x32,  // Cannot find log entries satisfying requirements
-    DATA_LOST   = 0x33,  // Failed to extract log data
-    TRIM_FAILED = 0x34
+    BAD_ARGS    = 0x40,
+    DISCARDED   = 0x41,  // Log to append is discarded
+    EMPTY       = 0x42,  // Cannot find log entries satisfying requirements
+    DATA_LOST   = 0x43,  // Failed to extract log data
+    TRIM_FAILED = 0x44
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();

@@ -161,7 +161,8 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
     } while (0)
 
 void Engine::HandleLocalAppend(LocalOp* op) {
-    DCHECK(op->type == SharedLogOpType::APPEND);
+    DCHECK(op->type == SharedLogOpType::APPEND
+        || op->type == SharedLogOpType::ASYNC_APPEND);
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
     const View* view = nullptr;
@@ -182,6 +183,14 @@ void Engine::HandleLocalAppend(LocalOp* op) {
             locked_producer->LocalAppend(op, &log_metadata.localid);
         }
     }
+    if (op->type == SharedLogOpType::ASYNC_APPEND) {
+        // here's the first return of an async append, the second is identical to
+        // sync append
+        Message response = MessageHelper::NewSharedLogOpSucceeded(
+            SharedLogResultType::ASYNC_APPEND_OK, log_metadata.localid);
+        IntermediateLocalOpWithResponse(op, &response);
+    }
+
     ReplicateLogEntry(view, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
 }
 
