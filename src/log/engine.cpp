@@ -161,8 +161,7 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
     } while (0)
 
 void Engine::HandleLocalAppend(LocalOp* op) {
-    DCHECK(op->type == SharedLogOpType::APPEND
-        || op->type == SharedLogOpType::ASYNC_APPEND);
+    DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type));
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
     const View* view = nullptr;
@@ -200,9 +199,7 @@ void Engine::HandleLocalTrim(LocalOp* op) {
 }
 
 void Engine::HandleLocalRead(LocalOp* op) {
-    DCHECK(  op->type == SharedLogOpType::READ_NEXT
-          || op->type == SharedLogOpType::READ_PREV
-          || op->type == SharedLogOpType::READ_NEXT_B);
+    DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     HVLOG_F(1, "Handle local read: op_id={}, logspace={}, tag={}, seqnum={}",
             op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
     onging_reads_.PutChecked(op->id, op);
@@ -598,9 +595,7 @@ void Engine::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
 }
 
 SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
-    DCHECK(  op->type == SharedLogOpType::READ_NEXT
-          || op->type == SharedLogOpType::READ_PREV
-          || op->type == SharedLogOpType::READ_NEXT_B);
+    DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     SharedLogMessage request = SharedLogMessageHelper::NewReadMessage(op->type);
     request.origin_node_id = my_node_id();
     request.hop_times = 1;
@@ -636,6 +631,8 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
 
 IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
     return IndexQuery {
+        .type = protocol::SharedLogOpTypeHelper::IsAsyncSharedLogOp(op->type) ? \
+                    IndexQuery::QueryType::kAsync : IndexQuery::QueryType::kSync,
         .direction = IndexQuery::DirectionFromOpType(op->type),
         .origin_node_id = my_node_id(),
         .hop_times = 0,
@@ -656,6 +653,8 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
 IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
     return IndexQuery {
+        .type = protocol::SharedLogOpTypeHelper::IsAsyncSharedLogOp(op_type) ? \
+                    IndexQuery::QueryType::kAsync : IndexQuery::QueryType::kSync,
         .direction = IndexQuery::DirectionFromOpType(op_type),
         .origin_node_id = message.origin_node_id,
         .hop_times = message.hop_times,

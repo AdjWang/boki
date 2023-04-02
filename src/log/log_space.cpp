@@ -342,7 +342,7 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
         std::shared_ptr<const LogEntry> log_entry_ptr(log_entry);
         // Add the new entry to index data
         index_data_.add_seqnum_halves(bits::LowHalf64(seqnum));
-        index_data_.add_engine_ids(bits::HighHalf64(localid));
+        index_data_.add_local_ids(localid);
         index_data_.add_user_logspaces(log_entry->metadata.user_logspace);
         index_data_.add_user_tag_sizes(
             gsl::narrow_cast<uint32_t>(log_entry->user_tags.size()));

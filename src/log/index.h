@@ -12,7 +12,13 @@ struct IndexFoundResult {
 };
 
 struct IndexQuery {
+    // detemines how to interpret the query_seqnum
+    // kSync: seqnum of the shared log
+    // kAsync: local_id, **would replace with seqnum inplace when querying**
+    enum QueryType { kSync, kAsync };
+
     enum ReadDirection { kReadNext, kReadPrev, kReadNextB };
+    QueryType type;
     ReadDirection direction;
     uint16_t origin_node_id;
     uint16_t hop_times;
@@ -28,6 +34,7 @@ struct IndexQuery {
 
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);
     protocol::SharedLogOpType DirectionToOpType() const;
+    static IndexQuery SpawnAsSync(const IndexQuery& original_query, uint64_t new_seqnum);
 };
 
 struct IndexQueryResult {
@@ -72,13 +79,16 @@ private:
     uint32_t indexed_metalog_position_;
 
     struct IndexData {
-        uint16_t   engine_id;
+        uint64_t   local_id;
         uint32_t   user_logspace;
         UserTagVec user_tags;
     };
     std::map</* seqnum */ uint32_t, IndexData> received_data_;
     uint32_t data_received_seqnum_position_;
     uint32_t indexed_seqnum_position_;
+
+    // updated when receiving an index, used to serve async log query
+    std::map</* local_id */ uint64_t, /* seqnum */ uint64_t> log_index_map_;
 
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);

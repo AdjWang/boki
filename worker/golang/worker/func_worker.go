@@ -610,7 +610,7 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, data []byte) (types.Future, error) {
+func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, data []byte) (types.Future[uint64], error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data cannot be empty")
 	}
@@ -652,7 +652,30 @@ func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, da
 		result := protocol.GetSharedLogResultTypeFromMessage(response)
 		if result == protocol.SharedLogResultType_ASYNC_APPEND_OK {
 			localId := protocol.GetLogSeqNumFromMessage(response)
-			return types.NewFuture(localId, outputChan), nil
+			resolve := func() (uint64, error) {
+				sleepDuration := 5 * time.Millisecond
+				remainingRetries := 4
+				for {
+					response := <-outputChan
+					result := protocol.GetSharedLogResultTypeFromMessage(response)
+					if result == protocol.SharedLogResultType_APPEND_OK {
+						return protocol.GetLogSeqNumFromMessage(response), nil
+					} else if result == protocol.SharedLogResultType_DISCARDED {
+						log.Printf("[ERROR] Append discarded, will retry")
+						if remainingRetries > 0 {
+							time.Sleep(sleepDuration)
+							sleepDuration *= 2
+							remainingRetries--
+							continue
+						} else {
+							return 0, fmt.Errorf("failed to append log, exceeds maximum number of retries")
+						}
+					} else {
+						return 0, fmt.Errorf("failed to append log, unacceptable result type: %d", result)
+					}
+				}
+			}
+			return types.NewFuture(localId, resolve), nil
 		} else if result == protocol.SharedLogResultType_DISCARDED {
 			log.Printf("[ERROR] Append discarded, will retry")
 			if remainingRetries > 0 {
@@ -722,6 +745,39 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 	}
 }
 
+func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byte, opId uint64) (types.Future[*types.LogEntry], error) {
+	// count := atomic.AddInt32(&w.sharedLogReadCount, int32(1))
+	// if count > 16 {
+	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
+	// }
+
+	w.mux.Lock()
+	outputChan := make(chan []byte, 1)
+	w.outgoingLogOps[opId] = outputChan
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	resolve := func() (*types.LogEntry, error) {
+		var response []byte
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case response = <-outputChan:
+		}
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_READ_OK {
+			return buildLogEntryFromReadResponse(response), nil
+		} else if result == protocol.SharedLogResultType_EMPTY {
+			return nil, nil
+		} else {
+			return nil, fmt.Errorf("Failed to read log")
+		}
+	}
+	return types.NewFuture(opId, resolve), nil
+}
+
 // Implement types.Environment
 func (w *FuncWorker) GenerateUniqueID() uint64 {
 	uidLowHalf := atomic.AddUint32(&w.nextUidLowHalf, 1)
@@ -750,6 +806,14 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
+}
+
+// Implement types.Environment
+func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, future types.Future[uint64]) (types.Future[*types.LogEntry], error) {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, future, 1 /* direction */, id)
+	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
 // Implement types.Environment

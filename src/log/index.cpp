@@ -8,8 +8,10 @@ namespace log {
 IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpType op_type) {
     switch (op_type) {
     case protocol::SharedLogOpType::READ_NEXT:
+    case protocol::SharedLogOpType::ASYNC_READ_NEXT:
         return IndexQuery::kReadNext;
     case protocol::SharedLogOpType::READ_PREV:
+    case protocol::SharedLogOpType::ASYNC_READ_PREV:
         return IndexQuery::kReadPrev;
     case protocol::SharedLogOpType::READ_NEXT_B:
         return IndexQuery::kReadNextB;
@@ -18,7 +20,26 @@ IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpT
     }
 }
 
+// TODO: maybe a cleaner way
+IndexQuery IndexQuery::SpawnAsSync(const IndexQuery& original_query, uint64_t new_seqnum) {
+    DCHECK(original_query.type == IndexQuery::kAsync);
+    return IndexQuery {
+        .type = IndexQuery::QueryType::kSync,
+        .direction = original_query.direction,
+        .origin_node_id = original_query.origin_node_id,
+        .hop_times = original_query.hop_times,
+        .initial = original_query.initial,
+        .client_data = original_query.client_data,
+        .user_logspace = original_query.user_logspace,
+        .user_tag = original_query.user_tag,
+        .query_seqnum = new_seqnum,
+        .metalog_progress = original_query.metalog_progress,
+        .prev_found_result = original_query.prev_found_result
+    };
+}
+
 protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
+    // used to build result, use sync result for async read for now
     switch (direction) {
     case IndexQuery::kReadNext:
         return protocol::SharedLogOpType::READ_NEXT;
@@ -175,7 +196,7 @@ bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
 void Index::ProvideIndexData(const IndexDataProto& index_data) {
     DCHECK_EQ(identifier(), index_data.logspace_id());
     int n = index_data.seqnum_halves_size();
-    DCHECK_EQ(n, index_data.engine_ids_size());
+    DCHECK_EQ(n, index_data.local_ids_size());
     DCHECK_EQ(n, index_data.user_logspaces_size());
     DCHECK_EQ(n, index_data.user_tag_sizes_size());
     uint32_t total_tags = absl::c_accumulate(index_data.user_tag_sizes(), 0U);
@@ -190,15 +211,14 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
         }
         if (received_data_.count(seqnum) == 0) {
             received_data_[seqnum] = IndexData {
-                .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
+                .local_id      = index_data.local_ids(i),
                 .user_logspace = index_data.user_logspaces(i),
                 .user_tags     = UserTagVec(tag_iter, tag_iter + num_tags)
             };
         } else {
 #if DCHECK_IS_ON()
             const IndexData& data = received_data_[seqnum];
-            DCHECK_EQ(data.engine_id,
-                      gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)));
+            DCHECK_EQ(data.local_id, index_data.local_ids(i));
             DCHECK_EQ(data.user_logspace, index_data.user_logspaces(i));
             DCHECK_EQ(data.user_tags.size(),
                       gsl::narrow_cast<size_t>(index_data.user_tag_sizes(i)));
@@ -291,8 +311,16 @@ void Index::AdvanceIndexProgress() {
                 break;
             }
             const IndexData& index_data = iter->second;
+            // update index (globab view)
+            uint16_t engine_id = gsl::narrow_cast<uint16_t>(
+                bits::HighHalf64(index_data.local_id));
             GetOrCreateIndex(index_data.user_logspace)->Add(
-                seqnum, index_data.engine_id, index_data.user_tags);
+                seqnum, engine_id, index_data.user_tags);
+            // update index map, to serve async log query
+            DCHECK(log_index_map_.find(index_data.local_id) == log_index_map_.end())
+                << "Duplicate index_data.local_id for log_index_map_";
+            log_index_map_[index_data.local_id] = bits::JoinTwo32(identifier(), seqnum);
+
             iter = received_data_.erase(iter);
         }
         DCHECK_GT(end_seqnum, indexed_seqnum_position_);
@@ -338,15 +366,31 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
 }
 
 void Index::ProcessQuery(const IndexQuery& query) {
-    if (query.direction == IndexQuery::kReadNextB) {
-        bool success = ProcessBlockingQuery(query);
-        if (!success) {
-            blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query));
+    // read-your-write had been checked by indexed_metalog_position_ verivication before
+    IndexQuery query_copy(query);
+    // replace seqnum if querying by localid
+    if (query.type == IndexQuery::kAsync) {
+        uint64_t local_id = query.query_seqnum;
+        if (log_index_map_.find(local_id) == log_index_map_.end()) {
+            pending_query_results_.push_back(BuildNotFoundResult(query));
+            HVLOG(1) << "ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: "
+                     << local_id;
+            return;
         }
-    } else if (query.direction == IndexQuery::kReadNext) {
-        ProcessReadNext(query);
-    } else if (query.direction == IndexQuery::kReadPrev) {
-        ProcessReadPrev(query);
+        HVLOG_F(1, "ProcessQuery: found async map from local_id={} to seqnum={}",
+                local_id, log_index_map_[local_id]);
+        query_copy = IndexQuery::SpawnAsSync(query, log_index_map_[local_id]);
+    }
+
+    if (query_copy.direction == IndexQuery::kReadNextB) {
+        bool success = ProcessBlockingQuery(query_copy);
+        if (!success) {
+            blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query_copy));
+        }
+    } else if (query_copy.direction == IndexQuery::kReadNext) {
+        ProcessReadNext(query_copy);
+    } else if (query_copy.direction == IndexQuery::kReadPrev) {
+        ProcessReadPrev(query_copy);
     }
 }
 

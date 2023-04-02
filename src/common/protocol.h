@@ -87,12 +87,12 @@ enum class MessageType : uint16_t {
 enum class SharedLogOpType : uint16_t {
     INVALID           = 0x00,
     APPEND            = 0x01,  // FuncWorker to Engine
-    ASYNC_APPEND      = 0x02,  // FuncWorker to Engine
-    READ_NEXT         = 0x03,  // FuncWorker to Engine, Engine to Index
-    READ_PREV         = 0x04,  // FuncWorker to Engine, Engine to Index
-    TRIM              = 0x05,  // FuncWorker to Engine, Engine to Sequencer
-    SET_AUXDATA       = 0x06,  // FuncWorker to Engine, Engine to Storage
-    READ_NEXT_B       = 0x07,  // FuncWorker to Engine, Engine to Index
+    READ_NEXT         = 0x02,  // FuncWorker to Engine, Engine to Index
+    READ_PREV         = 0x03,  // FuncWorker to Engine, Engine to Index
+    TRIM              = 0x04,  // FuncWorker to Engine, Engine to Sequencer
+    SET_AUXDATA       = 0x05,  // FuncWorker to Engine, Engine to Storage
+    READ_NEXT_B       = 0x06,  // FuncWorker to Engine, Engine to Index
+
     READ_AT           = 0x11,  // Index to Storage
     REPLICATE         = 0x12,  // Engine to Storage
     INDEX_DATA        = 0x13,  // Engine to Index
@@ -100,7 +100,32 @@ enum class SharedLogOpType : uint16_t {
     METALOGS          = 0x15,  // Sequencer to Sequencer, Engine, Storage, Index
     META_PROG         = 0x16,  // Sequencer to Sequencer
 
-    RESPONSE          = 0x20
+    ASYNC_APPEND      = 0x20,  // FuncWorker to Engine
+    ASYNC_READ_NEXT   = 0x21,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_PREV   = 0x22,  // FuncWorker to Engine, Engine to Index
+
+    RESPONSE          = 0x30
+};
+
+class SharedLogOpTypeHelper {
+public:
+    static bool IsAsyncSharedLogOp(SharedLogOpType op_type) {
+        return op_type >= SharedLogOpType::ASYNC_APPEND
+            && op_type < SharedLogOpType::RESPONSE;
+    }
+
+    static bool IsFuncAppend(SharedLogOpType op_type) {
+        return op_type == SharedLogOpType::APPEND
+            || op_type == SharedLogOpType::ASYNC_APPEND;
+    }
+
+    static bool IsFuncRead(SharedLogOpType op_type) {
+        return op_type == SharedLogOpType::READ_NEXT
+            || op_type == SharedLogOpType::READ_PREV
+            || op_type == SharedLogOpType::READ_NEXT_B
+            || op_type == SharedLogOpType::ASYNC_READ_NEXT
+            || op_type == SharedLogOpType::ASYNC_READ_PREV;
+    }
 };
 
 enum class SharedLogResultType : uint16_t {

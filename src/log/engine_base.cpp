@@ -112,6 +112,8 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_NEXT:
+    case SharedLogOpType::ASYNC_READ_PREV:
         HandleLocalRead(op);
         break;
     case SharedLogOpType::TRIM:
@@ -131,6 +133,8 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_NEXT:
+    case SharedLogOpType::ASYNC_READ_PREV:
         HandleRemoteRead(message);
         break;
     case SharedLogOpType::INDEX_DATA:
@@ -148,8 +152,7 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
 }
 
 void EngineBase::PopulateLogTagsAndData(const Message& message, LocalOp* op) {
-    DCHECK(op->type == SharedLogOpType::APPEND
-        || op->type == SharedLogOpType::ASYNC_APPEND);
+    DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type));
     DCHECK_EQ(message.log_aux_data_size, 0U);
     std::span<const char> data = MessageHelper::GetInlineData(message);
     size_t num_tags = message.log_num_tags;
@@ -195,6 +198,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_NEXT:
+    case SharedLogOpType::ASYNC_READ_PREV:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         break;
