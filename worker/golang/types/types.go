@@ -28,6 +28,9 @@ type AsyncLogContext interface {
 	Chain(future FutureMeta) AsyncLogContext
 	Sync(timeout time.Duration) error
 	Serialize() ([]byte, error)
+
+	// DEBUG
+	String() string
 }
 
 type WrapperData struct {
@@ -62,11 +65,12 @@ type Environment interface {
 	AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, data []byte, cond func(CondHandle)) (Future[uint64], error)
 	// TODO: deprecated, use blocking read without binary search is enough
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, future Future[uint64]) (Future[*CondLogEntry], error)
-	// 2 read API used in cond now
+	// async read API
 	AsyncSharedLogRead(ctx context.Context, tag uint64, future Future[uint64]) (*CondLogEntry, error)
 	AsyncSharedLogReadIndex(ctx context.Context, futureMeta FutureMeta) (Future[uint64], error)
-	// async log handle
-	AsyncLogChain() AsyncLogContext
+	// async log context
+	AsyncLogCtx() AsyncLogContext
+	NewAsyncLogCtx(data []byte) error
 }
 
 type FuncHandler interface {

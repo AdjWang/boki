@@ -81,8 +81,18 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 }
 
 // TODO: better place
-func (w *FuncWorker) AsyncLogChain() types.AsyncLogContext {
+func (w *FuncWorker) AsyncLogCtx() types.AsyncLogContext {
 	return w.asyncLogCtx
+}
+
+func (w *FuncWorker) NewAsyncLogCtx(data []byte) error {
+	newCtx, err := types.DeserializeAsyncLogContext(w, data)
+	if err != nil {
+		return err
+	} else {
+		w.asyncLogCtx = newCtx
+		return nil
+	}
 }
 
 func (w *FuncWorker) Run() {

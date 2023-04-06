@@ -8,12 +8,12 @@ import (
 func TestOpPropagate(t *testing.T) {
 	var rawData []byte
 	{
-		client := CondHandle{}
+		client := condImpl{}
 		future := NewFuture(1 /*localid*/, func() (uint64, error) {
 			return 2 /*seqnum*/, nil
 		})
-		op := client.Read(3 /*tag*/, future)
-		data, err := op.Serialize()
+		client.Read(3 /*tag*/, future)
+		data, err := client.Ops[0].Serialize()
 		if err != nil {
 			t.Fatalf("serialize op error: %v", err)
 		}

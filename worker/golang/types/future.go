@@ -2,6 +2,8 @@ package types
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -106,11 +108,6 @@ func NewAsyncLogContext(env Environment) AsyncLogContext {
 	}
 }
 
-func DeserializeAsyncLogChain(data []byte) (AsyncLogContext, error) {
-	// TODO
-	panic("not implemented")
-}
-
 func (fc *asyncLogContextImpl) Chain(future FutureMeta) AsyncLogContext {
 	fc.asyncLogOps = append(fc.asyncLogOps, future)
 	return fc
@@ -156,6 +153,22 @@ func (fc *asyncLogContextImpl) Sync(timeout time.Duration) error {
 }
 
 func (fc *asyncLogContextImpl) Serialize() ([]byte, error) {
-	// TODO
-	panic("not implemented")
+	return json.Marshal(fc.asyncLogOps)
+}
+
+func DeserializeAsyncLogContext(env Environment, data []byte) (AsyncLogContext, error) {
+	var asyncLogOps []FutureMeta
+	err := json.Unmarshal(data, &asyncLogOps)
+	if err != nil {
+		return nil, err
+	}
+	return &asyncLogContextImpl{
+		env:         env,
+		asyncLogOps: asyncLogOps,
+	}, nil
+}
+
+// DEBUG
+func (fc *asyncLogContextImpl) String() string {
+	return fmt.Sprintf("ops=%+v", fc.asyncLogOps)
 }
