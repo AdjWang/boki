@@ -103,6 +103,7 @@ enum class SharedLogOpType : uint16_t {
     ASYNC_APPEND      = 0x20,  // FuncWorker to Engine
     ASYNC_READ_NEXT   = 0x21,  // FuncWorker to Engine, Engine to Index
     ASYNC_READ_PREV   = 0x22,  // FuncWorker to Engine, Engine to Index
+    READ_INDEX        = 0x23,  // FuncWorker to Engine, Engine to Index
 
     RESPONSE          = 0x30
 };
@@ -124,7 +125,8 @@ public:
             || op_type == SharedLogOpType::READ_PREV
             || op_type == SharedLogOpType::READ_NEXT_B
             || op_type == SharedLogOpType::ASYNC_READ_NEXT
-            || op_type == SharedLogOpType::ASYNC_READ_PREV;
+            || op_type == SharedLogOpType::ASYNC_READ_PREV
+            || op_type == SharedLogOpType::READ_INDEX;
     }
 };
 

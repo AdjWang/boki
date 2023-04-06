@@ -114,6 +114,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::READ_INDEX:
         HandleLocalRead(op);
         break;
     case SharedLogOpType::TRIM:
@@ -135,6 +136,7 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::READ_INDEX:
         HandleRemoteRead(message);
         break;
     case SharedLogOpType::INDEX_DATA:
@@ -203,6 +205,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         break;
+    case SharedLogOpType::READ_INDEX:
+        op->seqnum = message.log_seqnum;
+        break;
     case SharedLogOpType::TRIM:
         op->seqnum = message.log_seqnum;
         break;
@@ -226,6 +231,7 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_INDEX)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",

@@ -15,6 +15,8 @@ IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpT
         return IndexQuery::kReadPrev;
     case protocol::SharedLogOpType::READ_NEXT_B:
         return IndexQuery::kReadNextB;
+    case protocol::SharedLogOpType::READ_INDEX:
+        return IndexQuery::kReadIndex;
     default:
         UNREACHABLE();
     }
@@ -23,6 +25,7 @@ IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpT
 // TODO: maybe a cleaner way
 IndexQuery IndexQuery::SpawnAsSync(const IndexQuery& original_query, uint64_t new_seqnum) {
     DCHECK(original_query.type == IndexQuery::kAsync);
+    DCHECK(original_query.direction != kReadIndex);
     return IndexQuery {
         .type = IndexQuery::QueryType::kSync,
         .direction = original_query.direction,
@@ -377,11 +380,21 @@ void Index::ProcessQuery(const IndexQuery& query) {
                      << local_id;
             return;
         }
+        uint64_t seqnum = log_index_map_[local_id];
         HVLOG_F(1, "ProcessQuery: found async map from local_id={} to seqnum={}",
-                local_id, log_index_map_[local_id]);
-        query_copy = IndexQuery::SpawnAsSync(query, log_index_map_[local_id]);
+                local_id, seqnum);
+        if (query_copy.direction == IndexQuery::kReadIndex) {
+            uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(local_id));
+            auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id);
+            result.index_only = true;
+            pending_query_results_.push_back(result);
+            HVLOG_F(1, "ProcessReadIndex: FoundResult: seqnum={}", seqnum);
+            return;
+        } else {
+            query_copy = IndexQuery::SpawnAsSync(query, seqnum);
+            // then merge to flow same as sync read
+        }
     }
-
     if (query_copy.direction == IndexQuery::kReadNextB) {
         bool success = ProcessBlockingQuery(query_copy);
         if (!success) {
@@ -391,6 +404,8 @@ void Index::ProcessQuery(const IndexQuery& query) {
         ProcessReadNext(query_copy);
     } else if (query_copy.direction == IndexQuery::kReadPrev) {
         ProcessReadPrev(query_copy);
+    } else {
+        UNREACHABLE();
     }
 }
 
@@ -512,7 +527,8 @@ IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_
             .view_id = view_id,
             .engine_id = engine_id,
             .seqnum = seqnum
-        }
+        },
+        .index_only = false
     };
 }
 
@@ -527,7 +543,8 @@ IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query) {
             .view_id = 0,
             .engine_id = 0,
             .seqnum = kInvalidLogSeqNum
-        }
+        },
+        .index_only = false
     };
 }
 
@@ -544,7 +561,8 @@ IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
             .view_id = 0,
             .engine_id = 0,
             .seqnum = kInvalidLogSeqNum
-        }
+        },
+        .index_only = false
     };
     if (query.direction == IndexQuery::kReadNextB) {
         result.original_query.direction = IndexQuery::kReadNext;

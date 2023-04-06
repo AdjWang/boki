@@ -145,6 +145,11 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
         VECTOR_AS_SPAN(log_entry.user_tags),
         STRING_AS_SPAN(log_entry.data));
 }
+
+static Message BuildLocalReadOKResponse(uint64_t seqnum) {
+    return MessageHelper::NewSharedLogOpSucceeded(
+        SharedLogResultType::READ_OK, seqnum);
+}
 }  // namespace
 
 // Start handlers for local requests (from functions)
@@ -452,66 +457,72 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     const IndexQuery& query = query_result.original_query;
     bool local_request = (query.origin_node_id == my_node_id());
     uint64_t seqnum = query_result.found_result.seqnum;
-    if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
-        // Cache hits
-        HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
-        const LogEntry& log_entry = cached_log_entry.value();
-        std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
-        std::span<const char> aux_data;
-        if (cached_aux_data.has_value()) {
-            size_t full_size = log_entry.data.size()
-                             + log_entry.user_tags.size() * sizeof(uint64_t)
-                             + cached_aux_data->size();
-            if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
-                aux_data = STRING_AS_SPAN(*cached_aux_data);
-            } else {
-                HLOG_F(WARNING, "Inline buffer of message not large enough "
-                                "for auxiliary data of log (seqnum {}): "
-                                "log_size={}, num_tags={} aux_data_size={}",
-                       bits::HexStr0x(seqnum), log_entry.data.size(),
-                       log_entry.user_tags.size(), cached_aux_data->size());
-            }
-        }
-        if (local_request) {
-            LocalOp* op = onging_reads_.PollChecked(query.client_data);
-            Message response = BuildLocalReadOKResponse(log_entry);
-            response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-            MessageHelper::AppendInlineData(&response, aux_data);
-            FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
-        } else {
-            HVLOG_F(1, "Send read response for log (seqnum {})", bits::HexStr0x(seqnum));
-            SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();
-            log_utils::PopulateMetaDataToMessage(log_entry.metadata, &response);
-            response.user_metalog_progress = query_result.metalog_progress;
-            response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-            SendReadResponse(query, &response,
-                             VECTOR_AS_CHAR_SPAN(log_entry.user_tags),
-                             STRING_AS_SPAN(log_entry.data), aux_data);
-        }
+    if (query_result.index_only) {
+        LocalOp* op = onging_reads_.PollChecked(query.client_data);
+        Message response = BuildLocalReadOKResponse(seqnum);
+        FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
     } else {
-        // Cache miss
-        const View::Engine* engine_node = nullptr;
-        {
-            absl::ReaderMutexLock view_lk(&view_mu_);
-            uint16_t view_id = query_result.found_result.view_id;
-            if (view_id < views_.size()) {
-                const View* view = views_.at(view_id);
-                engine_node = view->GetEngineNode(query_result.found_result.engine_id);
-            } else {
-                HLOG_F(FATAL, "Cannot find view {}", view_id);
+        if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
+            // Cache hits
+            HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
+            const LogEntry& log_entry = cached_log_entry.value();
+            std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
+            std::span<const char> aux_data;
+            if (cached_aux_data.has_value()) {
+                size_t full_size = log_entry.data.size()
+                                 + log_entry.user_tags.size() * sizeof(uint64_t)
+                                 + cached_aux_data->size();
+                if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
+                    aux_data = STRING_AS_SPAN(*cached_aux_data);
+                } else {
+                    HLOG_F(WARNING, "Inline buffer of message not large enough "
+                                    "for auxiliary data of log (seqnum {}): "
+                                    "log_size={}, num_tags={} aux_data_size={}",
+                           bits::HexStr0x(seqnum), log_entry.data.size(),
+                           log_entry.user_tags.size(), cached_aux_data->size());
+                }
             }
-        }
-        bool success = SendStorageReadRequest(query_result, engine_node);
-        if (!success) {
-            HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
             if (local_request) {
                 LocalOp* op = onging_reads_.PollChecked(query.client_data);
-                FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+                Message response = BuildLocalReadOKResponse(log_entry);
+                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                MessageHelper::AppendInlineData(&response, aux_data);
+                FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
             } else {
-                SendReadFailureResponse(query, SharedLogResultType::DATA_LOST);
+                HVLOG_F(1, "Send read response for log (seqnum {})", bits::HexStr0x(seqnum));
+                SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();
+                log_utils::PopulateMetaDataToMessage(log_entry.metadata, &response);
+                response.user_metalog_progress = query_result.metalog_progress;
+                response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                SendReadResponse(query, &response,
+                                 VECTOR_AS_CHAR_SPAN(log_entry.user_tags),
+                                 STRING_AS_SPAN(log_entry.data), aux_data);
+            }
+        } else {
+            // Cache miss
+            const View::Engine* engine_node = nullptr;
+            {
+                absl::ReaderMutexLock view_lk(&view_mu_);
+                uint16_t view_id = query_result.found_result.view_id;
+                if (view_id < views_.size()) {
+                    const View* view = views_.at(view_id);
+                    engine_node = view->GetEngineNode(query_result.found_result.engine_id);
+                } else {
+                    HLOG_F(FATAL, "Cannot find view {}", view_id);
+                }
+            }
+            bool success = SendStorageReadRequest(query_result, engine_node);
+            if (!success) {
+                HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
+                if (local_request) {
+                    LocalOp* op = onging_reads_.PollChecked(query.client_data);
+                    FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+                } else {
+                    SendReadFailureResponse(query, SharedLogResultType::DATA_LOST);
+                }
             }
         }
-    }
+    }   // if index_only
 }
 
 void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,

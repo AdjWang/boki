@@ -108,7 +108,7 @@ func DeserializeOp(data []byte) (*Op, error) {
 }
 
 func CheckOp(op Op) bool {
-	fmt.Printf("%+v\n", op)
+	// fmt.Printf("%+v\n", op)
 	executor := &CondExecutor{}
 	switch op.Method {
 	case "Read":

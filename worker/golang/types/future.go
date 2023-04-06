@@ -68,15 +68,23 @@ func (f *futureImpl[T]) GetResult() (T, error) {
 }
 
 func (f *futureImpl[T]) Await(timeout time.Duration) error {
+	// log.Printf("wait future=%+v with timeout=%v", f, timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	awaitDone := make(chan struct{})
+	go func() {
+		f.wg.Wait()
+		awaitDone <- struct{}{}
+	}()
+
 	select {
 	case <-ctx.Done():
+		// log.Printf("wait future=%+v timeout", f)
 		return ctx.Err()
-	default:
-		f.wg.Wait()
+	case <-awaitDone:
+		// log.Printf("wait future=%+v without error", f)
+		return nil
 	}
-	return nil
 }
 
 func (f *futureImpl[T]) GetMeta() FutureMeta {
@@ -87,14 +95,14 @@ func (f *futureImpl[T]) GetMeta() FutureMeta {
 }
 
 type asyncLogContextImpl struct {
-	env         Environment
+	env         Environment // delegation
 	asyncLogOps []FutureMeta
 }
 
 func NewAsyncLogContext(env Environment) AsyncLogContext {
 	return &asyncLogContextImpl{
 		env:         env,
-		asyncLogOps: make([]FutureMeta, 0),
+		asyncLogOps: make([]FutureMeta, 0, 20),
 	}
 }
 
@@ -109,18 +117,42 @@ func (fc *asyncLogContextImpl) Chain(future FutureMeta) AsyncLogContext {
 }
 
 func (fc *asyncLogContextImpl) Sync(timeout time.Duration) error {
-	// TODO
-	panic("not implemented")
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	// futures := make([]Future[*LogEntry], 0, len(fc.asyncLogOps))
-	// ctx := context.Background()
-	// ctx, cancel := context.WithTimeout(ctx, timeout)
-	// defer cancel()
-	// for _, futureMeta := range fc.asyncLogOps {
-	// 	futures = append(futures, NewFuture[*LogEntry](futureMeta.localId, func() (*LogEntry, error) {
-	// 		// TODO
-	// 	}))
-	// }
+	wg := sync.WaitGroup{}
+	errCh := make(chan error)
+	for _, futureMeta := range fc.asyncLogOps {
+		wg.Add(1)
+		go func(futureMeta FutureMeta) {
+			if future, err := fc.env.AsyncSharedLogReadIndex(ctx, futureMeta); err != nil {
+				errCh <- err
+			} else if err := future.Await(timeout); err != nil {
+				errCh <- err
+			} else {
+				// log.Printf("wait future=%+v done", future)
+			}
+			wg.Done()
+		}(futureMeta)
+	}
+	waitCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		waitCh <- struct{}{}
+	}()
+
+	select {
+	case <-ctx.Done():
+		// log.Println("wait future all done timeout")
+		return ctx.Err()
+	case err := <-errCh:
+		// log.Println("wait future all done with error:", err)
+		return err
+	case <-waitCh:
+		// log.Println("wait future all done without error")
+		return nil
+	}
 }
 
 func (fc *asyncLogContextImpl) Serialize() ([]byte, error) {

@@ -17,7 +17,7 @@ struct IndexQuery {
     // kAsync: local_id, **would replace with seqnum inplace when querying**
     enum QueryType { kSync, kAsync };
 
-    enum ReadDirection { kReadNext, kReadPrev, kReadNextB };
+    enum ReadDirection { kReadNext, kReadPrev, kReadNextB, kReadIndex };
     QueryType type;
     ReadDirection direction;
     uint16_t origin_node_id;
@@ -45,6 +45,7 @@ struct IndexQueryResult {
 
     IndexQuery       original_query;
     IndexFoundResult found_result;
+    bool index_only;
 };
 
 class Index final : public LogSpaceBase {

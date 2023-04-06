@@ -805,7 +805,36 @@ func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byt
 		} else if result == protocol.SharedLogResultType_EMPTY {
 			return nil, nil
 		} else {
-			return nil, fmt.Errorf("Failed to read log")
+			return nil, fmt.Errorf("failed to read log")
+		}
+	}
+	return types.NewFuture(opId, resolve), nil
+}
+
+func (w *FuncWorker) asyncSharedLogReadIndex(ctx context.Context, message []byte, opId uint64) (types.Future[uint64], error) {
+	w.mux.Lock()
+	outputChan := make(chan []byte, 1)
+	w.outgoingLogOps[opId] = outputChan
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	resolve := func() (uint64, error) {
+		var response []byte
+		select {
+		case <-ctx.Done():
+			return 0, nil
+		case response = <-outputChan:
+		}
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_READ_OK {
+			seqnum := protocol.GetLogSeqNumFromMessage(response)
+			return seqnum, nil
+		} else if result == protocol.SharedLogResultType_EMPTY {
+			return 0, nil
+		} else {
+			return 0, fmt.Errorf("failed to read log index")
 		}
 	}
 	return types.NewFuture(opId, resolve), nil
@@ -861,9 +890,11 @@ func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, tag uint64, future 
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadMeta(ctx context.Context, tag uint64, future types.Future[uint64]) (uint64, error) {
-	// TODO
-	panic("not implemented")
+func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, futureMeta types.FutureMeta) (types.Future[uint64], error) {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, futureMeta, id)
+	return w.asyncSharedLogReadIndex(ctx, message, id)
 }
 
 // Implement types.Environment

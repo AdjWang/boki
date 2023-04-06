@@ -61,6 +61,7 @@ const (
 	SharedLogOpType_ASYNC_APPEND    uint16 = 0x20
 	SharedLogOpType_ASYNC_READ_NEXT uint16 = 0x21
 	SharedLogOpType_ASYNC_READ_PREV uint16 = 0x22
+	SharedLogOpType_READ_INDEX      uint16 = 0x23
 )
 
 // SharedLogResultType enum
@@ -270,6 +271,17 @@ func NewAsyncSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag u
 	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], future.GetLocalId())
+	return buffer
+}
+
+func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, futureMeta types.FutureMeta, clientData uint64) []byte {
+	buffer := NewEmptyMessage()
+	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
+	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
+	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_READ_INDEX)
+	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
+	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	binary.LittleEndian.PutUint64(buffer[8:16], futureMeta.LocalId)
 	return buffer
 }
 

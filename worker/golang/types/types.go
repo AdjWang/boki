@@ -64,7 +64,7 @@ type Environment interface {
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, future Future[uint64]) (Future[*CondLogEntry], error)
 	// 2 read API used in cond now
 	AsyncSharedLogRead(ctx context.Context, tag uint64, future Future[uint64]) (*CondLogEntry, error)
-	AsyncSharedLogReadMeta(ctx context.Context, tag uint64, future Future[uint64]) (uint64, error)
+	AsyncSharedLogReadIndex(ctx context.Context, futureMeta FutureMeta) (Future[uint64], error)
 	// async log handle
 	AsyncLogChain() AsyncLogContext
 }
