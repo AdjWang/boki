@@ -12,24 +12,25 @@ func check(err error) {
 }
 
 type readArg struct {
-	Tag    uint64     `json:"tag"`
 	FuMeta FutureMeta `json:"fuMeta"`
 }
 
 // used by CondAppend in user code
 type CondHandle interface {
-	AddDep(future Future[uint64])
-	Read(tag uint64, future Future[uint64])
+	AddDep(futureMeta FutureMeta)
+	Read(futureMeta FutureMeta)
 }
 
 // used inside CondAppend to wrap to original data
+// TODO: restruct with builder pattern
 type CondDataWrapper interface {
-	WrapData(originalData []byte) []byte
+	WrapData(tagBuildMeta []TagMeta, originalData []byte) []byte
 }
 
 type condImpl struct {
-	Deps []FutureMeta
-	Ops  []Op
+	Deps         []FutureMeta
+	Ops          []Op
+	TagBuildMeta []TagMeta
 }
 
 func NewCond() (CondHandle, CondDataWrapper) {
@@ -40,11 +41,12 @@ func NewCond() (CondHandle, CondDataWrapper) {
 	return cond, cond
 }
 
-func (c *condImpl) WrapData(originalData []byte) []byte {
-	newDataStruct := WrapperData{
-		Deps: c.Deps,
-		Cond: c.Ops,
-		Data: originalData,
+func (c *condImpl) WrapData(tagBuildMeta []TagMeta, originalData []byte) []byte {
+	newDataStruct := DataWrapper{
+		Deps:         c.Deps,
+		Cond:         c.Ops,
+		TagBuildMeta: tagBuildMeta,
+		Data:         originalData,
 	}
 	rawData, err := json.Marshal(newDataStruct)
 	check(err)
@@ -52,28 +54,28 @@ func (c *condImpl) WrapData(originalData []byte) []byte {
 }
 
 func UnwrapData(rawData []byte) (*condImpl, []byte, error) {
-	var wrapperData WrapperData
+	var wrapperData DataWrapper
 	err := json.Unmarshal(rawData, &wrapperData)
 	if err != nil {
 		return nil, nil, err
 	} else {
 		return &condImpl{
-				Deps: wrapperData.Deps,
-				Ops:  wrapperData.Cond,
+				Deps:         wrapperData.Deps,
+				Ops:          wrapperData.Cond,
+				TagBuildMeta: wrapperData.TagBuildMeta,
 			},
 			wrapperData.Data,
 			nil
 	}
 }
 
-func (c *condImpl) AddDep(future Future[uint64]) {
-	c.Deps = append(c.Deps, future.GetMeta())
+func (c *condImpl) AddDep(futureMeta FutureMeta) {
+	c.Deps = append(c.Deps, futureMeta)
 }
 
-func (c *condImpl) Read(tag uint64, future Future[uint64]) {
+func (c *condImpl) Read(futureMeta FutureMeta) {
 	arg := readArg{
-		Tag:    tag,
-		FuMeta: future.GetMeta(),
+		FuMeta: futureMeta,
 	}
 	rawArg, err := json.Marshal(arg)
 	check(err)
@@ -85,11 +87,14 @@ func (c *condImpl) Read(tag uint64, future Future[uint64]) {
 }
 
 // used by the state machine of a stream
+// Verify touches bussiness logic, so delegate each operation to the
+// user code, pass the *operand* to the user and get the result
+// Code here only implements the *operators*.
 type CondExecutor struct{}
 
-func (c *CondExecutor) Read(tag uint64, futureMeta FutureMeta) (bool, error) {
+func (c *CondExecutor) Read(futureMeta FutureMeta) (bool, error) {
 	// TODO
-	fmt.Printf("tag=%v, futureMeta=%v\n", tag, futureMeta)
+	fmt.Printf("futureMeta=%v\n", futureMeta)
 	return true, nil
 }
 
@@ -114,10 +119,19 @@ func CheckOp(op Op) bool {
 	case "Read":
 		var arg readArg
 		check(json.Unmarshal([]byte(op.Args), &arg))
-		ok, err := executor.Read(arg.Tag, arg.FuMeta)
+		ok, err := executor.Read(arg.FuMeta)
 		check(err)
 		return ok
 	default:
 		panic("unreachable")
 	}
+}
+
+func CheckOps(ops []Op) bool {
+	for _, op := range ops {
+		if !CheckOp(op) {
+			return false
+		}
+	}
+	return true
 }

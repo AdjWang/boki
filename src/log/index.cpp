@@ -8,10 +8,9 @@ namespace log {
 IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpType op_type) {
     switch (op_type) {
     case protocol::SharedLogOpType::READ_NEXT:
-    case protocol::SharedLogOpType::ASYNC_READ_NEXT:
+    case protocol::SharedLogOpType::ASYNC_READ:
         return IndexQuery::kReadNext;
     case protocol::SharedLogOpType::READ_PREV:
-    case protocol::SharedLogOpType::ASYNC_READ_PREV:
         return IndexQuery::kReadPrev;
     case protocol::SharedLogOpType::READ_NEXT_B:
         return IndexQuery::kReadNextB;
@@ -50,6 +49,8 @@ protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
         return protocol::SharedLogOpType::READ_PREV;
     case IndexQuery::kReadNextB:
         return protocol::SharedLogOpType::READ_NEXT_B;
+    case IndexQuery::kReadIndex:
+        return protocol::SharedLogOpType::READ_INDEX;
     default:
         UNREACHABLE();
     }
@@ -322,7 +323,10 @@ void Index::AdvanceIndexProgress() {
             // update index map, to serve async log query
             DCHECK(log_index_map_.find(index_data.local_id) == log_index_map_.end())
                 << "Duplicate index_data.local_id for log_index_map_";
-            log_index_map_[index_data.local_id] = bits::JoinTwo32(identifier(), seqnum);
+            log_index_map_[index_data.local_id] = AsyncIndexData{
+                .seqnum = bits::JoinTwo32(identifier(), seqnum),
+                .user_tags = index_data.user_tags,
+            };
 
             iter = received_data_.erase(iter);
         }
@@ -373,39 +377,39 @@ void Index::ProcessQuery(const IndexQuery& query) {
     IndexQuery query_copy(query);
     // replace seqnum if querying by localid
     if (query.type == IndexQuery::kAsync) {
+        // handle async queries here without querying per-logspace index
         uint64_t local_id = query.query_seqnum;
         if (log_index_map_.find(local_id) == log_index_map_.end()) {
+            // not found
             pending_query_results_.push_back(BuildNotFoundResult(query));
             HVLOG(1) << "ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: "
                      << local_id;
-            return;
-        }
-        uint64_t seqnum = log_index_map_[local_id];
-        HVLOG_F(1, "ProcessQuery: found async map from local_id={} to seqnum={}",
-                local_id, seqnum);
-        if (query_copy.direction == IndexQuery::kReadIndex) {
+        } else {
+            // found
+            AsyncIndexData index_data = log_index_map_[local_id];
+            uint64_t seqnum = index_data.seqnum;
+            HVLOG_F(1, "ProcessQuery: found async map from local_id={} to seqnum={}",
+                    local_id, seqnum);
+
             uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(local_id));
             auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id);
-            result.index_only = true;
+            result.index_only = query_copy.direction == IndexQuery::kReadIndex;
             pending_query_results_.push_back(result);
             HVLOG_F(1, "ProcessReadIndex: FoundResult: seqnum={}", seqnum);
-            return;
-        } else {
-            query_copy = IndexQuery::SpawnAsSync(query, seqnum);
-            // then merge to flow same as sync read
         }
-    }
-    if (query_copy.direction == IndexQuery::kReadNextB) {
-        bool success = ProcessBlockingQuery(query_copy);
-        if (!success) {
-            blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query_copy));
-        }
-    } else if (query_copy.direction == IndexQuery::kReadNext) {
-        ProcessReadNext(query_copy);
-    } else if (query_copy.direction == IndexQuery::kReadPrev) {
-        ProcessReadPrev(query_copy);
     } else {
-        UNREACHABLE();
+        if (query_copy.direction == IndexQuery::kReadNextB) {
+            bool success = ProcessBlockingQuery(query_copy);
+            if (!success) {
+                blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query_copy));
+            }
+        } else if (query_copy.direction == IndexQuery::kReadNext) {
+            ProcessReadNext(query_copy);
+        } else if (query_copy.direction == IndexQuery::kReadPrev) {
+            ProcessReadPrev(query_copy);
+        } else {
+            UNREACHABLE();
+        }
     }
 }
 

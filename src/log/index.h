@@ -89,7 +89,11 @@ private:
     uint32_t indexed_seqnum_position_;
 
     // updated when receiving an index, used to serve async log query
-    std::map</* local_id */ uint64_t, /* seqnum */ uint64_t> log_index_map_;
+    struct AsyncIndexData {
+        uint64_t seqnum;
+        UserTagVec user_tags;
+    };
+    std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
 
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);

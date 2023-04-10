@@ -112,8 +112,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ:
     case SharedLogOpType::READ_INDEX:
         HandleLocalRead(op);
         break;
@@ -134,8 +133,7 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ:
     case SharedLogOpType::READ_INDEX:
         HandleRemoteRead(message);
         break;
@@ -200,8 +198,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         break;

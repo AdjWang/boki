@@ -12,7 +12,7 @@ func TestOpPropagate(t *testing.T) {
 		future := NewFuture(1 /*localid*/, func() (uint64, error) {
 			return 2 /*seqnum*/, nil
 		})
-		client.Read(3 /*tag*/, future)
+		client.Read(future.GetMeta())
 		data, err := client.Ops[0].Serialize()
 		if err != nil {
 			t.Fatalf("serialize op error: %v", err)

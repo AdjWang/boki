@@ -630,12 +630,12 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, data []byte) (types.Future[uint64], error) {
-	return w.AsyncSharedLogCondAppend(ctx, tags, data, func(condHandle types.CondHandle) {})
+func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, tagBuildMeta []types.TagMeta, data []byte) (types.Future[uint64], error) {
+	return w.AsyncSharedLogCondAppend(ctx, tags, tagBuildMeta, data, func(condHandle types.CondHandle) {})
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, data []byte, cond func(types.CondHandle)) (types.Future[uint64], error) {
+func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []types.TagMeta, data []byte, cond func(types.CondHandle)) (types.Future[uint64], error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data cannot be empty")
 	}
@@ -648,7 +648,7 @@ func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64
 	// apply conditions
 	cond(condHandle)
 	// wrap conditions to original data
-	data = condWrapper.WrapData(data)
+	data = condWrapper.WrapData(tagBuildMeta, data)
 
 	if len(data)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
 		return nil, fmt.Errorf("data too larger (size=%d, num_tags=%d), expect no more than %d bytes",
@@ -778,7 +778,7 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 }
 
 // async appends are wrapped with cond, remember to unwrap it before return to user
-func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byte, opId uint64) (types.Future[*types.CondLogEntry], error) {
+func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byte, opId uint64) (*types.CondLogEntry, error) {
 	// count := atomic.AddInt32(&w.sharedLogReadCount, int32(1))
 	// if count > 16 {
 	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
@@ -792,33 +792,31 @@ func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byt
 	if err != nil {
 		return nil, err
 	}
-	resolve := func() (*types.CondLogEntry, error) {
-		var response []byte
-		select {
-		case <-ctx.Done():
-			return nil, nil
-		case response = <-outputChan:
-		}
-		result := protocol.GetSharedLogResultTypeFromMessage(response)
-		if result == protocol.SharedLogResultType_READ_OK {
-			logEntry := buildLogEntryFromReadResponse(response)
-			cond, originalData, err := types.UnwrapData(logEntry.Data)
-			if err != nil {
-				return nil, err
-			}
-			logEntry.Data = originalData
-			return &types.CondLogEntry{
-				LogEntry: *logEntry,
-				Deps:     cond.Deps,
-				Cond:     cond.Ops,
-			}, nil
-		} else if result == protocol.SharedLogResultType_EMPTY {
-			return nil, nil
-		} else {
-			return nil, fmt.Errorf("failed to read log")
-		}
+	var response []byte
+	select {
+	case <-ctx.Done():
+		return nil, nil
+	case response = <-outputChan:
 	}
-	return types.NewFuture(opId, resolve), nil
+	result := protocol.GetSharedLogResultTypeFromMessage(response)
+	if result == protocol.SharedLogResultType_READ_OK {
+		logEntry := buildLogEntryFromReadResponse(response)
+		cond, originalData, err := types.UnwrapData(logEntry.Data)
+		if err != nil {
+			return nil, err
+		}
+		logEntry.Data = originalData
+		return &types.CondLogEntry{
+			LogEntry:     *logEntry,
+			Deps:         cond.Deps,
+			Cond:         cond.Ops,
+			TagBuildMeta: cond.TagBuildMeta,
+		}, nil
+	} else if result == protocol.SharedLogResultType_EMPTY {
+		return nil, nil
+	} else {
+		return nil, fmt.Errorf("failed to read log")
+	}
 }
 
 func (w *FuncWorker) asyncSharedLogReadIndex(ctx context.Context, message []byte, opId uint64) (types.Future[uint64], error) {
@@ -881,22 +879,19 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, future types.Future[uint64]) (types.Future[*types.CondLogEntry], error) {
+func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.CondLogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, future, 1 /* direction */, id)
+	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, tag uint64, future types.Future[uint64]) (*types.CondLogEntry, error) {
-	// TODO: more graceful way
-	readResFuture, err := w.AsyncSharedLogReadNext(ctx, tag, future)
-	if err != nil {
-		return nil, err
-	}
-	// would block
-	return readResFuture.GetResult()
+func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, futureMeta types.FutureMeta) (*types.CondLogEntry, error) {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, futureMeta, id)
+	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
 // Implement types.Environment
