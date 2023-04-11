@@ -146,6 +146,9 @@ func (fc *asyncLogContextImpl) Sync(timeout time.Duration) error {
 				errCh <- err
 			} else {
 				// log.Printf("wait future=%+v done", future)
+				// seqNum, err := future.GetResult()
+				// log.Printf("wait futureMeta.LocalId=0x%016X state=%v seqNum=0x%016X err=%v",
+				// 	futureMeta.LocalId, futureMeta.State, seqNum, err)
 			}
 			wg.Done()
 		}(futureMeta)

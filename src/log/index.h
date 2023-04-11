@@ -34,7 +34,6 @@ struct IndexQuery {
 
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);
     protocol::SharedLogOpType DirectionToOpType() const;
-    static IndexQuery SpawnAsSync(const IndexQuery& original_query, uint64_t new_seqnum);
 };
 
 struct IndexQueryResult {
@@ -104,6 +103,7 @@ private:
     void AdvanceIndexProgress();
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
 
+    bool ProcessAsyncQuery(const IndexQuery& query);
     void ProcessQuery(const IndexQuery& query);
     void ProcessReadNext(const IndexQuery& query);
     void ProcessReadPrev(const IndexQuery& query);

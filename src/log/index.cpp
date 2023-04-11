@@ -21,25 +21,6 @@ IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpT
     }
 }
 
-// TODO: maybe a cleaner way
-IndexQuery IndexQuery::SpawnAsSync(const IndexQuery& original_query, uint64_t new_seqnum) {
-    DCHECK(original_query.type == IndexQuery::kAsync);
-    DCHECK(original_query.direction != kReadIndex);
-    return IndexQuery {
-        .type = IndexQuery::QueryType::kSync,
-        .direction = original_query.direction,
-        .origin_node_id = original_query.origin_node_id,
-        .hop_times = original_query.hop_times,
-        .initial = original_query.initial,
-        .client_data = original_query.client_data,
-        .user_logspace = original_query.user_logspace,
-        .user_tag = original_query.user_tag,
-        .query_seqnum = new_seqnum,
-        .metalog_progress = original_query.metalog_progress,
-        .prev_found_result = original_query.prev_found_result
-    };
-}
-
 protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
     // used to build result, use sync result for async read for now
     switch (direction) {
@@ -245,11 +226,17 @@ void Index::MakeQuery(const IndexQuery& query) {
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
         } else if (view_id < view_->id()) {
+            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
+due to pending_query viewid={} smaller than current viewid={}",
+                    uint16_t(query.type), query.query_seqnum, view_id, view_->id());
             ProcessQuery(query);
         } else {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
             if (position <= indexed_metalog_position_) {
+                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
+due to pending_query metalog_position={} not larger than indexed_metalog_position={}",
+                        uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
                 ProcessQuery(query);
             } else {
                 pending_queries_.insert(std::make_pair(position, query));
@@ -258,6 +245,8 @@ void Index::MakeQuery(const IndexQuery& query) {
     } else {
         HVLOG(1) << "Receive continue query";
         if (finalized()) {
+            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} due to finalized",
+                    uint16_t(query.type), query.query_seqnum);
             ProcessQuery(query);
         } else {
             pending_queries_.insert(std::make_pair(kMaxMetalogPosition, query));
@@ -340,7 +329,13 @@ void Index::AdvanceIndexProgress() {
         int64_t current_timestamp = GetMonotonicMicroTimestamp();
         std::vector<std::pair<int64_t, IndexQuery>> unfinished;
         for (const auto& [start_timestamp, query] : blocking_reads_) {
-            if (!ProcessBlockingQuery(query)) {
+            bool query_result;
+            if (query.type == IndexQuery::kAsync) {
+                query_result = ProcessAsyncQuery(query);
+            } else {
+                query_result = ProcessBlockingQuery(query);
+            }
+            if (!query_result) {
                 if (current_timestamp - start_timestamp
                         < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
                     unfinished.push_back(std::make_pair(start_timestamp, query));
@@ -357,6 +352,9 @@ void Index::AdvanceIndexProgress() {
             break;
         }
         const IndexQuery& query = iter->second;
+        HVLOG_F(1, "AdvanceIndexProgress Process query type=0x{:02X} seqnum=0x{:016X} \
+due to pending_query metalog_position={} not larger than indexed_metalog_position={}",
+                uint16_t(query.type), query.query_seqnum, iter->first, indexed_metalog_position_);
         ProcessQuery(query);
         iter = pending_queries_.erase(iter);
     }
@@ -372,41 +370,50 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
     return index;
 }
 
-void Index::ProcessQuery(const IndexQuery& query) {
-    // read-your-write had been checked by indexed_metalog_position_ verivication before
-    IndexQuery query_copy(query);
+// Handle async queries here without querying per-logspace index
+bool Index::ProcessAsyncQuery(const IndexQuery& query) {
+    // To gaurantee read-your-write, async query is promised to be found, even
+    // metalog_position_ is old.
     // replace seqnum if querying by localid
-    if (query.type == IndexQuery::kAsync) {
-        // handle async queries here without querying per-logspace index
-        uint64_t local_id = query.query_seqnum;
-        if (log_index_map_.find(local_id) == log_index_map_.end()) {
-            // not found
-            pending_query_results_.push_back(BuildNotFoundResult(query));
-            HVLOG(1) << "ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: "
-                     << local_id;
-        } else {
-            // found
-            AsyncIndexData index_data = log_index_map_[local_id];
-            uint64_t seqnum = index_data.seqnum;
-            HVLOG_F(1, "ProcessQuery: found async map from local_id={} to seqnum={}",
-                    local_id, seqnum);
-
-            uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(local_id));
-            auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id);
-            result.index_only = query_copy.direction == IndexQuery::kReadIndex;
-            pending_query_results_.push_back(result);
-            HVLOG_F(1, "ProcessReadIndex: FoundResult: seqnum={}", seqnum);
-        }
+    uint64_t local_id = query.query_seqnum;
+    if (log_index_map_.find(local_id) == log_index_map_.end()) {
+        // not found
+        // pending_query_results_.push_back(BuildNotFoundResult(query));
+        // HVLOG_F(1, "ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
+        //         local_id);
+        HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
+                local_id);
+        blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query));
+        return false;
     } else {
-        if (query_copy.direction == IndexQuery::kReadNextB) {
-            bool success = ProcessBlockingQuery(query_copy);
+        // found
+        AsyncIndexData index_data = log_index_map_[local_id];
+        uint64_t seqnum = index_data.seqnum;
+        HVLOG_F(1, "ProcessQuery: found async map from local_id={} to seqnum={}",
+                local_id, seqnum);
+
+        uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(local_id));
+        auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id);
+        result.index_only = query.direction == IndexQuery::kReadIndex;
+        pending_query_results_.push_back(result);
+        HVLOG_F(1, "ProcessReadIndex: FoundResult: seqnum={}", seqnum);
+        return true;
+    }
+}
+
+void Index::ProcessQuery(const IndexQuery& query) {
+    if (query.type == IndexQuery::kAsync) {
+        ProcessAsyncQuery(query);
+    } else {
+        if (query.direction == IndexQuery::kReadNextB) {
+            bool success = ProcessBlockingQuery(query);
             if (!success) {
-                blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query_copy));
+                blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query));
             }
-        } else if (query_copy.direction == IndexQuery::kReadNext) {
-            ProcessReadNext(query_copy);
-        } else if (query_copy.direction == IndexQuery::kReadPrev) {
-            ProcessReadPrev(query_copy);
+        } else if (query.direction == IndexQuery::kReadNext) {
+            ProcessReadNext(query);
+        } else if (query.direction == IndexQuery::kReadPrev) {
+            ProcessReadPrev(query);
         } else {
             UNREACHABLE();
         }

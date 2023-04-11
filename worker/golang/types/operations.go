@@ -2,7 +2,6 @@ package types
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 func check(err error) {
@@ -11,14 +10,10 @@ func check(err error) {
 	}
 }
 
-type readArg struct {
-	FuMeta FutureMeta `json:"fuMeta"`
-}
-
 // used by CondAppend in user code
 type CondHandle interface {
 	AddDep(futureMeta FutureMeta)
-	Read(futureMeta FutureMeta)
+	AddResolver(resolver uint8)
 }
 
 // used inside CondAppend to wrap to original data
@@ -73,34 +68,15 @@ func (c *condImpl) AddDep(futureMeta FutureMeta) {
 	c.Deps = append(c.Deps, futureMeta)
 }
 
-func (c *condImpl) Read(futureMeta FutureMeta) {
-	arg := readArg{
-		FuMeta: futureMeta,
-	}
-	rawArg, err := json.Marshal(arg)
-	check(err)
+func (c *condImpl) AddResolver(resolver uint8) {
 	c.Ops = append(c.Ops,
 		Op{
-			Method: "Read",
-			Args:   rawArg,
+			Resolver: resolver,
 		})
 }
 
-// used by the state machine of a stream
-// Verify touches bussiness logic, so delegate each operation to the
-// user code, pass the *operand* to the user and get the result
-// Code here only implements the *operators*.
-type CondExecutor struct{}
-
-func (c *CondExecutor) Read(futureMeta FutureMeta) (bool, error) {
-	// TODO
-	fmt.Printf("futureMeta=%v\n", futureMeta)
-	return true, nil
-}
-
 type Op struct {
-	Method string
-	Args   []byte
+	Resolver uint8 `json:"resolver"`
 }
 
 func (op *Op) Serialize() ([]byte, error) {
@@ -110,28 +86,4 @@ func DeserializeOp(data []byte) (*Op, error) {
 	var op Op
 	err := json.Unmarshal(data, &op)
 	return &op, err
-}
-
-func CheckOp(op Op) bool {
-	// fmt.Printf("%+v\n", op)
-	executor := &CondExecutor{}
-	switch op.Method {
-	case "Read":
-		var arg readArg
-		check(json.Unmarshal([]byte(op.Args), &arg))
-		ok, err := executor.Read(arg.FuMeta)
-		check(err)
-		return ok
-	default:
-		panic("unreachable")
-	}
-}
-
-func CheckOps(ops []Op) bool {
-	for _, op := range ops {
-		if !CheckOp(op) {
-			return false
-		}
-	}
-	return true
 }
