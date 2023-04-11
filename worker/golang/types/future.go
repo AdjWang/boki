@@ -109,12 +109,14 @@ func (f *futureImpl[T]) GetMeta() FutureMeta {
 
 type asyncLogContextImpl struct {
 	env         Environment // delegation
+	mu          sync.Mutex
 	asyncLogOps []FutureMeta
 }
 
 func DebugNewAsyncLogContext() AsyncLogContext {
 	return &asyncLogContextImpl{
 		env:         nil,
+		mu:          sync.Mutex{},
 		asyncLogOps: make([]FutureMeta, 0, 20),
 	}
 }
@@ -126,11 +128,16 @@ func NewAsyncLogContext(env Environment) AsyncLogContext {
 }
 
 func (fc *asyncLogContextImpl) Chain(future FutureMeta) AsyncLogContext {
+	fc.mu.Lock()
 	fc.asyncLogOps = append(fc.asyncLogOps, future)
+	fc.mu.Unlock()
 	return fc
 }
 
 func (fc *asyncLogContextImpl) Sync(timeout time.Duration) error {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -173,6 +180,8 @@ func (fc *asyncLogContextImpl) Sync(timeout time.Duration) error {
 }
 
 func (fc *asyncLogContextImpl) Serialize() ([]byte, error) {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
 	asyncLogCtxData, err := json.Marshal(fc.asyncLogOps)
 	if err != nil {
 		return nil, err
