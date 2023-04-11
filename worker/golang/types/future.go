@@ -173,7 +173,15 @@ func (fc *asyncLogContextImpl) Sync(timeout time.Duration) error {
 }
 
 func (fc *asyncLogContextImpl) Serialize() ([]byte, error) {
-	return json.Marshal(fc.asyncLogOps)
+	asyncLogCtxData, err := json.Marshal(fc.asyncLogOps)
+	if err != nil {
+		return nil, err
+	}
+	// DEBUG
+	if len(asyncLogCtxData) == 0 {
+		panic(fmt.Sprintf("empty asyncLogCtxData: %v", asyncLogCtxData))
+	}
+	return asyncLogCtxData, nil
 }
 
 func DeserializeAsyncLogContext(env Environment, data []byte) (AsyncLogContext, error) {
