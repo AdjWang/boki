@@ -29,6 +29,7 @@ type AsyncLogContext interface {
 	Chain(future FutureMeta) AsyncLogContext
 	Sync(timeout time.Duration) error
 	Serialize() ([]byte, error)
+	Truncate()
 
 	// DEBUG
 	String() string

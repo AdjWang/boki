@@ -76,6 +76,9 @@ void EngineBase::OnNewExternalFuncCall(const FuncCall& func_call, uint32_t log_s
         .metalog_progress = 0,
         .parent_call_id = protocol::kInvalidFuncCallId
     };
+    // HLOG(INFO) << "Applying new external function call: "
+    //            << FuncCallHelper::DebugString(func_call)
+    //            << DebugListExistingFnCall(fn_call_ctx_);
 }
 
 void EngineBase::OnNewInternalFuncCall(const FuncCall& func_call,
@@ -92,6 +95,9 @@ void EngineBase::OnNewInternalFuncCall(const FuncCall& func_call,
     FnCallContext ctx = fn_call_ctx_.at(parent_func_call.full_call_id);
     ctx.parent_call_id = parent_func_call.full_call_id;
     fn_call_ctx_[func_call.full_call_id] = std::move(ctx);
+    // HLOG(INFO) << "Applying new internal function call: "
+    //            << FuncCallHelper::DebugString(func_call)
+    //            << DebugListExistingFnCall(fn_call_ctx_);
 }
 
 void EngineBase::OnFuncCallCompleted(const FuncCall& func_call) {
@@ -163,6 +169,18 @@ void EngineBase::PopulateLogTagsAndData(const Message& message, LocalOp* op) {
     op->data.AppendData(data.subspan(num_tags * sizeof(uint64_t)));
 }
 
+std::string EngineBase::DebugListExistingFnCall(const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>& fn_call_ctx) {
+    std::string output(" Existing function call: ");
+    for (auto it = fn_call_ctx.begin(); it != fn_call_ctx.end(); ++it) {
+        output += fmt::format("{} ", it->first);
+    }
+    output += "\n";
+    return output;
+}
+static std::string DebugPrintMessage(const Message& message) {
+    return fmt::format("msg_type={}, client_id={}, client_data={}, log_op_type={}",
+        message.message_type, message.log_client_id, message.log_client_data, message.log_op);
+}
 void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     protocol::FuncCall func_call = MessageHelper::GetFuncCall(message);
     FnCallContext ctx;
@@ -170,9 +188,14 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         absl::ReaderMutexLock fn_ctx_lk(&fn_ctx_mu_);
         if (!fn_call_ctx_.contains(func_call.full_call_id)) {
             HLOG(ERROR) << "Cannot find FuncCall: "
-                        << FuncCallHelper::DebugString(func_call);
+                        << FuncCallHelper::DebugString(func_call)
+                        << DebugListExistingFnCall(fn_call_ctx_)
+                        << DebugPrintMessage(message);
             return;
         }
+        // HLOG(INFO) << "Found FuncCall: "
+        //            << FuncCallHelper::DebugString(func_call)
+        //            << DebugListExistingFnCall(fn_call_ctx_);
         ctx = fn_call_ctx_.at(func_call.full_call_id);
     }
 
@@ -379,6 +402,7 @@ void EngineBase::SendReadResponse(const IndexQuery& query,
         engine_id, *response, user_tags_payload, data_payload, aux_data_payload);
     if (!success) {
         HLOG_F(WARNING, "Failed to send read response to engine {}", engine_id);
+        HLOG_F(WARNING, "[DEBUG] StackTrace:\n{}", utils::DumpStackTrace());
     }
 }
 

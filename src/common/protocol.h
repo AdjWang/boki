@@ -3,6 +3,7 @@
 #include "base/common.h"
 #include "common/time.h"
 #include "utils/bits.h"
+#include "utils/debug.h"
 
 namespace faas {
 namespace protocol {
@@ -55,11 +56,12 @@ public:
 
     static std::string DebugString(const FuncCall& func_call) {
         if (func_call.method_id == 0) {
-            return fmt::format("func_id={}, client_id={}, call_id={}",
-                                func_call.func_id, func_call.client_id, func_call.call_id);
+            return fmt::format("full_call_id={}, func_id={}, client_id={}, call_id={}",
+                                func_call.full_call_id, func_call.func_id,
+                                func_call.client_id, func_call.call_id);
         } else {
-            return fmt::format("func_id={}, method_id={}, client_id={}, call_id={}",
-                               func_call.func_id, func_call.method_id,
+            return fmt::format("full_call_id={}, func_id={}, method_id={}, client_id={}, call_id={}",
+                               func_call.full_call_id, func_call.func_id, func_call.method_id,
                                func_call.client_id, func_call.call_id);
         }
     }

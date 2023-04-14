@@ -3,6 +3,7 @@
 #include "ipc/base.h"
 #include "engine/flags.h"
 #include "engine/engine.h"
+#include "utils/debug.h"
 
 namespace faas {
 namespace engine {

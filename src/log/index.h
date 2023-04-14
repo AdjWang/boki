@@ -47,6 +47,21 @@ struct IndexQueryResult {
     bool index_only;
 };
 
+class DebugQueryResultVec final : public absl::InlinedVector<IndexQueryResult, 4> {
+public:
+    void push_back(const IndexQueryResult& v) {
+        // DEBUG
+        DCHECK(v.original_query.origin_node_id != 28524) << utils::DumpStackTrace();
+        static_cast<void>(emplace_back(v));
+    }
+
+    void push_back(IndexQueryResult&& v) {
+        // DEBUG
+        DCHECK(v.original_query.origin_node_id != 28524) << utils::DumpStackTrace();
+        static_cast<void>(emplace_back(std::move(v)));
+    }
+};
+
 class Index final : public LogSpaceBase {
 public:
     static constexpr absl::Duration kBlockingQueryTimeout = absl::Seconds(1);
@@ -58,7 +73,9 @@ public:
 
     void MakeQuery(const IndexQuery& query);
 
-    using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
+    // DEBUG
+    // using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
+    using QueryResultVec = DebugQueryResultVec;
     void PollQueryResults(QueryResultVec* results);
 
 private:

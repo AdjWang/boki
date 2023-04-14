@@ -35,6 +35,7 @@ func DeserializeFutureMeta(data []byte) (FutureMeta, error) {
 
 // Implement types.Future
 type futureImpl[T uint64 | *CondLogEntry] struct {
+	metaStateMu sync.RWMutex
 	FutureMeta
 	// result union
 	result T
@@ -47,6 +48,7 @@ type futureImpl[T uint64 | *CondLogEntry] struct {
 func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, error)) Future[T] {
 	var emptyRes T
 	future := &futureImpl[T]{
+		metaStateMu: sync.RWMutex{},
 		FutureMeta: FutureMeta{
 			LocalId: localId,
 			State:   FutureTaskState_PENDING,
@@ -59,11 +61,15 @@ func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, erro
 	go func(fu *futureImpl[T]) {
 		res, err := resolve()
 		if err == nil {
+			fu.metaStateMu.Lock()
 			fu.State = FutureTaskState_RESOLVED
+			fu.metaStateMu.Unlock()
 			fu.result = res
 			fu.err = nil
 		} else {
+			fu.metaStateMu.Lock()
 			fu.State = FutureTaskState_REJECTED
+			fu.metaStateMu.Unlock()
 			fu.err = err
 		}
 		fu.wg.Done()
@@ -101,6 +107,8 @@ func (f *futureImpl[T]) Await(timeout time.Duration) error {
 }
 
 func (f *futureImpl[T]) GetMeta() FutureMeta {
+	f.metaStateMu.RLock()
+	defer f.metaStateMu.RUnlock()
 	return FutureMeta{
 		LocalId: f.LocalId,
 		State:   f.State,
@@ -191,6 +199,10 @@ func (fc *asyncLogContextImpl) Serialize() ([]byte, error) {
 		panic(fmt.Sprintf("empty asyncLogCtxData: %v", asyncLogCtxData))
 	}
 	return asyncLogCtxData, nil
+}
+
+func (fc *asyncLogContextImpl) Truncate() {
+	fc.asyncLogOps = make([]FutureMeta, 0, 100)
 }
 
 func DeserializeAsyncLogContext(env Environment, data []byte) (AsyncLogContext, error) {

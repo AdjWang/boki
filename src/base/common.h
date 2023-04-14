@@ -103,6 +103,8 @@ __BEGIN_THIRD_PARTY_HEADERS
 #include <absl/synchronization/notification.h>
 #include <absl/functional/bind_front.h>
 #include <absl/algorithm/container.h>
+#include <absl/debugging/stacktrace.h>
+#include <absl/debugging/symbolize.h>
 
 __END_THIRD_PARTY_HEADERS
 

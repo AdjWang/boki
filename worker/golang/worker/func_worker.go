@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,47 @@ import (
 	types "cs.utexas.edu/zjia/faas/types"
 )
 
+// region debug pipe
+type dbgPipe struct {
+	fp *os.File
+}
+
+func newDebugPipe(fp *os.File) *dbgPipe {
+	return &dbgPipe{
+		fp: fp,
+	}
+}
+
+func (p *dbgPipe) Write(b []byte) (n int, err error) {
+	dbgPrintMessage(b)
+	return p.fp.Write(b)
+}
+
+func dbgPrintMessage(rawMsg []byte) {
+	funcCall := protocol.GetFuncCallFromMessage(rawMsg)
+	if funcCall.FullCallId() == 0 {
+		buf := make([]byte, 10000)
+		n := runtime.Stack(buf, false)
+		dbgPrintFuncCall(rawMsg)
+		log.Printf("[DEBUG] Stack trace : %s ", string(buf[:n]))
+	}
+}
+
+func dbgPrintFuncCall(rawMsg []byte) {
+	funcCall := protocol.GetFuncCallFromMessage(rawMsg)
+	log.Printf("[DEBUG] funcCall: %+v", funcCall)
+}
+
+func hexBytes2String(data []byte) string {
+	output := "["
+	for i := range data {
+		output += fmt.Sprintf("%02X ", data[i])
+	}
+	return strings.TrimSpace(output) + "]"
+}
+
+// region end
+
 const PIPE_BUF = 4096
 
 type FuncWorker struct {
@@ -33,8 +75,10 @@ type FuncWorker struct {
 	engineConn           net.Conn
 	newFuncCallChan      chan []byte
 	inputPipe            *os.File
-	outputPipe           *os.File                 // protected by mux
-	outgoingFuncCalls    map[uint64](chan []byte) // protected by mux
+	// outputPipe           *os.File                 // protected by mux
+	// DEBUG
+	outputPipe        *dbgPipe                 // protected by mux
+	outgoingFuncCalls map[uint64](chan []byte) // protected by mux
 	// an async request returns twice, first to asyncOutgoing, second to outgoing
 	asyncOutgoingLogOps map[uint64](chan []byte) // protected by mux
 	outgoingLogOps      map[uint64](chan []byte) // protected by mux
@@ -204,7 +248,8 @@ func (w *FuncWorker) doHandshake() error {
 	if err != nil {
 		return err
 	}
-	w.outputPipe = op
+	// DEBUG
+	w.outputPipe = newDebugPipe(op)
 
 	return nil
 }
@@ -447,7 +492,7 @@ func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte,
 
 		header := int32(binary.LittleEndian.Uint32(headerBuf))
 		if header < 0 {
-			return nil, fmt.Errorf("FuncCall failed")
+			return nil, fmt.Errorf("FuncCall failed due to invalid header: %v", headerBuf)
 		}
 
 		outputSize := int(header)
@@ -479,7 +524,8 @@ func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte,
 			return nil, nil
 		}
 		if protocol.IsFuncCallFailedMessage(message) {
-			return nil, fmt.Errorf("FuncCall failed")
+			dbgPrintFuncCall(message)
+			return nil, fmt.Errorf("FuncCall failed due to failed message: %v", hexBytes2String(message))
 		}
 		payloadSize := protocol.GetPayloadSizeFromMessage(message)
 		if payloadSize < 0 {

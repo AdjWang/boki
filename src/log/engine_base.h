@@ -130,6 +130,7 @@ private:
     absl::Mutex fn_ctx_mu_;
     absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>
         fn_call_ctx_ ABSL_GUARDED_BY(fn_ctx_mu_);
+    std::string DebugListExistingFnCall(const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>& fn_call_ctx);
 
     std::optional<LRUCache> log_cache_;
 
