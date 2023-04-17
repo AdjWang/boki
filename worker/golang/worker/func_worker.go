@@ -91,8 +91,6 @@ type FuncWorker struct {
 	nextUidLowHalf      uint32
 	sharedLogReadCount  int32
 	mux                 sync.Mutex
-
-	asyncLogCtx types.AsyncLogContext
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -117,26 +115,8 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		currentCall:          0,
 		uidHighHalf:          uidHighHalf,
 		nextUidLowHalf:       0,
-
-		asyncLogCtx: nil,
 	}
-	w.asyncLogCtx = types.NewAsyncLogContext(w)
 	return w, nil
-}
-
-// TODO: better place
-func (w *FuncWorker) AsyncLogCtx() types.AsyncLogContext {
-	return w.asyncLogCtx
-}
-
-func (w *FuncWorker) NewAsyncLogCtx(data []byte) error {
-	newCtx, err := types.DeserializeAsyncLogContext(w, data)
-	if err != nil {
-		return err
-	} else {
-		w.asyncLogCtx = newCtx
-		return nil
-	}
 }
 
 func (w *FuncWorker) Run() {
@@ -855,7 +835,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byt
 		return &types.CondLogEntry{
 			LogEntry:     *logEntry,
 			Deps:         cond.Deps,
-			Cond:         cond.Ops,
+			Cond:         cond.CondMetas,
 			TagBuildMeta: cond.TagBuildMeta,
 		}, nil
 	} else if result == protocol.SharedLogResultType_EMPTY {

@@ -13,7 +13,7 @@ func check(err error) {
 // used by CondAppend in user code
 type CondHandle interface {
 	AddDep(futureMeta FutureMeta)
-	AddResolver(resolver uint8)
+	AddCond(resolver uint8)
 }
 
 // used inside CondAppend to wrap to original data
@@ -24,14 +24,14 @@ type CondDataWrapper interface {
 
 type condImpl struct {
 	Deps         []FutureMeta
-	Ops          []Op
+	CondMetas    []CondMeta
 	TagBuildMeta []TagMeta
 }
 
 func NewCond() (CondHandle, CondDataWrapper) {
 	cond := &condImpl{
-		Deps: make([]FutureMeta, 0, 10),
-		Ops:  make([]Op, 0, 10),
+		Deps:      make([]FutureMeta, 0, 10),
+		CondMetas: make([]CondMeta, 0, 10),
 	}
 	return cond, cond
 }
@@ -39,7 +39,7 @@ func NewCond() (CondHandle, CondDataWrapper) {
 func (c *condImpl) WrapData(tagBuildMeta []TagMeta, originalData []byte) []byte {
 	newDataStruct := DataWrapper{
 		Deps:         c.Deps,
-		Cond:         c.Ops,
+		Conds:        c.CondMetas,
 		TagBuildMeta: tagBuildMeta,
 		Data:         originalData,
 	}
@@ -56,7 +56,7 @@ func UnwrapData(rawData []byte) (*condImpl, []byte, error) {
 	} else {
 		return &condImpl{
 				Deps:         wrapperData.Deps,
-				Ops:          wrapperData.Cond,
+				CondMetas:    wrapperData.Conds,
 				TagBuildMeta: wrapperData.TagBuildMeta,
 			},
 			wrapperData.Data,
@@ -65,25 +65,24 @@ func UnwrapData(rawData []byte) (*condImpl, []byte, error) {
 }
 
 func (c *condImpl) AddDep(futureMeta FutureMeta) {
-	c.Deps = append(c.Deps, futureMeta)
+	if futureMeta != InvalidFutureMeta {
+		c.Deps = append(c.Deps, futureMeta)
+	}
 }
 
-func (c *condImpl) AddResolver(resolver uint8) {
-	c.Ops = append(c.Ops,
-		Op{
-			Resolver: resolver,
-		})
+func (c *condImpl) AddCond(resolver uint8) {
+	c.CondMetas = append(c.CondMetas, CondMeta{Resolver: resolver})
 }
 
-type Op struct {
+type CondMeta struct {
 	Resolver uint8 `json:"resolver"`
 }
 
-func (op *Op) Serialize() ([]byte, error) {
-	return json.Marshal(op)
-}
-func DeserializeOp(data []byte) (*Op, error) {
-	var op Op
-	err := json.Unmarshal(data, &op)
-	return &op, err
-}
+// func (condMeta *CondMeta) Serialize() ([]byte, error) {
+// 	return json.Marshal(condMeta)
+// }
+// func DeserializeCondMeta(data []byte) (*CondMeta, error) {
+// 	var condMeta CondMeta
+// 	err := json.Unmarshal(data, &condMeta)
+// 	return &condMeta, err
+// }

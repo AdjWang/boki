@@ -11,28 +11,38 @@ type LogEntry struct {
 	Data    []byte
 	AuxData []byte
 }
+
+// Cond: User defined conditions to check if a log is taged as APPLIED or DISCARDED.
+// A log is always passed to the Fsm.Apply(log) -> bool first, in which the
+// cond is delegated to check by the user code.
+// Note that the condition is totally coupling to bussiness logic, there's no
+// gaurantee that a log not being applied if cond is not satisfied, it all
+// depends on the user.
+// Fsm.Apply(log) returns the decision from the user, then the lib sets the
+// log's aux data as the condition result, then it can be propagated later.
+//
+// Deps: User defined dependencies to check if a log is able to apply.
+//  1. If no dependency, mark the log based on the condition.
+//  2. If no condition, Fsm.Apply(log) should return true, then the log is
+//     marked as APPLIED.
+//
+// Dependencies status:
+//   - PENDING: Resolve dependencies recursively.
+//   - APPLIED: Only if all dependencies are APPLIED can the current log be applied,
+//     or to say, being passed to the Fsm.Apply(log)
+//   - DISCARDED: Directly mark the current log as DISCARDED too, without passing
+//     to Fsm.Apply(log)
 type CondLogEntry struct {
 	LogEntry
 	Deps         []FutureMeta
-	Cond         []Op
+	Cond         []CondMeta
 	TagBuildMeta []TagMeta
 }
 
 type Future[T uint64 | *CondLogEntry] interface {
 	GetMeta() FutureMeta
-	GetLocalId() uint64 // TODO: merge with GetMeta()
 	GetResult() (T, error)
 	Await(timeout time.Duration) error
-}
-
-type AsyncLogContext interface {
-	Chain(future FutureMeta) AsyncLogContext
-	Sync(timeout time.Duration) error
-	Serialize() ([]byte, error)
-	Truncate()
-
-	// DEBUG
-	String() string
 }
 
 type TagMeta struct {
@@ -41,7 +51,7 @@ type TagMeta struct {
 }
 type DataWrapper struct {
 	Deps         []FutureMeta `json:"deps"`
-	Cond         []Op         `json:"cond"`
+	Conds        []CondMeta   `json:"cond"`
 	TagBuildMeta []TagMeta    `json:"tagBuildMeta"`
 	Data         []byte       `json:"data"`
 }
@@ -75,9 +85,6 @@ type Environment interface {
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, futureMeta FutureMeta) (*CondLogEntry, error)
 	AsyncSharedLogReadIndex(ctx context.Context, futureMeta FutureMeta) (Future[uint64], error)
-	// async log context
-	AsyncLogCtx() AsyncLogContext
-	NewAsyncLogCtx(data []byte) error
 }
 
 type FuncHandler interface {

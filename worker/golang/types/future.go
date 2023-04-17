@@ -3,7 +3,7 @@ package types
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -15,6 +15,8 @@ const (
 	FutureTaskState_RESOLVED uint8 = 1
 	FutureTaskState_REJECTED uint8 = 2
 )
+
+var InvalidFutureMeta = FutureMeta{LocalId: math.MaxUint64, State: math.MaxUint8}
 
 // Serializable
 type FutureMeta struct {
@@ -31,6 +33,10 @@ func DeserializeFutureMeta(data []byte) (FutureMeta, error) {
 	var fm FutureMeta
 	err := json.Unmarshal(data, &fm)
 	return fm, errors.Wrapf(err, "invalid data: %v", data)
+}
+
+func (fm FutureMeta) IsValid() bool {
+	return fm != InvalidFutureMeta
 }
 
 // Implement types.Future
@@ -77,10 +83,6 @@ func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, erro
 	return future
 }
 
-func (f *futureImpl[T]) GetLocalId() uint64 {
-	return f.LocalId
-}
-
 func (f *futureImpl[T]) GetResult() (T, error) {
 	f.wg.Wait()
 	return f.result, f.err
@@ -113,111 +115,4 @@ func (f *futureImpl[T]) GetMeta() FutureMeta {
 		LocalId: f.LocalId,
 		State:   f.State,
 	}
-}
-
-type asyncLogContextImpl struct {
-	env         Environment // delegation
-	mu          sync.Mutex
-	asyncLogOps []FutureMeta
-}
-
-func DebugNewAsyncLogContext() AsyncLogContext {
-	return &asyncLogContextImpl{
-		env:         nil,
-		mu:          sync.Mutex{},
-		asyncLogOps: make([]FutureMeta, 0, 20),
-	}
-}
-func NewAsyncLogContext(env Environment) AsyncLogContext {
-	return &asyncLogContextImpl{
-		env:         env,
-		asyncLogOps: make([]FutureMeta, 0, 20),
-	}
-}
-
-func (fc *asyncLogContextImpl) Chain(future FutureMeta) AsyncLogContext {
-	fc.mu.Lock()
-	fc.asyncLogOps = append(fc.asyncLogOps, future)
-	fc.mu.Unlock()
-	return fc
-}
-
-func (fc *asyncLogContextImpl) Sync(timeout time.Duration) error {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	wg := sync.WaitGroup{}
-	errCh := make(chan error)
-	for _, futureMeta := range fc.asyncLogOps {
-		wg.Add(1)
-		go func(futureMeta FutureMeta) {
-			if future, err := fc.env.AsyncSharedLogReadIndex(ctx, futureMeta); err != nil {
-				errCh <- err
-			} else if err := future.Await(timeout); err != nil {
-				errCh <- err
-			} else {
-				// log.Printf("wait future=%+v done", future)
-				// seqNum, err := future.GetResult()
-				// log.Printf("wait futureMeta.LocalId=0x%016X state=%v seqNum=0x%016X err=%v",
-				// 	futureMeta.LocalId, futureMeta.State, seqNum, err)
-			}
-			wg.Done()
-		}(futureMeta)
-	}
-	waitCh := make(chan struct{})
-	go func() {
-		wg.Wait()
-		waitCh <- struct{}{}
-	}()
-
-	select {
-	case <-ctx.Done():
-		// log.Println("wait future all done timeout")
-		return ctx.Err()
-	case err := <-errCh:
-		// log.Println("wait future all done with error:", err)
-		return err
-	case <-waitCh:
-		// log.Println("wait future all done without error")
-		return nil
-	}
-}
-
-func (fc *asyncLogContextImpl) Serialize() ([]byte, error) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	asyncLogCtxData, err := json.Marshal(fc.asyncLogOps)
-	if err != nil {
-		return nil, err
-	}
-	// DEBUG
-	if len(asyncLogCtxData) == 0 {
-		panic(fmt.Sprintf("empty asyncLogCtxData: %v", asyncLogCtxData))
-	}
-	return asyncLogCtxData, nil
-}
-
-func (fc *asyncLogContextImpl) Truncate() {
-	fc.asyncLogOps = make([]FutureMeta, 0, 100)
-}
-
-func DeserializeAsyncLogContext(env Environment, data []byte) (AsyncLogContext, error) {
-	var asyncLogOps []FutureMeta
-	err := json.Unmarshal(data, &asyncLogOps)
-	if err != nil {
-		return nil, errors.Wrapf(err, "unresolvable data: %v", data)
-	}
-	return &asyncLogContextImpl{
-		env:         env,
-		asyncLogOps: asyncLogOps,
-	}, nil
-}
-
-// DEBUG
-func (fc *asyncLogContextImpl) String() string {
-	return fmt.Sprintf("ops=%+v", fc.asyncLogOps)
 }

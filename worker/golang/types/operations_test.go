@@ -1,32 +1,36 @@
 package types
 
 import (
-	"fmt"
+	"reflect"
 	"testing"
 )
 
-func TestOpPropagate(t *testing.T) {
+func TestCondPropagate(t *testing.T) {
 	var rawData []byte
+	future := NewFuture(1 /*localid*/, func() (uint64, error) {
+		return 2 /*seqnum*/, nil
+	})
 	{
 		client := condImpl{}
-		future := NewFuture(1 /*localid*/, func() (uint64, error) {
-			return 2 /*seqnum*/, nil
-		})
-		client.Read(future.GetMeta())
-		data, err := client.Ops[0].Serialize()
-		if err != nil {
-			t.Fatalf("serialize op error: %v", err)
-		}
-		rawData = data
+		client.AddDep(future.GetMeta())
+		client.AddCond(1)
+		rawData = client.WrapData([]TagMeta{}, []byte{})
 	}
 	// dummy propagate...
 	// restore
 	{
-		op, err := DeserializeOp(rawData)
+		client, restData, err := UnwrapData(rawData)
 		if err != nil {
 			t.Fatalf("deserialize op error: %v", err)
 		}
-		res := CheckOp(*op)
-		fmt.Printf("check op: %v\n", res)
+		if !reflect.DeepEqual(restData, []byte{}) {
+			t.Fatalf("expected empty data, got %v", restData)
+		}
+		if !reflect.DeepEqual(client.Deps, []FutureMeta{future.GetMeta()}) {
+			t.Fatalf("unexpected deps: %+v, expected %+v", client.Deps, []FutureMeta{future.GetMeta()})
+		}
+		if !reflect.DeepEqual(client.CondMetas, []CondMeta{{1}}) {
+			t.Fatalf("unexpected deps: %+v, expected %+v", client.CondMetas, []CondMeta{{1}})
+		}
 	}
 }
