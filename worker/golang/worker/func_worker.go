@@ -845,33 +845,30 @@ func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byt
 	}
 }
 
-func (w *FuncWorker) asyncSharedLogReadIndex(ctx context.Context, message []byte, opId uint64) (types.Future[uint64], error) {
+func (w *FuncWorker) asyncSharedLogReadIndex(ctx context.Context, message []byte, opId uint64) (uint64, error) {
 	w.mux.Lock()
 	outputChan := make(chan []byte, 1)
 	w.outgoingLogOps[opId] = outputChan
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	resolve := func() (uint64, error) {
-		var response []byte
-		select {
-		case <-ctx.Done():
-			return 0, nil
-		case response = <-outputChan:
-		}
-		result := protocol.GetSharedLogResultTypeFromMessage(response)
-		if result == protocol.SharedLogResultType_READ_OK {
-			seqnum := protocol.GetLogSeqNumFromMessage(response)
-			return seqnum, nil
-		} else if result == protocol.SharedLogResultType_EMPTY {
-			return 0, nil
-		} else {
-			return 0, fmt.Errorf("failed to read log index")
-		}
+	var response []byte
+	select {
+	case <-ctx.Done():
+		return 0, nil
+	case response = <-outputChan:
 	}
-	return types.NewFuture(opId, resolve), nil
+	result := protocol.GetSharedLogResultTypeFromMessage(response)
+	if result == protocol.SharedLogResultType_READ_OK {
+		seqnum := protocol.GetLogSeqNumFromMessage(response)
+		return seqnum, nil
+	} else if result == protocol.SharedLogResultType_EMPTY {
+		return 0, nil
+	} else {
+		return 0, fmt.Errorf("failed to read log index")
+	}
 }
 
 // Implement types.Environment
@@ -921,7 +918,7 @@ func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, futureMeta types.Fu
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, futureMeta types.FutureMeta) (types.Future[uint64], error) {
+func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, futureMeta types.FutureMeta) (uint64, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, futureMeta, id)
