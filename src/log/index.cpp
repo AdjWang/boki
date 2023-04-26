@@ -330,14 +330,8 @@ void Index::AdvanceIndexProgress() {
         std::vector<std::pair<int64_t, IndexQuery>> unfinished;
         for (const auto& [start_timestamp, query] : blocking_reads_) {
             bool query_result;
-            // DEBUG
-            DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
             if (query.type == IndexQuery::kAsync) {
-                // DEBUG
-                DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
                 query_result = ProcessAsyncQuery(query);
-                // DEBUG
-                DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
             } else {
                 query_result = ProcessBlockingQuery(query);
             }
@@ -376,45 +370,16 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
     return index;
 }
 
-// static std::string debugPrintArray(const uint8_t* array, size_t len) {
-//     std::stringstream ss;
-//     ss << "array: [";
-//     for (size_t i = 0; i < len; i++) {
-//         ss << fmt::format("{:02X} ", array[i]);
-//     }
-//     ss << "\b]\n";
-//     return ss.str();
-// }
-// static void debugTest(const IndexQuery& query) {
-//     uint64_t local_id = query.query_seqnum;
-//     uint64_t seqnum = 0;
-//     const uint8_t *query_data = reinterpret_cast<const uint8_t*>(&query);
-//     std::cerr << debugPrintArray(query_data, sizeof(query));
-//     #define log_header_ "debug test: "
-//     HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
-//             local_id, seqnum);
-//     #undef log_header_
-//     for (size_t i = 0; i < sizeof(query); i++) {
-//         DCHECK(query_data[i] == 0) << debugPrintArray(query_data, sizeof(query));
-//     }
-// }
-
 // Handle async queries here without querying per-logspace index
 bool Index::ProcessAsyncQuery(const IndexQuery& query) {
-    // IndexQuery test;
-    // memset(&test, 0, sizeof(test));
-    // debugTest(test);
     // To gaurantee read-your-write, async query is promised to be found, even
     // metalog_position_ is old.
     // replace seqnum if querying by localid
     uint64_t local_id = query.query_seqnum;
     if (log_index_map_.find(local_id) == log_index_map_.end()) {
         // not found
-        // pending_query_results_.push_back(BuildNotFoundResult(query));
-        // HVLOG_F(1, "ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
+        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
         //         local_id);
-        HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
-                local_id);
         blocking_reads_.push_back(std::make_pair(GetMonotonicMicroTimestamp(), query));
         return false;
     } else {
@@ -423,7 +388,7 @@ bool Index::ProcessAsyncQuery(const IndexQuery& query) {
         uint64_t seqnum = index_data.seqnum;
         // HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
         //         local_id, seqnum);
-        // DEBUG
+        // BUG
         // WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
         // causing functions failed to send back the query result to the target engine node.
         DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
@@ -432,7 +397,6 @@ bool Index::ProcessAsyncQuery(const IndexQuery& query) {
         auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id);
         result.index_only = (query.direction == IndexQuery::kReadIndex);
         pending_query_results_.push_back(result);
-        HVLOG_F(1, "ProcessReadIndex: FoundResult: seqnum={}, engine_id={}", seqnum, result.found_result.engine_id);
         return true;
     }
 }
