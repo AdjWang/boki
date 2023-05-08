@@ -28,7 +28,7 @@ void Subprocess::SetStandardFile(StandardPipe pipe, std::string_view file_path) 
         fd = open(std::string(file_path).c_str(), O_RDONLY);
         PCHECK(fd != -1);
     } else {
-        fd = creat(std::string(file_path).c_str(), __FAAS_FILE_CREAT_MODE);
+        fd = open(std::string(file_path).c_str(), O_CREAT|O_WRONLY|O_APPEND, __FAAS_FILE_CREAT_MODE);
         PCHECK(fd != -1);
     }
     std_fds_[pipe] = fd;
