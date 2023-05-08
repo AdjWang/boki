@@ -77,12 +77,3 @@ func (c *condImpl) AddCond(resolver uint8) {
 type CondMeta struct {
 	Resolver uint8 `json:"resolver"`
 }
-
-// func (condMeta *CondMeta) Serialize() ([]byte, error) {
-// 	return json.Marshal(condMeta)
-// }
-// func DeserializeCondMeta(data []byte) (*CondMeta, error) {
-// 	var condMeta CondMeta
-// 	err := json.Unmarshal(data, &condMeta)
-// 	return &condMeta, err
-// }

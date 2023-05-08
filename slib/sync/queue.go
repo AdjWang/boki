@@ -3,15 +3,21 @@ package sync
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
 
 	"cs.utexas.edu/zjia/faas/protocol"
 	"cs.utexas.edu/zjia/faas/types"
+	"github.com/pkg/errors"
+)
+
+const (
+	FsmType_QueueLog     uint8 = 0
+	FsmType_QueuePushLog uint8 = 1
 )
 
 type Queue struct {
@@ -48,21 +54,21 @@ func queuePushLogTag(nameHash uint64) uint64 {
 	return (nameHash << common.LogTagReserveBits) + common.QueuePushLogTagLowBits
 }
 
-func decodeQueueLogEntry(logEntry *types.LogEntry) *QueueLogEntry {
+func decodeQueueLogEntry(condLogEntry *types.CondLogEntry) *QueueLogEntry {
 	queueLog := &QueueLogEntry{}
-	err := json.Unmarshal(logEntry.Data, queueLog)
+	err := json.Unmarshal(condLogEntry.Data, queueLog)
 	if err != nil {
-		panic(err)
+		panic(errors.Wrapf(err, "decodeQueueLogEntry json unmarshal error: %+v", condLogEntry))
 	}
-	if len(logEntry.AuxData) > 0 {
+	if len(condLogEntry.AuxData) > 0 {
 		auxData := &QueueAuxData{}
-		err := json.Unmarshal(logEntry.AuxData, auxData)
+		err := json.Unmarshal(condLogEntry.AuxData, auxData)
 		if err != nil {
 			panic(err)
 		}
 		queueLog.auxData = auxData
 	}
-	queueLog.seqNum = logEntry.SeqNum
+	queueLog.seqNum = condLogEntry.SeqNum
 	return queueLog
 }
 
@@ -82,9 +88,34 @@ func NewQueue(ctx context.Context, env types.Environment, name string) (*Queue, 
 	return q, nil
 }
 
+func (q *Queue) BatchPush(payloads []string) error {
+	futures := make([]types.Future[uint64], 0, len(payloads))
+	for _, payload := range payloads {
+		future, err := q.doPush(payload)
+		if err != nil {
+			return err
+		}
+		futures = append(futures, future)
+	}
+	for _, future := range futures {
+		if err := future.Await(60 * time.Second); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (q *Queue) Push(payload string) error {
+	future, err := q.doPush(payload)
+	if err != nil {
+		return err
+	}
+	return future.Await(60 * time.Second)
+}
+
+func (q *Queue) doPush(payload string) (types.Future[uint64], error) {
 	if len(payload) == 0 {
-		return fmt.Errorf("Payload cannot be empty")
+		return nil, fmt.Errorf("Payload cannot be empty")
 	}
 	logEntry := &QueueLogEntry{
 		QueueName: q.name,
@@ -96,8 +127,11 @@ func (q *Queue) Push(payload string) error {
 		panic(err)
 	}
 	tags := []uint64{queueLogTag(q.nameHash), queuePushLogTag(q.nameHash)}
-	_, err = q.env.SharedLogAppend(q.ctx, tags, encoded)
-	return err
+	tagMetas := []types.TagMeta{
+		{FsmType: FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, 10)}},
+		{FsmType: FsmType_QueuePushLog, TagKeys: []string{strconv.FormatUint(q.nameHash, 10)}},
+	}
+	return q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded)
 }
 
 func (q *Queue) isEmpty() bool {
@@ -108,18 +142,18 @@ func (q *Queue) findNext(minSeqNum, maxSeqNum uint64) (*QueueLogEntry, error) {
 	tag := queuePushLogTag(q.nameHash)
 	seqNum := minSeqNum
 	for seqNum < maxSeqNum {
-		logEntry, err := q.env.SharedLogReadNext(q.ctx, tag, seqNum)
+		condLogEntry, err := q.env.AsyncSharedLogReadNext(q.ctx, tag, seqNum)
 		if err != nil {
 			return nil, err
 		}
-		if logEntry == nil || logEntry.SeqNum >= maxSeqNum {
+		if condLogEntry == nil || condLogEntry.SeqNum >= maxSeqNum {
 			return nil, nil
 		}
-		queueLog := decodeQueueLogEntry(logEntry)
+		queueLog := decodeQueueLogEntry(condLogEntry)
 		if queueLog.IsPush && queueLog.QueueName == q.name {
 			return queueLog, nil
 		}
-		seqNum = logEntry.SeqNum + 1
+		seqNum = condLogEntry.SeqNum + 1
 	}
 	return nil, nil
 }
@@ -169,7 +203,7 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 		if seqNum != protocol.MaxLogSeqnum {
 			seqNum -= 1
 		}
-		logEntry, err := q.env.SharedLogReadPrev(q.ctx, tag, seqNum)
+		logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
 		if err != nil {
 			return err
 		}
@@ -212,15 +246,15 @@ func (q *Queue) syncToForward(tailSeqNum uint64) error {
 	tag := queueLogTag(q.nameHash)
 	seqNum := q.nextSeqNum
 	for seqNum < tailSeqNum {
-		logEntry, err := q.env.SharedLogReadNext(q.ctx, tag, seqNum)
+		condLogEntry, err := q.env.AsyncSharedLogReadNext(q.ctx, tag, seqNum)
 		if err != nil {
 			return err
 		}
-		if logEntry == nil || logEntry.SeqNum >= tailSeqNum {
+		if condLogEntry == nil || condLogEntry.SeqNum >= tailSeqNum {
 			break
 		}
-		seqNum = logEntry.SeqNum + 1
-		queueLog := decodeQueueLogEntry(logEntry)
+		seqNum = condLogEntry.SeqNum + 1
+		queueLog := decodeQueueLogEntry(condLogEntry)
 		if queueLog.QueueName == q.name {
 			q.applyLog(queueLog)
 			if queueLog.auxData == nil {
@@ -251,10 +285,17 @@ func (q *Queue) appendPopLogAndSync() error {
 		panic(err)
 	}
 	tags := []uint64{queueLogTag(q.nameHash)}
-	if seqNum, err := q.env.SharedLogAppend(q.ctx, tags, encoded); err != nil {
+	tagMetas := []types.TagMeta{
+		{FsmType: FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, 10)}},
+	}
+	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded); err != nil {
 		return err
 	} else {
-		return q.syncTo(seqNum)
+		if seqNum, err := future.GetResult(); err != nil {
+			return err
+		} else {
+			return q.syncTo(seqNum)
+		}
 	}
 }
 
@@ -306,16 +347,16 @@ func (q *Queue) PopBlocking() (string /* payload */, error) {
 			for {
 				// log.Printf("[DEBUG] BlockingRead: NextSeqNum=%#016x", seqNum)
 				newCtx, _ := context.WithTimeout(q.ctx, kBlockingPopTimeout)
-				logEntry, err := q.env.SharedLogReadNextBlock(newCtx, tag, seqNum)
+				condLogEntry, err := q.env.AsyncSharedLogReadNextBlock(newCtx, tag, seqNum)
 				if err != nil {
 					return "", err
 				}
-				if logEntry != nil {
-					queueLog := decodeQueueLogEntry(logEntry)
+				if condLogEntry != nil {
+					queueLog := decodeQueueLogEntry(condLogEntry)
 					if queueLog.IsPush && queueLog.QueueName == q.name {
 						break
 					}
-					seqNum = logEntry.SeqNum + 1
+					seqNum = condLogEntry.SeqNum + 1
 				} else if time.Since(startTime) >= kBlockingPopTimeout {
 					return "", kQueueTimeoutError
 				}

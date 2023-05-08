@@ -81,6 +81,8 @@ type Environment interface {
 	AsyncSharedLogAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte) (Future[uint64], error)
 	AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte, cond func(CondHandle)) (Future[uint64], error)
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
+	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
+	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, futureMeta FutureMeta) (*CondLogEntry, error)
 	AsyncSharedLogReadIndex(ctx context.Context, futureMeta FutureMeta) (uint64, error)
