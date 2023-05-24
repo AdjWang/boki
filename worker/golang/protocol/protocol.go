@@ -2,8 +2,6 @@ package protocol
 
 import (
 	"encoding/binary"
-
-	"cs.utexas.edu/zjia/faas/types"
 )
 
 type FuncCall struct {
@@ -257,25 +255,25 @@ func NewSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag uint64
 
 // Async read only read a log appended whose context is propagated by localid, so it doesn't need to be block to ensure consistency.
 // The context propagation had ensured read-your-write consistency.
-func NewAsyncSharedLogReadMessage(currentCallId uint64, myClientId uint16, futureMeta types.FutureMeta, clientData uint64) []byte {
+func NewAsyncSharedLogReadMessage(currentCallId uint64, myClientId uint16, localId uint64, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
 	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_ASYNC_READ)
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
-	binary.LittleEndian.PutUint64(buffer[8:16], futureMeta.LocalId)
+	binary.LittleEndian.PutUint64(buffer[8:16], localId)
 	return buffer
 }
 
-func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, futureMeta types.FutureMeta, clientData uint64) []byte {
+func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, localId uint64, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
 	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_READ_INDEX)
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
-	binary.LittleEndian.PutUint64(buffer[8:16], futureMeta.LocalId)
+	binary.LittleEndian.PutUint64(buffer[8:16], localId)
 	return buffer
 }
 

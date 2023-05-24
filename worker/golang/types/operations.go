@@ -12,7 +12,7 @@ func check(err error) {
 
 // used by CondAppend in user code
 type CondHandle interface {
-	AddDep(futureMeta FutureMeta)
+	AddDep(localId uint64)
 	AddCond(resolver uint8)
 }
 
@@ -23,14 +23,14 @@ type CondDataWrapper interface {
 }
 
 type condImpl struct {
-	Deps         []FutureMeta
+	Deps         []uint64
 	CondMetas    []CondMeta
 	TagBuildMeta []TagMeta
 }
 
 func NewCond() (CondHandle, CondDataWrapper) {
 	cond := &condImpl{
-		Deps:      make([]FutureMeta, 0, 10),
+		Deps:      make([]uint64, 0, 10),
 		CondMetas: make([]CondMeta, 0, 10),
 	}
 	return cond, cond
@@ -64,9 +64,9 @@ func UnwrapData(rawData []byte) (*condImpl, []byte, error) {
 	}
 }
 
-func (c *condImpl) AddDep(futureMeta FutureMeta) {
-	if futureMeta != InvalidFutureMeta {
-		c.Deps = append(c.Deps, futureMeta)
+func (c *condImpl) AddDep(localId uint64) {
+	if localId != InvalidLocalId {
+		c.Deps = append(c.Deps, localId)
 	}
 }
 

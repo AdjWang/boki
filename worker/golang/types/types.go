@@ -34,13 +34,13 @@ type LogEntry struct {
 //     to Fsm.Apply(log)
 type CondLogEntry struct {
 	LogEntry
-	Deps         []FutureMeta
+	Deps         []uint64
 	Cond         []CondMeta
 	TagBuildMeta []TagMeta
 }
 
 type Future[T uint64 | *CondLogEntry] interface {
-	GetMeta() FutureMeta
+	GetLocalId() uint64
 	GetResult() (T, error)
 	Await(timeout time.Duration) error
 }
@@ -50,10 +50,10 @@ type TagMeta struct {
 	TagKeys []string `json:"tagKeys"`
 }
 type DataWrapper struct {
-	Deps         []FutureMeta `json:"deps"`
-	Conds        []CondMeta   `json:"cond"`
-	TagBuildMeta []TagMeta    `json:"tagBuildMeta"`
-	Data         []byte       `json:"data"`
+	Deps         []uint64   `json:"deps"`
+	Conds        []CondMeta `json:"cond"`
+	TagBuildMeta []TagMeta  `json:"tagBuildMeta"`
+	Data         []byte     `json:"data"`
 }
 
 type Environment interface {
@@ -84,8 +84,8 @@ type Environment interface {
 	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	// async read API
-	AsyncSharedLogRead(ctx context.Context, futureMeta FutureMeta) (*CondLogEntry, error)
-	AsyncSharedLogReadIndex(ctx context.Context, futureMeta FutureMeta) (uint64, error)
+	AsyncSharedLogRead(ctx context.Context, localId uint64) (*CondLogEntry, error)
+	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
 }
 
 type FuncHandler interface {
