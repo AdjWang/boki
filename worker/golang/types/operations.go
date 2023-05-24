@@ -10,38 +10,41 @@ func check(err error) {
 	}
 }
 
-// used by CondAppend in user code
-type CondHandle interface {
-	AddDep(localId uint64)
-	AddCond(resolver uint8)
-}
-
 // used inside CondAppend to wrap to original data
-// TODO: restruct with builder pattern
 type CondDataWrapper interface {
-	WrapData(tagBuildMeta []TagMeta, originalData []byte) []byte
+	WithDeps(deps []uint64) CondDataWrapper
+	WithTagMetas(tagBuildMetas []TagMeta) CondDataWrapper
+	Build(data []byte) []byte
 }
 
 type condImpl struct {
-	Deps         []uint64
-	CondMetas    []CondMeta
-	TagBuildMeta []TagMeta
+	Deps          []uint64
+	TagBuildMetas []TagMeta
 }
 
-func NewCond() (CondHandle, CondDataWrapper) {
+func NewCond() CondDataWrapper {
 	cond := &condImpl{
-		Deps:      make([]uint64, 0, 10),
-		CondMetas: make([]CondMeta, 0, 10),
+		Deps:          make([]uint64, 0, 10),
+		TagBuildMetas: make([]TagMeta, 0, 10),
 	}
-	return cond, cond
+	return cond
 }
 
-func (c *condImpl) WrapData(tagBuildMeta []TagMeta, originalData []byte) []byte {
+func (c *condImpl) WithDeps(deps []uint64) CondDataWrapper {
+	c.Deps = append(c.Deps, deps...)
+	return c
+}
+
+func (c *condImpl) WithTagMetas(tagBuildMetas []TagMeta) CondDataWrapper {
+	c.TagBuildMetas = append(c.TagBuildMetas, tagBuildMetas...)
+	return c
+}
+
+func (c *condImpl) Build(data []byte) []byte {
 	newDataStruct := DataWrapper{
-		Deps:         c.Deps,
-		Conds:        c.CondMetas,
-		TagBuildMeta: tagBuildMeta,
-		Data:         originalData,
+		Deps:          c.Deps,
+		TagBuildMetas: c.TagBuildMetas,
+		Data:          data,
 	}
 	rawData, err := json.Marshal(newDataStruct)
 	check(err)
@@ -55,25 +58,10 @@ func UnwrapData(rawData []byte) (*condImpl, []byte, error) {
 		return nil, nil, err
 	} else {
 		return &condImpl{
-				Deps:         wrapperData.Deps,
-				CondMetas:    wrapperData.Conds,
-				TagBuildMeta: wrapperData.TagBuildMeta,
+				Deps:          wrapperData.Deps,
+				TagBuildMetas: wrapperData.TagBuildMetas,
 			},
 			wrapperData.Data,
 			nil
 	}
-}
-
-func (c *condImpl) AddDep(localId uint64) {
-	if localId != InvalidLocalId {
-		c.Deps = append(c.Deps, localId)
-	}
-}
-
-func (c *condImpl) AddCond(resolver uint8) {
-	c.CondMetas = append(c.CondMetas, CondMeta{Resolver: resolver})
-}
-
-type CondMeta struct {
-	Resolver uint8 `json:"resolver"`
 }

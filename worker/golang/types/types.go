@@ -34,9 +34,8 @@ type LogEntry struct {
 //     to Fsm.Apply(log)
 type CondLogEntry struct {
 	LogEntry
-	Deps         []uint64
-	Cond         []CondMeta
-	TagBuildMeta []TagMeta
+	Deps          []uint64
+	TagBuildMetas []TagMeta
 }
 
 type Future[T uint64 | *CondLogEntry] interface {
@@ -50,10 +49,9 @@ type TagMeta struct {
 	TagKeys []string `json:"tagKeys"`
 }
 type DataWrapper struct {
-	Deps         []uint64   `json:"deps"`
-	Conds        []CondMeta `json:"cond"`
-	TagBuildMeta []TagMeta  `json:"tagBuildMeta"`
-	Data         []byte     `json:"data"`
+	Deps          []uint64  `json:"deps"`
+	TagBuildMetas []TagMeta `json:"tagBuildMeta"`
+	Data          []byte    `json:"data"`
 }
 
 type Environment interface {
@@ -79,7 +77,7 @@ type Environment interface {
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
 
 	AsyncSharedLogAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte) (Future[uint64], error)
-	AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte, cond func(CondHandle)) (Future[uint64], error)
+	AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte, deps []uint64) (Future[uint64], error)
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)

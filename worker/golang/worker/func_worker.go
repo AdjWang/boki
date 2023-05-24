@@ -657,11 +657,11 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, tagBuildMeta []types.TagMeta, data []byte) (types.Future[uint64], error) {
-	return w.AsyncSharedLogCondAppend(ctx, tags, tagBuildMeta, data, func(condHandle types.CondHandle) {})
+	return w.AsyncSharedLogCondAppend(ctx, tags, tagBuildMeta, data, []uint64{} /*deps*/)
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []types.TagMeta, data []byte, cond func(types.CondHandle)) (types.Future[uint64], error) {
+func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []types.TagMeta, data []byte, deps []uint64) (types.Future[uint64], error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data cannot be empty")
 	}
@@ -670,11 +670,12 @@ func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64
 		return nil, err
 	}
 
-	condHandle, condWrapper := types.NewCond()
-	// apply conditions
-	cond(condHandle)
-	// wrap conditions to original data
-	data = condWrapper.WrapData(tagBuildMeta, data)
+	condWrapper := types.NewCond()
+	// add deps
+	data = condWrapper.
+		WithDeps(deps).
+		WithTagMetas(tagBuildMeta).
+		Build(data)
 
 	if len(data)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
 		return nil, fmt.Errorf("data too larger (size=%d, num_tags=%d), expect no more than %d bytes",
@@ -833,10 +834,9 @@ func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byt
 		}
 		logEntry.Data = originalData
 		return &types.CondLogEntry{
-			LogEntry:     *logEntry,
-			Deps:         cond.Deps,
-			Cond:         cond.CondMetas,
-			TagBuildMeta: cond.TagBuildMeta,
+			LogEntry:      *logEntry,
+			Deps:          cond.Deps,
+			TagBuildMetas: cond.TagBuildMetas,
 		}, nil
 	} else if result == protocol.SharedLogResultType_EMPTY {
 		return nil, nil
