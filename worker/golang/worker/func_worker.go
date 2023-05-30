@@ -672,10 +672,15 @@ func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64
 
 	condWrapper := types.NewCond()
 	// add deps
-	data = condWrapper.
+	newData := condWrapper.
 		WithDeps(deps).
 		WithTagMetas(tagBuildMeta).
 		Build(data)
+
+	// TRACE: report new meta data overhead
+	// log.Printf("[TRACE] log type=%+v, boki data len=%d, new data len=%d", tagBuildMeta, len(data), len(newData))
+
+	data = newData
 
 	if len(data)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
 		return nil, fmt.Errorf("data too larger (size=%d, num_tags=%d), expect no more than %d bytes",

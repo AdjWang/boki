@@ -18,8 +18,8 @@ type CondDataWrapper interface {
 }
 
 type condImpl struct {
-	Deps          []uint64
-	TagBuildMetas []TagMeta
+	Deps          []uint64  `json:"dep"`
+	TagBuildMetas []TagMeta `json:"tagMetas"`
 }
 
 func NewCond() CondDataWrapper {
@@ -41,10 +41,11 @@ func (c *condImpl) WithTagMetas(tagBuildMetas []TagMeta) CondDataWrapper {
 }
 
 func (c *condImpl) Build(data []byte) []byte {
+	metaJson, err := json.Marshal(c)
+	check(err)
 	newDataStruct := DataWrapper{
-		Deps:          c.Deps,
-		TagBuildMetas: c.TagBuildMetas,
-		Data:          data,
+		Meta: metaJson,
+		Data: data,
 	}
 	rawData, err := json.Marshal(newDataStruct)
 	check(err)
@@ -57,11 +58,11 @@ func UnwrapData(rawData []byte) (*condImpl, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	} else {
-		return &condImpl{
-				Deps:          wrapperData.Deps,
-				TagBuildMetas: wrapperData.TagBuildMetas,
-			},
-			wrapperData.Data,
-			nil
+		var meta condImpl
+		err = json.Unmarshal(wrapperData.Meta, &meta)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &meta, wrapperData.Data, nil
 	}
 }

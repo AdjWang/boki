@@ -49,9 +49,8 @@ type TagMeta struct {
 	TagKeys []string `json:"tagKeys"`
 }
 type DataWrapper struct {
-	Deps          []uint64  `json:"deps"`
-	TagBuildMetas []TagMeta `json:"tagBuildMeta"`
-	Data          []byte    `json:"data"`
+	Meta []byte `json:"meta"`
+	Data []byte `json:"data"`
 }
 
 type Environment interface {
