@@ -80,9 +80,13 @@ type Environment interface {
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
+	AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*CondLogEntry, error)
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, localId uint64) (*CondLogEntry, error)
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
+	// TODO: replace original blocking read
+	AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
+	AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
 }
 
 type FuncHandler interface {

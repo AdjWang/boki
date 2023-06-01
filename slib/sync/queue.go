@@ -15,11 +15,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-const (
-	FsmType_QueueLog     uint8 = 0
-	FsmType_QueuePushLog uint8 = 1
-)
-
 type Queue struct {
 	ctx context.Context
 	env types.Environment
@@ -128,8 +123,8 @@ func (q *Queue) doPush(payload string) (types.Future[uint64], error) {
 	}
 	tags := []uint64{queueLogTag(q.nameHash), queuePushLogTag(q.nameHash)}
 	tagMetas := []types.TagMeta{
-		{FsmType: FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, 10)}},
-		{FsmType: FsmType_QueuePushLog, TagKeys: []string{strconv.FormatUint(q.nameHash, 10)}},
+		{FsmType: common.FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
+		{FsmType: common.FsmType_QueuePushLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
 	}
 	return q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded)
 }
@@ -286,7 +281,7 @@ func (q *Queue) appendPopLogAndSync() error {
 	}
 	tags := []uint64{queueLogTag(q.nameHash)}
 	tagMetas := []types.TagMeta{
-		{FsmType: FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, 10)}},
+		{FsmType: common.FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
 	}
 	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded); err != nil {
 		return err
