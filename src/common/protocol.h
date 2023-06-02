@@ -87,26 +87,28 @@ enum class MessageType : uint16_t {
 };
 
 enum class SharedLogOpType : uint16_t {
-    INVALID           = 0x00,
-    APPEND            = 0x01,  // FuncWorker to Engine
-    READ_NEXT         = 0x02,  // FuncWorker to Engine, Engine to Index
-    READ_PREV         = 0x03,  // FuncWorker to Engine, Engine to Index
-    TRIM              = 0x04,  // FuncWorker to Engine, Engine to Sequencer
-    SET_AUXDATA       = 0x05,  // FuncWorker to Engine, Engine to Storage
-    READ_NEXT_B       = 0x06,  // FuncWorker to Engine, Engine to Index
+    INVALID            = 0x00,
+    APPEND             = 0x01,  // FuncWorker to Engine
+    READ_NEXT          = 0x02,  // FuncWorker to Engine, Engine to Index
+    READ_PREV          = 0x03,  // FuncWorker to Engine, Engine to Index
+    TRIM               = 0x04,  // FuncWorker to Engine, Engine to Sequencer
+    SET_AUXDATA        = 0x05,  // FuncWorker to Engine, Engine to Storage
+    READ_NEXT_B        = 0x06,  // FuncWorker to Engine, Engine to Index
 
-    READ_AT           = 0x11,  // Index to Storage
-    REPLICATE         = 0x12,  // Engine to Storage
-    INDEX_DATA        = 0x13,  // Engine to Index
-    SHARD_PROG        = 0x14,  // Storage to Sequencer
-    METALOGS          = 0x15,  // Sequencer to Sequencer, Engine, Storage, Index
-    META_PROG         = 0x16,  // Sequencer to Sequencer
+    READ_AT            = 0x11,  // Index to Storage
+    REPLICATE          = 0x12,  // Engine to Storage
+    INDEX_DATA         = 0x13,  // Engine to Index
+    SHARD_PROG         = 0x14,  // Storage to Sequencer
+    METALOGS           = 0x15,  // Sequencer to Sequencer, Engine, Storage, Index
+    META_PROG          = 0x16,  // Sequencer to Sequencer
 
-    ASYNC_APPEND      = 0x20,  // FuncWorker to Engine
-    ASYNC_READ        = 0x21,  // FuncWorker to Engine, Engine to Index
-    READ_INDEX        = 0x22,  // FuncWorker to Engine, Engine to Index
+    ASYNC_APPEND       = 0x20,  // FuncWorker to Engine
+    ASYNC_READ_NEXT    = 0x21,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_NEXT_B  = 0x22,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_PREV    = 0x23,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_LOCALID = 0x24,  // FuncWorker to Engine, Engine to Index
 
-    RESPONSE          = 0x30
+    RESPONSE           = 0x30
 };
 
 class SharedLogOpTypeHelper {
@@ -125,8 +127,10 @@ public:
         return op_type == SharedLogOpType::READ_NEXT
             || op_type == SharedLogOpType::READ_PREV
             || op_type == SharedLogOpType::READ_NEXT_B
-            || op_type == SharedLogOpType::ASYNC_READ
-            || op_type == SharedLogOpType::READ_INDEX;
+            || op_type == SharedLogOpType::ASYNC_READ_NEXT
+            || op_type == SharedLogOpType::ASYNC_READ_NEXT_B
+            || op_type == SharedLogOpType::ASYNC_READ_PREV
+            || op_type == SharedLogOpType::ASYNC_READ_LOCALID;
     }
 };
 
@@ -140,6 +144,7 @@ enum class SharedLogResultType : uint16_t {
     AUXDATA_OK        = 0x24,
     // Async successful results
     ASYNC_APPEND_OK   = 0x30,
+    ASYNC_READ_OK     = 0x31,
     // Error results
     BAD_ARGS    = 0x40,
     DISCARDED   = 0x41,  // Log to append is discarded
@@ -656,6 +661,10 @@ public:
 
     static SharedLogMessage NewReadOkResponse() {
         return NewResponse(SharedLogResultType::READ_OK);
+    }
+
+    static SharedLogMessage NewAsyncReadOkResponse() {
+        return NewResponse(SharedLogResultType::ASYNC_READ_OK);
     }
 
     static SharedLogMessage NewDataLostResponse() {

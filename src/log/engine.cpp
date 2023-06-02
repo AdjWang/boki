@@ -146,9 +146,15 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
         STRING_AS_SPAN(log_entry.data));
 }
 
-static Message BuildLocalReadOKResponse(uint64_t seqnum) {
+// unused for now
+// static Message BuildLocalReadOKResponse(uint64_t seqnum) {
+//     return MessageHelper::NewSharedLogOpSucceeded(
+//         SharedLogResultType::READ_OK, seqnum);
+// }
+
+static Message BuildLocalAsyncReadOKResponse(uint64_t seqnum) {
     return MessageHelper::NewSharedLogOpSucceeded(
-        SharedLogResultType::READ_OK, seqnum);
+        SharedLogResultType::ASYNC_READ_OK, seqnum);
 }
 }  // namespace
 
@@ -192,7 +198,9 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         // sync append
         Message response = MessageHelper::NewSharedLogOpSucceeded(
             SharedLogResultType::ASYNC_APPEND_OK, log_metadata.localid);
-        IntermediateLocalOpWithResponse(op, &response);
+        // Not update metalog_progress here because the generation of local op id
+        // not affects the metalog_progress.
+        IntermediateLocalOpWithResponse(op, &response, /*metalog_progress*/0);
     }
 
     ReplicateLogEntry(view, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
@@ -207,7 +215,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     HVLOG_F(1, "Handle local read: op_type=0x{:02X}, op_id={}, logspace={}, tag={}, seqnum={}",
             uint16_t(op->type), op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
-    onging_reads_.PutChecked(op->id, op);
+    onging_local_reads_.PutChecked(op->id, op);
     const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
     {
@@ -246,7 +254,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
         SharedLogMessage request = BuildReadRequestMessage(op);
         bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
         if (!send_success) {
-            onging_reads_.RemoveChecked(op->id);
+            onging_local_reads_.RemoveChecked(op->id);
             FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         }
     }
@@ -300,9 +308,7 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
 
 void Engine::HandleRemoteRead(const SharedLogMessage& request) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(request);
-    DCHECK(  op_type == SharedLogOpType::READ_NEXT
-          || op_type == SharedLogOpType::READ_PREV
-          || op_type == SharedLogOpType::READ_NEXT_B);
+    DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op_type));
     LockablePtr<Index> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -392,12 +398,22 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                             std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::RESPONSE);
     SharedLogResultType result = SharedLogMessageHelper::GetResultType(message);
-    if (    result == SharedLogResultType::READ_OK
-         || result == SharedLogResultType::EMPTY
-         || result == SharedLogResultType::DATA_LOST) {
+    if (result == SharedLogResultType::ASYNC_READ_OK) {
+        uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
         uint64_t op_id = message.client_data;
         LocalOp* op;
-        if (!onging_reads_.Poll(op_id, &op)) {
+        if (!onging_local_reads_.Peak(op_id, &op)) {
+            HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
+            return;
+        }
+        Message response = BuildLocalAsyncReadOKResponse(seqnum);
+        IntermediateLocalOpWithResponse(op, &response, message.user_metalog_progress);
+    } else if (    result == SharedLogResultType::READ_OK
+                || result == SharedLogResultType::EMPTY
+                || result == SharedLogResultType::DATA_LOST) {
+        uint64_t op_id = message.client_data;
+        LocalOp* op;
+        if (!onging_local_reads_.Poll(op_id, &op)) {
             HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
             return;
         }
@@ -457,72 +473,82 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     const IndexQuery& query = query_result.original_query;
     bool local_request = (query.origin_node_id == my_node_id());
     uint64_t seqnum = query_result.found_result.seqnum;
-    if (query_result.index_only) {
-        LocalOp* op = onging_reads_.PollChecked(query.client_data);
-        Message response = BuildLocalReadOKResponse(seqnum);
-        FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
-    } else {
-        if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
-            // Cache hits
-            HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
-            const LogEntry& log_entry = cached_log_entry.value();
-            std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
-            std::span<const char> aux_data;
-            if (cached_aux_data.has_value()) {
-                size_t full_size = log_entry.data.size()
-                                 + log_entry.user_tags.size() * sizeof(uint64_t)
-                                 + cached_aux_data->size();
-                if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
-                    aux_data = STRING_AS_SPAN(*cached_aux_data);
-                } else {
-                    HLOG_F(WARNING, "Inline buffer of message not large enough "
-                                    "for auxiliary data of log (seqnum {}): "
-                                    "log_size={}, num_tags={} aux_data_size={}",
-                           bits::HexStr0x(seqnum), log_entry.data.size(),
-                           log_entry.user_tags.size(), cached_aux_data->size());
-                }
-            }
-            if (local_request) {
-                LocalOp* op = onging_reads_.PollChecked(query.client_data);
-                Message response = BuildLocalReadOKResponse(log_entry);
-                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-                MessageHelper::AppendInlineData(&response, aux_data);
-                FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
-            } else {
-                HVLOG_F(1, "Send read response for log (seqnum {})", bits::HexStr0x(seqnum));
-                SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();
-                log_utils::PopulateMetaDataToMessage(log_entry.metadata, &response);
-                response.user_metalog_progress = query_result.metalog_progress;
-                response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-                SendReadResponse(query, &response,
-                                 VECTOR_AS_CHAR_SPAN(log_entry.user_tags),
-                                 STRING_AS_SPAN(log_entry.data), aux_data);
-            }
+
+    if (query.type == IndexQuery::kAsync) {
+        if(local_request) {
+            LocalOp* op = onging_local_reads_.PeakChecked(query.client_data);
+            Message response = BuildLocalAsyncReadOKResponse(seqnum);
+            IntermediateLocalOpWithResponse(op, &response, query_result.metalog_progress);
         } else {
-            // Cache miss
-            const View::Engine* engine_node = nullptr;
-            {
-                absl::ReaderMutexLock view_lk(&view_mu_);
-                uint16_t view_id = query_result.found_result.view_id;
-                if (view_id < views_.size()) {
-                    const View* view = views_.at(view_id);
-                    engine_node = view->GetEngineNode(query_result.found_result.engine_id);
-                } else {
-                    HLOG_F(FATAL, "Cannot find view {}", view_id);
-                }
-            }
-            bool success = SendStorageReadRequest(query_result, engine_node);
-            if (!success) {
-                HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
-                if (local_request) {
-                    LocalOp* op = onging_reads_.PollChecked(query.client_data);
-                    FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
-                } else {
-                    SendReadFailureResponse(query, SharedLogResultType::DATA_LOST);
-                }
+            HVLOG_F(1, "Send async read response for log (seqnum {})", bits::HexStr0x(seqnum));
+            SharedLogMessage response = SharedLogMessageHelper::NewAsyncReadOkResponse();
+            response.logspace_id = bits::HighHalf64(seqnum);
+            response.seqnum_lowhalf = bits::LowHalf64(seqnum);
+            response.user_metalog_progress = query_result.metalog_progress;
+            SendReadResponse(query, &response);
+        }
+    }
+
+    if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
+        // Cache hits
+        HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
+        const LogEntry& log_entry = cached_log_entry.value();
+        std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
+        std::span<const char> aux_data;
+        if (cached_aux_data.has_value()) {
+            size_t full_size = log_entry.data.size()
+                                + log_entry.user_tags.size() * sizeof(uint64_t)
+                                + cached_aux_data->size();
+            if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
+                aux_data = STRING_AS_SPAN(*cached_aux_data);
+            } else {
+                HLOG_F(WARNING, "Inline buffer of message not large enough "
+                                "for auxiliary data of log (seqnum {}): "
+                                "log_size={}, num_tags={} aux_data_size={}",
+                        bits::HexStr0x(seqnum), log_entry.data.size(),
+                        log_entry.user_tags.size(), cached_aux_data->size());
             }
         }
-    }   // if index_only
+        if (local_request) {
+            LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
+            Message response = BuildLocalReadOKResponse(log_entry);
+            response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+            MessageHelper::AppendInlineData(&response, aux_data);
+            FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
+        } else {
+            HVLOG_F(1, "Send read response for log (seqnum {})", bits::HexStr0x(seqnum));
+            SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();
+            log_utils::PopulateMetaDataToMessage(log_entry.metadata, &response);
+            response.user_metalog_progress = query_result.metalog_progress;
+            response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+            SendReadResponse(query, &response,
+                                VECTOR_AS_CHAR_SPAN(log_entry.user_tags),
+                                STRING_AS_SPAN(log_entry.data), aux_data);
+        }
+    } else {
+        // Cache miss
+        const View::Engine* engine_node = nullptr;
+        {
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            uint16_t view_id = query_result.found_result.view_id;
+            if (view_id < views_.size()) {
+                const View* view = views_.at(view_id);
+                engine_node = view->GetEngineNode(query_result.found_result.engine_id);
+            } else {
+                HLOG_F(FATAL, "Cannot find view {}", view_id);
+            }
+        }
+        bool success = SendStorageReadRequest(query_result, engine_node);
+        if (!success) {
+            HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
+            if (local_request) {
+                LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
+                FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+            } else {
+                SendReadFailureResponse(query, SharedLogResultType::DATA_LOST);
+            }
+        }
+    }
 }
 
 void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
@@ -575,9 +601,10 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
             break;
         case IndexQueryResult::kEmpty:
             if (query.origin_node_id == my_node_id()) {
-                FinishLocalOpWithFailure(
-                    onging_reads_.PollChecked(query.client_data),
-                    SharedLogResultType::EMPTY, result.metalog_progress);
+                LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
+                Message failure_resp = MessageHelper::NewSharedLogOpFailed(SharedLogResultType::EMPTY);
+                // empty result won't be sent to the future object, only return once
+                FinishLocalOpWithResponse(op, &failure_resp, result.metalog_progress);
             } else {
                 SendReadFailureResponse(
                     query, SharedLogResultType::EMPTY, result.metalog_progress);

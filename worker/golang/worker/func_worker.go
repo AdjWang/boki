@@ -75,9 +75,9 @@ type FuncWorker struct {
 	engineConn           net.Conn
 	newFuncCallChan      chan []byte
 	inputPipe            *os.File
-	// outputPipe           *os.File                 // protected by mux
+	outputPipe           *os.File // protected by mux
 	// DEBUG
-	outputPipe        *dbgPipe                 // protected by mux
+	// outputPipe        *dbgPipe                 // protected by mux
 	outgoingFuncCalls map[uint64](chan []byte) // protected by mux
 	// an async request returns twice, first to asyncOutgoing, second to outgoing
 	asyncOutgoingLogOps map[uint64](chan []byte) // protected by mux
@@ -229,7 +229,8 @@ func (w *FuncWorker) doHandshake() error {
 		return err
 	}
 	// DEBUG
-	w.outputPipe = newDebugPipe(op)
+	// w.outputPipe = newDebugPipe(op)
+	w.outputPipe = op
 
 	return nil
 }
@@ -751,7 +752,7 @@ func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64
 				return nil, fmt.Errorf("failed to append log, exceeds maximum number of retries")
 			}
 		} else {
-			return nil, fmt.Errorf("failed to append log, unacceptable result type: %d", result)
+			return nil, fmt.Errorf("failed to append log, unacceptable result type: 0x%02X", result)
 		}
 	}
 }
@@ -805,50 +806,20 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 	} else if result == protocol.SharedLogResultType_EMPTY {
 		return nil, nil
 	} else {
-		return nil, fmt.Errorf("Failed to read log")
+		return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
 	}
 }
 
 // async appends are wrapped with cond, remember to unwrap it before return to user
+// TODO: remove this
 func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byte, opId uint64) (*types.CondLogEntry, error) {
-	// count := atomic.AddInt32(&w.sharedLogReadCount, int32(1))
-	// if count > 16 {
-	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
-	// }
-
-	w.mux.Lock()
-	outputChan := make(chan []byte, 1)
-	w.outgoingLogOps[opId] = outputChan
-	_, err := w.outputPipe.Write(message)
-	w.mux.Unlock()
+	future, err := w.asyncSharedLogReadCommon2(ctx, message, opId)
 	if err != nil {
 		return nil, err
 	}
-	var response []byte
-	select {
-	case <-ctx.Done():
-		return nil, nil
-	case response = <-outputChan:
-	}
-	result := protocol.GetSharedLogResultTypeFromMessage(response)
-	if result == protocol.SharedLogResultType_READ_OK {
-		logEntry := buildLogEntryFromReadResponse(response)
-		cond, originalData, err := types.UnwrapData(logEntry.Data)
-		if err != nil {
-			return nil, err
-		}
-		logEntry.Data = originalData
-		return &types.CondLogEntry{
-			LogEntry:      *logEntry,
-			Deps:          cond.Deps,
-			TagBuildMetas: cond.TagBuildMetas,
-		}, nil
-	} else if result == protocol.SharedLogResultType_EMPTY {
-		return nil, nil
-	} else {
-		return nil, fmt.Errorf("failed to read log")
-	}
+	return future.GetResult()
 }
+
 func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []byte, opId uint64) (types.Future[*types.CondLogEntry], error) {
 	// count := atomic.AddInt32(&w.sharedLogReadCount, int32(1))
 	// if count > 16 {
@@ -856,6 +827,8 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 	// }
 
 	w.mux.Lock()
+	asyncOutputChan := make(chan []byte, 1)
+	w.asyncOutgoingLogOps[opId] = asyncOutputChan
 	outputChan := make(chan []byte, 1)
 	w.outgoingLogOps[opId] = outputChan
 	_, err := w.outputPipe.Write(message)
@@ -863,61 +836,44 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 	if err != nil {
 		return nil, err
 	}
-	resolve := func() (*types.CondLogEntry, error) {
-		var response []byte
-		select {
-		case <-ctx.Done():
-			return nil, nil
-		case response = <-outputChan:
-		}
-		result := protocol.GetSharedLogResultTypeFromMessage(response)
-		if result == protocol.SharedLogResultType_READ_OK {
-			logEntry := buildLogEntryFromReadResponse(response)
-			cond, originalData, err := types.UnwrapData(logEntry.Data)
-			if err != nil {
-				return nil, err
-			}
-			logEntry.Data = originalData
-			return &types.CondLogEntry{
-				LogEntry:      *logEntry,
-				Deps:          cond.Deps,
-				TagBuildMetas: cond.TagBuildMetas,
-			}, nil
-		} else if result == protocol.SharedLogResultType_EMPTY {
-			return nil, nil
-		} else {
-			return nil, fmt.Errorf("Failed to read log")
-		}
-	}
-	// Not use some sort of local_id in engine like append due to:
-	// Using cross function read has no benefit to performance, so only support
-	// local read and just use local opId is enough.
-	return types.NewFuture(opId, resolve), nil
-}
-
-func (w *FuncWorker) asyncSharedLogReadIndex(ctx context.Context, message []byte, opId uint64) (uint64, error) {
-	w.mux.Lock()
-	outputChan := make(chan []byte, 1)
-	w.outgoingLogOps[opId] = outputChan
-	_, err := w.outputPipe.Write(message)
-	w.mux.Unlock()
-	if err != nil {
-		return 0, err
-	}
-	var response []byte
-	select {
-	case <-ctx.Done():
-		return 0, nil
-	case response = <-outputChan:
-	}
+	response := <-asyncOutputChan // should return immediately
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
-	if result == protocol.SharedLogResultType_READ_OK {
-		seqnum := protocol.GetLogSeqNumFromMessage(response)
-		return seqnum, nil
+	if result == protocol.SharedLogResultType_ASYNC_READ_OK {
+		seqNum := protocol.GetLogSeqNumFromMessage(response)
+		resolve := func() (*types.CondLogEntry, error) {
+			var response []byte
+			select {
+			case <-ctx.Done():
+				return nil, nil
+			case response = <-outputChan:
+			}
+			result := protocol.GetSharedLogResultTypeFromMessage(response)
+			if result == protocol.SharedLogResultType_READ_OK {
+				logEntry := buildLogEntryFromReadResponse(response)
+				cond, originalData, err := types.UnwrapData(logEntry.Data)
+				if err != nil {
+					return nil, err
+				}
+				logEntry.Data = originalData
+				return &types.CondLogEntry{
+					LogEntry:      *logEntry,
+					Deps:          cond.Deps,
+					TagBuildMetas: cond.TagBuildMetas,
+				}, nil
+			} else if result == protocol.SharedLogResultType_EMPTY {
+				return nil, nil
+			} else {
+				return nil, fmt.Errorf("failed to read log: 0x%02X", result)
+			}
+		}
+		return types.NewFuture(seqNum, resolve), nil
 	} else if result == protocol.SharedLogResultType_EMPTY {
-		return 0, nil
+		// expect there's no more return value
+		// TODO: add back after debugging
+		// delete(w.outgoingLogOps, opId)
+		return nil, nil
 	} else {
-		return 0, fmt.Errorf("failed to read log index")
+		return nil, fmt.Errorf("failed to append log, unacceptable result type: 0x%02X", result)
 	}
 }
 
@@ -980,7 +936,15 @@ func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seq
 func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.CondLogEntry], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	return w.asyncSharedLogReadCommon2(ctx, message, id)
+}
+
+// Implement types.Environment
+func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.CondLogEntry], error) {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
@@ -988,26 +952,29 @@ func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, se
 func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.CondLogEntry], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
 // ----------------------------------------------------------------
 
 // Implement types.Environment
+// TODO: delete this and move to async read
 func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, localId uint64) (*types.CondLogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, localId, id)
+	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, localId, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
 // Implement types.Environment
+// TODO: delete this and move to async read
 func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error) {
-	id := atomic.AddUint64(&w.nextLogOpId, 1)
-	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, localId, id)
-	return w.asyncSharedLogReadIndex(ctx, message, id)
+	condLogEntry, err := w.AsyncSharedLogRead(ctx, localId)
+	if err != nil {
+		return 0, err
+	}
+	return condLogEntry.SeqNum, err
 }
 
 // Implement types.Environment

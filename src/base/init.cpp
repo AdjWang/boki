@@ -94,6 +94,12 @@ void InitMain(int argc, char* argv[],
     }
 
     Thread::RegisterMainThread();
+    #if defined(DEBUG)
+    LOG(INFO) << "Running DEBUG built version";
+    #endif
+    #if defined(NDEBUG)
+    LOG(INFO) << "Running RELEASE built version";
+    #endif
 }
 
 void ChainCleanupFn(std::function<void()> fn) {

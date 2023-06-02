@@ -86,6 +86,7 @@ type Environment interface {
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
 	// TODO: replace original blocking read
 	AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
+	AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
 	AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
 }
 

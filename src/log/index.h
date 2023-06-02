@@ -12,12 +12,15 @@ struct IndexFoundResult {
 };
 
 struct IndexQuery {
-    // detemines how to interpret the query_seqnum
-    // kSync: seqnum of the shared log
-    // kAsync: local_id, **would replace with seqnum inplace when querying**
+    // determines how to response
+    // kSync: return once with the log entry
+    // kAsync: return twice, first only seqnum, second the same as kSync
     enum QueryType { kSync, kAsync };
 
-    enum ReadDirection { kReadNext, kReadPrev, kReadNextB, kReadIndex };
+    // determines how to interpret the query_seqnum
+    // kReadNext, kReadPrev, kReadNextB: query_seqnum is the seqnum of the shared log
+    // kReadLocalId: query_seqnum is the local_id
+    enum ReadDirection { kReadNext, kReadPrev, kReadNextB, kReadLocalId };
     QueryType type;
     ReadDirection direction;
     uint16_t origin_node_id;
@@ -44,7 +47,6 @@ struct IndexQueryResult {
 
     IndexQuery       original_query;
     IndexFoundResult found_result;
-    bool index_only;
 };
 
 class DebugQueryResultVec final : public absl::InlinedVector<IndexQueryResult, 4> {
@@ -73,9 +75,9 @@ public:
 
     void MakeQuery(const IndexQuery& query);
 
+    using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
     // DEBUG
-    // using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
-    using QueryResultVec = DebugQueryResultVec;
+    // using QueryResultVec = DebugQueryResultVec;
     void PollQueryResults(QueryResultVec* results);
 
 private:
@@ -120,7 +122,7 @@ private:
     void AdvanceIndexProgress();
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
 
-    bool ProcessAsyncQuery(const IndexQuery& query);
+    bool ProcessLocalIdQuery(const IndexQuery& query);
     void ProcessQuery(const IndexQuery& query);
     void ProcessReadNext(const IndexQuery& query);
     void ProcessReadPrev(const IndexQuery& query);

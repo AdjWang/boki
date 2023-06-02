@@ -42,8 +42,10 @@ public:
     // All these APIs are thread safe
     void Put(uint64_t key, T* value);         // Override if the given key exists
     bool Poll(uint64_t key, T** value);       // Remove the given key if it is found
+    bool Peak(uint64_t key, T** value);       // Remove the given key if it is found
     void PutChecked(uint64_t key, T* value);  // Panic if key exists
     T*   PollChecked(uint64_t key);           // Panic if key does not exist
+    T*   PeakChecked(uint64_t key);           // Panic if key does not exist
     void RemoveChecked(uint64_t key);         // Panic if key does not exist
     void PollAll(std::vector<std::pair<uint64_t, T*>>* values);
     void PollAllSorted(std::vector<std::pair<uint64_t, T*>>* values);
@@ -102,6 +104,17 @@ bool ThreadedMap<T>::Poll(uint64_t key, T** value) {
 }
 
 template<class T>
+bool ThreadedMap<T>::Peak(uint64_t key, T** value) {
+    absl::MutexLock lk(&mu_);
+    if (rep_.contains(key)) {
+        *value = rep_.at(key);
+        return true;
+    } else {
+        return false;
+    }
+}
+
+template<class T>
 void ThreadedMap<T>::PutChecked(uint64_t key, T* value) {
     absl::MutexLock lk(&mu_);
     DCHECK(!rep_.contains(key));
@@ -114,6 +127,14 @@ T* ThreadedMap<T>::PollChecked(uint64_t key) {
     DCHECK(rep_.contains(key));
     T* value = rep_.at(key);
     rep_.erase(key);
+    return value;
+}
+
+template<class T>
+T* ThreadedMap<T>::PeakChecked(uint64_t key) {
+    absl::MutexLock lk(&mu_);
+    DCHECK(rep_.contains(key));
+    T* value = rep_.at(key);
     return value;
 }
 

@@ -30,7 +30,7 @@ private:
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
     log_utils::FutureRequests       future_requests_;
-    log_utils::ThreadedMap<LocalOp> onging_reads_;
+    log_utils::ThreadedMap<LocalOp> onging_local_reads_;
 
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
