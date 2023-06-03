@@ -741,7 +741,7 @@ func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64
 				}
 			}
 			return types.NewFuture(localId, resolve), nil
-		} else if result == protocol.SharedLogResultType_DISCARDED {
+		} else if result == protocol.SharedLogResultType_ASYNC_DISCARDED {
 			log.Printf("[ERROR] Append discarded, will retry")
 			if remainingRetries > 0 {
 				time.Sleep(sleepDuration)
@@ -816,6 +816,8 @@ func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byt
 	future, err := w.asyncSharedLogReadCommon2(ctx, message, opId)
 	if err != nil {
 		return nil, err
+	} else if future == nil {
+		return nil, nil
 	}
 	return future.GetResult()
 }
@@ -836,6 +838,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 	if err != nil {
 		return nil, err
 	}
+
 	response := <-asyncOutputChan // should return immediately
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
 	if result == protocol.SharedLogResultType_ASYNC_READ_OK {
@@ -860,19 +863,23 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 					Deps:          cond.Deps,
 					TagBuildMetas: cond.TagBuildMetas,
 				}, nil
-			} else if result == protocol.SharedLogResultType_EMPTY {
-				return nil, nil
+				// } else if result == protocol.SharedLogResultType_EMPTY {
+				// 	return nil, nil
 			} else {
 				return nil, fmt.Errorf("failed to read log: 0x%02X", result)
 			}
 		}
 		return types.NewFuture(seqNum, resolve), nil
-	} else if result == protocol.SharedLogResultType_EMPTY {
+	} else if result == protocol.SharedLogResultType_ASYNC_EMPTY {
 		// expect there's no more return value
-		// TODO: add back after debugging
-		// delete(w.outgoingLogOps, opId)
+		w.mux.Lock()
+		delete(w.outgoingLogOps, opId)
+		w.mux.Unlock()
 		return nil, nil
 	} else {
+		w.mux.Lock()
+		delete(w.outgoingLogOps, opId)
+		w.mux.Unlock()
 		return nil, fmt.Errorf("failed to append log, unacceptable result type: 0x%02X", result)
 	}
 }
@@ -911,7 +918,7 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.CondLogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -919,7 +926,7 @@ func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seq
 func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.CondLogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -927,7 +934,7 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64
 func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.CondLogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 

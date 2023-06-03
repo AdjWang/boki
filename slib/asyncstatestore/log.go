@@ -317,33 +317,48 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 		return nil
 	}
 
-	log.Printf("[DEBUG] Catching log entries of %d", seqNum-currentSeqNum)
-	// logEntryFutures := make(chan types.Future[*types.CondLogEntry], seqNum-currentSeqNum)
-	// for seqNum > currentSeqNum {
-	// 	if seqNum != protocol.MaxLogSeqnum {
-	// 		seqNum -= 1
-	// 	}
-	// 	logEntryFuture, err := env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
-	// 	if err != nil {
-	// 		return newRuntimeError(err.Error())
-	// 	}
-	// 	logEntryFutures <- logEntryFuture
-	// }
-
-	for seqNum > currentSeqNum {
-		if seqNum != protocol.MaxLogSeqnum {
-			seqNum -= 1
+	logEntryFutures := make(chan types.Future[*types.CondLogEntry], 3)
+	errChan := make(chan error)
+	go func(seqNum uint64, currentSeqNum uint64) {
+		for seqNum > currentSeqNum {
+			if seqNum != protocol.MaxLogSeqnum {
+				seqNum -= 1
+			}
+			logEntryFuture, err := env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+			if err != nil {
+				// return newRuntimeError(err.Error())
+				errChan <- newRuntimeError(err.Error())
+			}
+			// seqnum is stored in LocalId
+			if logEntryFuture == nil || logEntryFuture.GetLocalId() < currentSeqNum {
+				logEntryFutures <- logEntryFuture
+				close(logEntryFutures)
+				break
+			}
+			seqNum = logEntryFuture.GetLocalId()
+			// log.Printf("[DEBUG] Pending log with seqnum %#016x", seqNum)
+			logEntryFutures <- logEntryFuture
 		}
-		// logEntryFuture := <-logEntryFutures
-		// logEntry, err := logEntryFuture.GetResult()
-		logEntry, err := env.faasEnv.AsyncSharedLogReadPrev(env.faasCtx, tag, seqNum)
+	}(seqNum, currentSeqNum)
+
+	for {
+		var logEntryFuture types.Future[*types.CondLogEntry]
+		select {
+		case err := <-errChan:
+			return err
+		case logEntryFuture = <-logEntryFutures:
+		}
+		if logEntryFuture == nil || logEntryFuture.GetLocalId() < currentSeqNum {
+			break
+		}
+		logEntry, err := logEntryFuture.GetResult()
 		if err != nil {
 			return newRuntimeError(err.Error())
 		}
 		if logEntry == nil || logEntry.SeqNum < currentSeqNum {
 			break
 		}
-		seqNum = logEntry.SeqNum
+		// seqNum = logEntry.SeqNum
 		// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
 		objectLog := decodeLogEntry(logEntry)
 		if !objectLog.withinWriteSet(obj.name) {

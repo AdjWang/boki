@@ -75,6 +75,9 @@ const (
 	// Async successful results
 	SharedLogResultType_ASYNC_APPEND_OK uint16 = 0x30
 	SharedLogResultType_ASYNC_READ_OK   uint16 = 0x31
+	SharedLogResultType_ASYNC_DISCARDED uint16 = 0x32
+	SharedLogResultType_ASYNC_EMPTY     uint16 = 0x33
+	// NO ASYNC_DATA_LOST because all async reads are local index reads
 	// Error results
 	SharedLogResultType_BAD_ARGS    uint16 = 0x40
 	SharedLogResultType_DISCARDED   uint16 = 0x41
@@ -171,8 +174,8 @@ func IsSharedLogOpMessage(buffer []byte) bool {
 
 func IsSharedLogAsyncResult(buffer []byte) bool {
 	resultType := GetSharedLogResultTypeFromMessage(buffer)
-	return resultType >= SharedLogResultType_ASYNC_APPEND_OK &&
-		resultType < SharedLogResultType_BAD_ARGS
+	return (resultType >= SharedLogResultType_ASYNC_APPEND_OK &&
+		resultType < SharedLogResultType_BAD_ARGS)
 }
 
 func NewEmptyMessage() []byte {

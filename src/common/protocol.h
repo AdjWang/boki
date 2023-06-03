@@ -145,6 +145,9 @@ enum class SharedLogResultType : uint16_t {
     // Async successful results
     ASYNC_APPEND_OK   = 0x30,
     ASYNC_READ_OK     = 0x31,
+    ASYNC_DISCARDED   = 0x32,  // Log to append is discarded
+    ASYNC_EMPTY       = 0x33,  // Cannot find log entries satisfying requirements
+    // NO ASYNC_DATA_LOST because all async reads are local index reads
     // Error results
     BAD_ARGS    = 0x40,
     DISCARDED   = 0x41,  // Log to append is discarded

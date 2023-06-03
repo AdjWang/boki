@@ -367,7 +367,7 @@ void Index::AdvanceIndexProgress() {
         }
         const IndexQuery& query = iter->second;
         HVLOG_F(1, "AdvanceIndexProgress Process query type=0x{:02X} seqnum=0x{:016X} \
-due to pending_query metalog_position={} not larger than indexed_metalog_position={}",
+since pending_query metalog_position={} not larger than indexed_metalog_position={}",
                 uint16_t(query.type), query.query_seqnum, iter->first, indexed_metalog_position_);
         ProcessQuery(query);
         iter = pending_queries_.erase(iter);
