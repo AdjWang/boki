@@ -8,9 +8,9 @@ import (
 	"os"
 	"strconv"
 
+	"cs.utexas.edu/zjia/faas/protocol"
 	"cs.utexas.edu/zjia/faas/slib/common"
 
-	"cs.utexas.edu/zjia/faas/protocol"
 	"cs.utexas.edu/zjia/faas/types"
 
 	gabs "github.com/Jeffail/gabs/v2"
@@ -154,15 +154,54 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 			continue
 		}
 		seqNum := txnCommitLog.seqNum
-		for seqNum > txnCommitLog.TxnId {
-			logEntry, err := env.faasEnv.AsyncSharedLogReadPrev(env.faasCtx, tag, seqNum-1)
+		currentSeqNum := txnCommitLog.TxnId
+
+		var err error
+		var currentLogEntryFuture types.Future[*types.CondLogEntry] = nil
+		var nextLogEntryFuture types.Future[*types.CondLogEntry] = nil
+		first := true
+		for seqNum > currentSeqNum {
+			if seqNum != protocol.MaxLogSeqnum {
+				seqNum -= 1
+			}
+			if first {
+				first = false
+				// 1. first read
+				currentLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+				if err != nil {
+					return false, newRuntimeError(err.Error())
+				}
+			}
+			// seqNum is stored as the LocalId
+			if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() <= currentSeqNum {
+				break
+			}
+			// 3. aggressively do next read
+			seqNum = currentLogEntryFuture.GetLocalId()
+			if seqNum > currentSeqNum {
+				if seqNum != protocol.MaxLogSeqnum {
+					seqNum -= 1
+				}
+				nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+				if err != nil {
+					return false, newRuntimeError(err.Error())
+				}
+			}
+			// 2. sync the current read
+			logEntry, err := currentLogEntryFuture.GetResult()
 			if err != nil {
 				return false, newRuntimeError(err.Error())
 			}
-			if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
-				break
+			if logEntry == nil || logEntry.SeqNum < currentSeqNum {
+				// unreachable since the log's seqnum exists and had been asserted
+				// by the future object above
+				panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
 			}
 			seqNum = logEntry.SeqNum
+
+			currentLogEntryFuture = nextLogEntryFuture
+			nextLogEntryFuture = nil
+
 			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
 
 			objectLog := decodeLogEntry(logEntry)
@@ -317,48 +356,52 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 		return nil
 	}
 
-	logEntryFutures := make(chan types.Future[*types.CondLogEntry], 3)
-	errChan := make(chan error)
-	go func(seqNum uint64, currentSeqNum uint64) {
-		for seqNum > currentSeqNum {
+	var err error
+	var currentLogEntryFuture types.Future[*types.CondLogEntry] = nil
+	var nextLogEntryFuture types.Future[*types.CondLogEntry] = nil
+	first := true
+	for seqNum > currentSeqNum {
+		if seqNum != protocol.MaxLogSeqnum {
+			seqNum -= 1
+		}
+		if first {
+			first = false
+			// 1. first read
+			currentLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+			if err != nil {
+				return newRuntimeError(err.Error())
+			}
+		}
+		// seqNum is stored as the LocalId
+		if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() < currentSeqNum {
+			break
+		}
+		// 3. aggressively do next read
+		seqNum = currentLogEntryFuture.GetLocalId()
+		if seqNum > currentSeqNum {
 			if seqNum != protocol.MaxLogSeqnum {
 				seqNum -= 1
 			}
-			logEntryFuture, err := env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+			nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
 			if err != nil {
-				// return newRuntimeError(err.Error())
-				errChan <- newRuntimeError(err.Error())
+				return newRuntimeError(err.Error())
 			}
-			// seqnum is stored in LocalId
-			if logEntryFuture == nil || logEntryFuture.GetLocalId() < currentSeqNum {
-				logEntryFutures <- logEntryFuture
-				close(logEntryFutures)
-				break
-			}
-			seqNum = logEntryFuture.GetLocalId()
-			// log.Printf("[DEBUG] Pending log with seqnum %#016x", seqNum)
-			logEntryFutures <- logEntryFuture
 		}
-	}(seqNum, currentSeqNum)
-
-	for {
-		var logEntryFuture types.Future[*types.CondLogEntry]
-		select {
-		case err := <-errChan:
-			return err
-		case logEntryFuture = <-logEntryFutures:
-		}
-		if logEntryFuture == nil || logEntryFuture.GetLocalId() < currentSeqNum {
-			break
-		}
-		logEntry, err := logEntryFuture.GetResult()
+		// 2. sync the current read
+		logEntry, err := currentLogEntryFuture.GetResult()
 		if err != nil {
 			return newRuntimeError(err.Error())
 		}
 		if logEntry == nil || logEntry.SeqNum < currentSeqNum {
-			break
+			// unreachable since the log's seqnum exists and had been asserted
+			// by the future object above
+			panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
 		}
-		// seqNum = logEntry.SeqNum
+		seqNum = logEntry.SeqNum
+
+		currentLogEntryFuture = nextLogEntryFuture
+		nextLogEntryFuture = nil
+
 		// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
 		objectLog := decodeLogEntry(logEntry)
 		if !objectLog.withinWriteSet(obj.name) {

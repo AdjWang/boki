@@ -194,18 +194,66 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 	queueLogs := make([]*QueueLogEntry, 0, 4)
 
 	seqNum := tailSeqNum
-	for seqNum > q.nextSeqNum {
+	currentSeqNum := q.nextSeqNum
+
+	var err error
+	var currentLogEntryFuture types.Future[*types.CondLogEntry] = nil
+	var nextLogEntryFuture types.Future[*types.CondLogEntry] = nil
+	first := true
+	for seqNum > currentSeqNum {
 		if seqNum != protocol.MaxLogSeqnum {
 			seqNum -= 1
 		}
-		logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
+		if first {
+			first = false
+			// 1. first read
+			currentLogEntryFuture, err = q.env.AsyncSharedLogReadPrev2(q.ctx, tag, seqNum)
+			if err != nil {
+				return err
+			}
+		}
+		// seqNum is stored as the LocalId
+		if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() < currentSeqNum {
+			break
+		}
+		// 3. aggressively do next read
+		seqNum = currentLogEntryFuture.GetLocalId()
+		if seqNum > currentSeqNum {
+			if seqNum != protocol.MaxLogSeqnum {
+				seqNum -= 1
+			}
+			nextLogEntryFuture, err = q.env.AsyncSharedLogReadPrev2(q.ctx, tag, seqNum)
+			if err != nil {
+				return err
+			}
+		}
+		// 2. sync the read
+		logEntry, err := currentLogEntryFuture.GetResult()
 		if err != nil {
 			return err
 		}
-		if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
-			break
+		if logEntry == nil || logEntry.SeqNum < currentSeqNum {
+			// unreachable since the log's seqnum exists and had been asserted
+			// by the future object above
+			panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
 		}
 		seqNum = logEntry.SeqNum
+
+		currentLogEntryFuture = nextLogEntryFuture
+		nextLogEntryFuture = nil
+
+		// for seqNum > q.nextSeqNum {
+		// 	if seqNum != protocol.MaxLogSeqnum {
+		// 		seqNum -= 1
+		// 	}
+		// 	logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
+		// 		break
+		// 	}
+		// 	seqNum = logEntry.SeqNum
 		queueLog := decodeQueueLogEntry(logEntry)
 		if queueLog.QueueName != q.name {
 			continue
@@ -324,6 +372,62 @@ func (q *Queue) Pop() (string /* payload */, error) {
 	} else {
 		return "", kQueueEmptyError
 	}
+}
+
+func (q *Queue) asyncAppendPopLog() (types.Future[uint64], error) {
+	logEntry := &QueueLogEntry{
+		QueueName: q.name,
+		IsPush:    false,
+	}
+	encoded, err := json.Marshal(logEntry)
+	if err != nil {
+		panic(err)
+	}
+	tags := []uint64{queueLogTag(q.nameHash)}
+	tagMetas := []types.TagMeta{
+		{FsmType: common.FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
+	}
+	return q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded)
+}
+
+func (q *Queue) BatchPop(n int) ([]string /* payloads */, error) {
+	if q.isEmpty() {
+		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
+			return nil, err
+		}
+		if q.isEmpty() {
+			return nil, kQueueEmptyError
+		}
+	}
+	// append pop log and sync
+	future, err := q.asyncAppendPopLog()
+	if err != nil {
+		return nil, err
+	}
+
+	synced := false
+	payloads := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+	continueWithoutIter:
+		if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
+			return nil, err
+		} else if nextLog != nil {
+			payloads = append(payloads, nextLog.Payload)
+		} else {
+			if !synced {
+				if seqNum, err := future.GetResult(); err != nil {
+					return nil, err
+				} else if err := q.syncTo(seqNum); err != nil {
+					return nil, err
+				}
+				synced = true
+				goto continueWithoutIter
+			} else {
+				return payloads, kQueueEmptyError
+			}
+		}
+	}
+	return payloads, nil
 }
 
 const kBlockingPopTimeout = 1 * time.Second

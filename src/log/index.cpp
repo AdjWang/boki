@@ -400,15 +400,15 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
     uint64_t local_id = query.query_seqnum;
     if (log_index_map_.find(local_id) == log_index_map_.end()) {
         // not found
-        HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
-                local_id);
+        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
+        //         local_id);
         return false;
     } else {
         // found
         AsyncIndexData index_data = log_index_map_[local_id];
         uint64_t seqnum = index_data.seqnum;
-        HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
-                local_id, seqnum);
+        // HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
+        //         local_id, seqnum);
         // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
         // causing functions failed to send back the query result to the target engine node.
         DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
