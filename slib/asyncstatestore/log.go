@@ -51,9 +51,10 @@ type ObjectLogEntry struct {
 	auxData  map[string]interface{}
 	writeSet map[string]bool
 
-	LogType int        `json:"t"`
-	Ops     []*WriteOp `json:"o,omitempty"`
-	TxnId   uint64     `json:"x"`
+	LogType         int        `json:"t"`
+	Ops             []*WriteOp `json:"o,omitempty"`
+	AggressiveTxnId uint64     `json:"ax"`
+	TxnId           uint64     `json:"x"`
 }
 
 func objectLogTag(objNameHash uint64) uint64 {
@@ -132,6 +133,93 @@ func (l *ObjectLogEntry) withinWriteSet(objName string) bool {
 	}
 	_, exists := l.writeSet[objName]
 	return exists
+}
+
+func (txnCommitLog *ObjectLogEntry) checkTxnViewConfliction(env *envImpl, txnId uint64) (bool, error) {
+	if txnCommitLog.LogType != LOG_TxnCommit {
+		panic("Wrong log type")
+	}
+	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
+	commitResult := true
+	checkedTag := make(map[uint64]bool)
+	for _, op := range txnCommitLog.Ops {
+		tag := objectLogTag(common.NameHash(op.ObjName))
+		if _, exists := checkedTag[tag]; exists {
+			continue
+		}
+		seqNum := txnId
+		currentSeqNum := txnCommitLog.AggressiveTxnId
+
+		var err error
+		var currentLogEntryFuture types.Future[*types.CondLogEntry] = nil
+		var nextLogEntryFuture types.Future[*types.CondLogEntry] = nil
+		first := true
+		for seqNum > currentSeqNum {
+			if seqNum != protocol.MaxLogSeqnum {
+				seqNum -= 1
+			}
+			if first {
+				first = false
+				// 1. first read
+				currentLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+				if err != nil {
+					return false, newRuntimeError(err.Error())
+				}
+			}
+			// seqNum is stored as the LocalId
+			if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() <= currentSeqNum {
+				break
+			}
+			// 3. aggressively do next read
+			seqNum = currentLogEntryFuture.GetLocalId()
+			if seqNum > currentSeqNum {
+				if seqNum != protocol.MaxLogSeqnum {
+					seqNum -= 1
+				}
+				nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+				if err != nil {
+					return false, newRuntimeError(err.Error())
+				}
+			}
+			// 2. sync the current read
+			logEntry, err := currentLogEntryFuture.GetResult()
+			if err != nil {
+				return false, newRuntimeError(err.Error())
+			}
+			if logEntry == nil || logEntry.SeqNum < currentSeqNum {
+				// unreachable since the log's seqnum exists and had been asserted
+				// by the future object above
+				panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
+			}
+			seqNum = logEntry.SeqNum
+
+			currentLogEntryFuture = nextLogEntryFuture
+			nextLogEntryFuture = nil
+
+			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
+
+			objectLog := decodeLogEntry(logEntry)
+			if !txnCommitLog.writeSetOverlapped(objectLog) {
+				continue
+			}
+			if objectLog.LogType == LOG_NormalOp {
+				commitResult = false
+				break
+			} else if objectLog.LogType == LOG_TxnCommit {
+				if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+					return false, err
+				} else if committed {
+					commitResult = false
+					break
+				}
+			}
+		}
+		if !commitResult {
+			break
+		}
+		checkedTag[tag] = true
+	}
+	return commitResult, nil
 }
 
 func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, error) {
@@ -484,7 +572,7 @@ func (obj *ObjectRef) appendWriteLog(op *WriteOp) (uint64 /* seqNum */, error) {
 	return obj.appendNormalOpLog([]*WriteOp{op})
 }
 
-func (env *envImpl) appendTxnBeginLog() (uint64 /* seqNum */, error) {
+func (env *envImpl) appendTxnBeginLog() (types.Future[uint64] /* seqNum */, error) {
 	logEntry := &ObjectLogEntry{LogType: LOG_TxnBegin}
 	encoded, err := json.Marshal(logEntry)
 	if err != nil {
@@ -496,16 +584,10 @@ func (env *envImpl) appendTxnBeginLog() (uint64 /* seqNum */, error) {
 	}
 	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, tagMetas, common.CompressData(encoded))
 	if err != nil {
-		return 0, newRuntimeError(err.Error())
-	} else {
-		// log.Printf("[DEBUG] Append TxnBegin log: seqNum=%#016x", seqNum)
-		// TODO: optimize
-		seqNum, err := future.GetResult()
-		if err != nil {
-			return 0, newRuntimeError(err.Error())
-		}
-		return seqNum, nil
+		return nil, newRuntimeError(err.Error())
 	}
+	// log.Printf("[DEBUG] Append TxnBegin log: seqNum=%#016x", seqNum)
+	return future, nil
 }
 
 func (env *envImpl) setLogAuxData(seqNum uint64, data interface{}) error {

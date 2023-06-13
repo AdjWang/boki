@@ -8,15 +8,17 @@ import (
 
 type Env interface {
 	Object(name string) *ObjectRef
-	TxnCommit() (bool /* committed */, error)
+	WithTxn(txnLogic func(txnEnv Env) error) Env
+	TxnCommit() (bool /* committed */, string /*msg*/, error)
 	TxnAbort() error
 }
 
 type envImpl struct {
-	faasCtx context.Context
-	faasEnv types.Environment
-	objs    map[string]*ObjectRef
-	txnCtx  *txnContext
+	faasCtx  context.Context
+	faasEnv  types.Environment
+	objs     map[string]*ObjectRef
+	txnCtx   *txnContext
+	txnLogic func(txnEnv Env) error
 }
 
 func CreateEnv(ctx context.Context, faasEnv types.Environment) Env {
@@ -26,4 +28,9 @@ func CreateEnv(ctx context.Context, faasEnv types.Environment) Env {
 		objs:    make(map[string]*ObjectRef),
 		txnCtx:  nil,
 	}
+}
+
+func (e *envImpl) WithTxn(txnLogic func(txnEnv Env) error) Env {
+	e.txnLogic = txnLogic
+	return e
 }
