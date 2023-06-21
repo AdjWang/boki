@@ -843,15 +843,9 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
 	if result == protocol.SharedLogResultType_ASYNC_READ_OK {
 		seqNum := protocol.GetLogSeqNumFromMessage(response)
-		resolve := func() (*types.CondLogEntry, error) {
-			var response []byte
-			select {
-			case <-ctx.Done():
-				return nil, nil
-			case response = <-outputChan:
-			}
-			result := protocol.GetSharedLogResultTypeFromMessage(response)
-			if result == protocol.SharedLogResultType_READ_OK {
+		flags := protocol.GetFlagsFromMessage(response)
+		if (flags & protocol.FLAG_kLogDataCachedFlag) != 0 {
+			resolve := func() (*types.CondLogEntry, error) {
 				logEntry := buildLogEntryFromReadResponse(response)
 				cond, originalData, err := types.UnwrapData(logEntry.Data)
 				if err != nil {
@@ -865,11 +859,41 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 				}, nil
 				// } else if result == protocol.SharedLogResultType_EMPTY {
 				// 	return nil, nil
-			} else {
-				return nil, fmt.Errorf("failed to read log: 0x%02X", result)
 			}
+			// expect there's no more return value
+			w.mux.Lock()
+			delete(w.outgoingLogOps, opId)
+			w.mux.Unlock()
+			return types.NewFuture(seqNum, resolve), nil
+		} else {
+			resolve := func() (*types.CondLogEntry, error) {
+				var response []byte
+				select {
+				case <-ctx.Done():
+					return nil, nil
+				case response = <-outputChan:
+				}
+				result := protocol.GetSharedLogResultTypeFromMessage(response)
+				if result == protocol.SharedLogResultType_READ_OK {
+					logEntry := buildLogEntryFromReadResponse(response)
+					cond, originalData, err := types.UnwrapData(logEntry.Data)
+					if err != nil {
+						return nil, err
+					}
+					logEntry.Data = originalData
+					return &types.CondLogEntry{
+						LogEntry:      *logEntry,
+						Deps:          cond.Deps,
+						TagBuildMetas: cond.TagBuildMetas,
+					}, nil
+					// } else if result == protocol.SharedLogResultType_EMPTY {
+					// 	return nil, nil
+				} else {
+					return nil, fmt.Errorf("failed to read log: 0x%02X", result)
+				}
+			}
+			return types.NewFuture(seqNum, resolve), nil
 		}
-		return types.NewFuture(seqNum, resolve), nil
 	} else if result == protocol.SharedLogResultType_ASYNC_EMPTY {
 		// expect there's no more return value
 		w.mux.Lock()

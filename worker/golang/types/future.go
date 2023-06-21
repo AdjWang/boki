@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,7 +22,8 @@ type futureImpl[T uint64 | *CondLogEntry] struct {
 	err    error
 
 	// sync
-	wg sync.WaitGroup
+	wg       sync.WaitGroup
+	resolved atomic.Bool
 }
 
 func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, error)) Future[T] {
@@ -30,9 +32,12 @@ func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, erro
 		LocalId: localId,
 		result:  emptyRes,
 		err:     nil,
-		wg:      sync.WaitGroup{},
+
+		wg:       sync.WaitGroup{},
+		resolved: atomic.Bool{},
 	}
 	future.wg.Add(1)
+	future.resolved.Store(false)
 	go func(fu *futureImpl[T]) {
 		res, err := resolve()
 		if err == nil {
@@ -42,6 +47,7 @@ func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, erro
 			fu.err = err
 		}
 		fu.wg.Done()
+		future.resolved.Store(true)
 	}(future)
 	return future
 }
@@ -73,4 +79,8 @@ func (f *futureImpl[T]) Await(timeout time.Duration) error {
 
 func (f *futureImpl[T]) GetLocalId() uint64 {
 	return f.LocalId
+}
+
+func (f *futureImpl[T]) Resolved() bool {
+	return f.resolved.Load()
 }

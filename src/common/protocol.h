@@ -163,6 +163,7 @@ constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
 constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
+constexpr uint32_t kLogDataCachedFlag             = (1 << 3);   // Used to check if the first async response had carried the log data
 
 struct Message {
     struct {

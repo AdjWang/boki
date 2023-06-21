@@ -176,15 +176,20 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 			if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() <= currentSeqNum {
 				break
 			}
-			// 3. aggressively do next read
-			seqNum = currentLogEntryFuture.GetLocalId()
-			if seqNum > currentSeqNum {
-				if seqNum != protocol.MaxLogSeqnum {
-					seqNum -= 1
-				}
-				nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
-				if err != nil {
-					return false, newRuntimeError(err.Error())
+			if currentLogEntryFuture.Resolved() {
+				// HACK: disable async read if logs are cached
+				first = true
+			} else {
+				// 3. aggressively do next read
+				seqNum = currentLogEntryFuture.GetLocalId()
+				if seqNum > currentSeqNum {
+					if seqNum != protocol.MaxLogSeqnum {
+						seqNum -= 1
+					}
+					nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+					if err != nil {
+						return false, newRuntimeError(err.Error())
+					}
 				}
 			}
 			// 2. sync the current read
@@ -376,15 +381,20 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 		if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() < currentSeqNum {
 			break
 		}
-		// 3. aggressively do next read
-		seqNum = currentLogEntryFuture.GetLocalId()
-		if seqNum > currentSeqNum {
-			if seqNum != protocol.MaxLogSeqnum {
-				seqNum -= 1
-			}
-			nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
-			if err != nil {
-				return newRuntimeError(err.Error())
+		if currentLogEntryFuture.Resolved() {
+			// HACK: disable async read if logs are cached
+			first = true
+		} else {
+			// 3. aggressively do next read
+			seqNum = currentLogEntryFuture.GetLocalId()
+			if seqNum > currentSeqNum {
+				if seqNum != protocol.MaxLogSeqnum {
+					seqNum -= 1
+				}
+				nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+				if err != nil {
+					return newRuntimeError(err.Error())
+				}
 			}
 		}
 		// 2. sync the current read

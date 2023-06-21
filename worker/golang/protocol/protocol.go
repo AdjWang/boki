@@ -103,6 +103,7 @@ const (
 	FLAG_FuncWorkerUseEngineSocket uint32 = (1 << 0)
 	FLAG_UseFifoForNestedCall      uint32 = (1 << 1)
 	FLAG_kAsyncInvokeFuncFlag      uint32 = (1 << 2)
+	FLAG_kLogDataCachedFlag        uint32 = (1 << 3)
 )
 
 func GetFlagsFromMessage(buffer []byte) uint32 {

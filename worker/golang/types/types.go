@@ -42,6 +42,7 @@ type Future[T uint64 | *CondLogEntry] interface {
 	GetLocalId() uint64
 	GetResult() (T, error)
 	Await(timeout time.Duration) error
+	Resolved() bool
 }
 
 type TagMeta struct {
