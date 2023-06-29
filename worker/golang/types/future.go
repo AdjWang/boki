@@ -39,15 +39,30 @@ func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, erro
 	future.wg.Add(1)
 	future.resolved.Store(false)
 	go func(fu *futureImpl[T]) {
-		res, err := resolve()
-		if err == nil {
-			fu.result = res
-			fu.err = nil
-		} else {
-			fu.err = err
-		}
+		fu.result, fu.err = resolve()
 		fu.wg.Done()
-		future.resolved.Store(true)
+		fu.resolved.Store(true)
+	}(future)
+	return future
+}
+
+// speed up cached read
+// dummy future only wraps data, the resolve function must be finished
+func NewDummyFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, error)) Future[T] {
+	var emptyRes T
+	future := &futureImpl[T]{
+		LocalId: localId,
+		result:  emptyRes,
+		err:     nil,
+
+		wg:       sync.WaitGroup{},
+		resolved: atomic.Bool{},
+	}
+	future.wg.Add(1)
+	future.resolved.Store(true)
+	go func(fu *futureImpl[T]) {
+		fu.result, fu.err = resolve()
+		fu.wg.Done()
 	}(future)
 	return future
 }

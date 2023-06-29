@@ -864,7 +864,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 			w.mux.Lock()
 			delete(w.outgoingLogOps, opId)
 			w.mux.Unlock()
-			return types.NewFuture(seqNum, resolve), nil
+			return types.NewDummyFuture(seqNum, resolve), nil
 		} else {
 			resolve := func() (*types.CondLogEntry, error) {
 				var response []byte
