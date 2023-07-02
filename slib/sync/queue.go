@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -49,7 +48,7 @@ func queuePushLogTag(nameHash uint64) uint64 {
 	return (nameHash << common.LogTagReserveBits) + common.QueuePushLogTagLowBits
 }
 
-func decodeQueueLogEntry(condLogEntry *types.CondLogEntry) *QueueLogEntry {
+func decodeQueueLogEntry(condLogEntry *types.LogEntryWithMeta) *QueueLogEntry {
 	queueLog := &QueueLogEntry{}
 	err := json.Unmarshal(condLogEntry.Data, queueLog)
 	if err != nil {
@@ -121,12 +120,11 @@ func (q *Queue) doPush(payload string) (types.Future[uint64], error) {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{queueLogTag(q.nameHash), queuePushLogTag(q.nameHash)}
-	tagMetas := []types.TagMeta{
-		{FsmType: common.FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
-		{FsmType: common.FsmType_QueuePushLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
+	tags := []types.Tag{
+		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
+		{StreamType: common.FsmType_QueuePushLog, StreamId: queuePushLogTag(q.nameHash)},
 	}
-	return q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded)
+	return q.env.AsyncSharedLogAppend(q.ctx, tags, encoded)
 }
 
 func (q *Queue) isEmpty() bool {
@@ -197,8 +195,8 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 	currentSeqNum := q.nextSeqNum
 
 	var err error
-	var currentLogEntryFuture types.Future[*types.CondLogEntry] = nil
-	var nextLogEntryFuture types.Future[*types.CondLogEntry] = nil
+	var currentLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
+	var nextLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
 	first := true
 	for seqNum > currentSeqNum {
 		if seqNum != protocol.MaxLogSeqnum {
@@ -228,7 +226,7 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 			}
 		}
 		// 2. sync the read
-		logEntry, err := currentLogEntryFuture.GetResult()
+		logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
 		if err != nil {
 			return err
 		}
@@ -327,14 +325,13 @@ func (q *Queue) appendPopLogAndSync() error {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{queueLogTag(q.nameHash)}
-	tagMetas := []types.TagMeta{
-		{FsmType: common.FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
+	tags := []types.Tag{
+		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
 	}
-	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded); err != nil {
+	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, encoded); err != nil {
 		return err
 	} else {
-		if seqNum, err := future.GetResult(); err != nil {
+		if seqNum, err := future.GetResult(60 * time.Second); err != nil {
 			return err
 		} else {
 			return q.syncTo(seqNum)
@@ -383,11 +380,10 @@ func (q *Queue) asyncAppendPopLog() (types.Future[uint64], error) {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{queueLogTag(q.nameHash)}
-	tagMetas := []types.TagMeta{
-		{FsmType: common.FsmType_QueueLog, TagKeys: []string{strconv.FormatUint(q.nameHash, common.TagKeyBase)}},
+	tags := []types.Tag{
+		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
 	}
-	return q.env.AsyncSharedLogAppend(q.ctx, tags, tagMetas, encoded)
+	return q.env.AsyncSharedLogAppend(q.ctx, tags, encoded)
 }
 
 func (q *Queue) BatchPop(n int) ([]string /* payloads */, error) {
@@ -415,7 +411,7 @@ func (q *Queue) BatchPop(n int) ([]string /* payloads */, error) {
 			payloads = append(payloads, nextLog.Payload)
 		} else {
 			if !synced {
-				if seqNum, err := future.GetResult(); err != nil {
+				if seqNum, err := future.GetResult(60 * time.Second); err != nil {
 					return nil, err
 				} else if err := q.syncTo(seqNum); err != nil {
 					return nil, err

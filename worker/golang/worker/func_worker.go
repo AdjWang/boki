@@ -600,6 +600,25 @@ func checkAndDuplicateTags(tags []uint64) ([]uint64, error) {
 	return results, nil
 }
 
+func checkAndDuplicateTagsById(tags []types.Tag) ([]types.Tag, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	// drop duplicate streamIds
+	tagSet := make(map[uint64]int)
+	for idx, tag := range tags {
+		if tag.StreamId == 0 || ^tag.StreamId == 0 {
+			return nil, fmt.Errorf("Invalid tag: %v", tag)
+		}
+		tagSet[tag.StreamId] = idx
+	}
+	results := make([]types.Tag, 0, len(tags))
+	for _, tagIdx := range tagSet {
+		results = append(results, tags[tagIdx])
+	}
+	return results, nil
+}
+
 // Implement types.Environment
 func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []byte) (uint64, error) {
 	if len(data) == 0 {
@@ -657,35 +676,38 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []uint64, tagBuildMeta []types.TagMeta, data []byte) (types.Future[uint64], error) {
-	return w.AsyncSharedLogCondAppend(ctx, tags, tagBuildMeta, data, []uint64{} /*deps*/)
+func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []types.Tag, data []byte) (types.Future[uint64], error) {
+	return w.AsyncSharedLogAppendWithDeps(ctx, tags, data, []uint64{} /*deps*/)
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []types.TagMeta, data []byte, deps []uint64) (types.Future[uint64], error) {
+func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []types.Tag, data []byte, deps []uint64) (types.Future[uint64], error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data cannot be empty")
 	}
-	tags, err := checkAndDuplicateTags(tags)
+	tags, err := checkAndDuplicateTagsById(tags)
 	if err != nil {
 		return nil, err
 	}
 
-	condWrapper := types.NewCond()
+	// store bokiTags to LogEntry struct to be compatible with boki's API
+	streamTypes, bokiTags := types.SeparateTags(tags)
+
+	condWrapper := types.NewLogDataWrapper()
 	// add deps
 	newData := condWrapper.
 		WithDeps(deps).
-		WithTagMetas(tagBuildMeta).
+		WithStreamTypes(streamTypes).
 		Build(data)
 
 	// TRACE: report new meta data overhead
-	// log.Printf("[TRACE] log type=%+v, boki data len=%d, new data len=%d", tagBuildMeta, len(data), len(newData))
+	// log.Printf("[TRACE] log type=%+v, boki data len=%d, new data len=%d", tags, len(data), len(newData))
 
 	data = newData
 
-	if len(data)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
+	if len(data)+len(bokiTags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
 		return nil, fmt.Errorf("data too larger (size=%d, num_tags=%d), expect no more than %d bytes",
-			len(data), len(tags), protocol.MessageInlineDataSize)
+			len(data), len(bokiTags), protocol.MessageInlineDataSize)
 	}
 
 	sleepDuration := 5 * time.Millisecond
@@ -694,11 +716,11 @@ func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64
 	for {
 		id := atomic.AddUint64(&w.nextLogOpId, 1)
 		currentCallId := atomic.LoadUint64(&w.currentCall)
-		message := protocol.NewAsyncSharedLogAppendMessage(currentCallId, w.clientId, uint16(len(tags)), id)
-		if len(tags) == 0 {
+		message := protocol.NewAsyncSharedLogAppendMessage(currentCallId, w.clientId, uint16(len(bokiTags)), id)
+		if len(bokiTags) == 0 {
 			protocol.FillInlineDataInMessage(message, data)
 		} else {
-			tagBuffer := protocol.BuildLogTagsBuffer(tags)
+			tagBuffer := protocol.BuildLogTagsBuffer(bokiTags)
 			protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, data}, nil /* sep */))
 		}
 
@@ -812,17 +834,17 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 
 // async appends are wrapped with cond, remember to unwrap it before return to user
 // TODO: remove this
-func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byte, opId uint64) (*types.CondLogEntry, error) {
+func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byte, opId uint64) (*types.LogEntryWithMeta, error) {
 	future, err := w.asyncSharedLogReadCommon2(ctx, message, opId)
 	if err != nil {
 		return nil, err
 	} else if future == nil {
 		return nil, nil
 	}
-	return future.GetResult()
+	return future.GetResult(60 * time.Second)
 }
 
-func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []byte, opId uint64) (types.Future[*types.CondLogEntry], error) {
+func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []byte, opId uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	// count := atomic.AddInt32(&w.sharedLogReadCount, int32(1))
 	// if count > 16 {
 	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
@@ -845,17 +867,17 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 		seqNum := protocol.GetLogSeqNumFromMessage(response)
 		flags := protocol.GetFlagsFromMessage(response)
 		if (flags & protocol.FLAG_kLogDataCachedFlag) != 0 {
-			resolve := func() (*types.CondLogEntry, error) {
+			resolve := func() (*types.LogEntryWithMeta, error) {
 				logEntry := buildLogEntryFromReadResponse(response)
-				cond, originalData, err := types.UnwrapData(logEntry.Data)
+				metadata, originalData, err := types.UnwrapData(logEntry.Data)
 				if err != nil {
 					return nil, err
 				}
 				logEntry.Data = originalData
-				return &types.CondLogEntry{
-					LogEntry:      *logEntry,
-					Deps:          cond.Deps,
-					TagBuildMetas: cond.TagBuildMetas,
+				return &types.LogEntryWithMeta{
+					LogEntry:    *logEntry,
+					Deps:        metadata.Deps,
+					Identifiers: types.CombineTags(metadata.StreamTypes, logEntry.Tags),
 				}, nil
 				// } else if result == protocol.SharedLogResultType_EMPTY {
 				// 	return nil, nil
@@ -866,7 +888,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 			w.mux.Unlock()
 			return types.NewDummyFuture(seqNum, resolve), nil
 		} else {
-			resolve := func() (*types.CondLogEntry, error) {
+			resolve := func() (*types.LogEntryWithMeta, error) {
 				var response []byte
 				select {
 				case <-ctx.Done():
@@ -876,15 +898,15 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 				result := protocol.GetSharedLogResultTypeFromMessage(response)
 				if result == protocol.SharedLogResultType_READ_OK {
 					logEntry := buildLogEntryFromReadResponse(response)
-					cond, originalData, err := types.UnwrapData(logEntry.Data)
+					metadata, originalData, err := types.UnwrapData(logEntry.Data)
 					if err != nil {
 						return nil, err
 					}
 					logEntry.Data = originalData
-					return &types.CondLogEntry{
-						LogEntry:      *logEntry,
-						Deps:          cond.Deps,
-						TagBuildMetas: cond.TagBuildMetas,
+					return &types.LogEntryWithMeta{
+						LogEntry:    *logEntry,
+						Deps:        metadata.Deps,
+						Identifiers: types.CombineTags(metadata.StreamTypes, logEntry.Tags),
 					}, nil
 					// } else if result == protocol.SharedLogResultType_EMPTY {
 					// 	return nil, nil
@@ -939,7 +961,7 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.CondLogEntry, error) {
+func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
@@ -947,7 +969,7 @@ func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seq
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.CondLogEntry, error) {
+func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
@@ -955,7 +977,7 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.CondLogEntry, error) {
+func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
@@ -964,7 +986,7 @@ func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seq
 
 // TODO: replace original API ------------------------------------
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.CondLogEntry], error) {
+func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
@@ -972,7 +994,7 @@ func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, se
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.CondLogEntry], error) {
+func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
@@ -980,7 +1002,7 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint6
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.CondLogEntry], error) {
+func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
@@ -991,7 +1013,7 @@ func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, se
 
 // Implement types.Environment
 // TODO: delete this and move to async read
-func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, localId uint64) (*types.CondLogEntry, error) {
+func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, localId uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, localId, id)
@@ -1009,7 +1031,7 @@ func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, localId uint64
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*types.CondLogEntry, error) {
+func (w *FuncWorker) AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*types.LogEntryWithMeta, error) {
 	return w.AsyncSharedLogReadPrev(ctx, tag, protocol.MaxLogSeqnum)
 }
 

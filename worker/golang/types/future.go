@@ -15,7 +15,7 @@ func IsLocalIdValid(localId uint64) bool {
 }
 
 // Implement types.Future
-type futureImpl[T uint64 | *CondLogEntry] struct {
+type futureImpl[T uint64 | *LogEntryWithMeta] struct {
 	LocalId uint64
 	// result union
 	result T
@@ -26,7 +26,7 @@ type futureImpl[T uint64 | *CondLogEntry] struct {
 	resolved atomic.Bool
 }
 
-func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, error)) Future[T] {
+func NewFuture[T uint64 | *LogEntryWithMeta](localId uint64, resolve func() (T, error)) Future[T] {
 	var emptyRes T
 	future := &futureImpl[T]{
 		LocalId: localId,
@@ -48,7 +48,7 @@ func NewFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, erro
 
 // speed up cached read
 // dummy future only wraps data, the resolve function must be finished
-func NewDummyFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T, error)) Future[T] {
+func NewDummyFuture[T uint64 | *LogEntryWithMeta](localId uint64, resolve func() (T, error)) Future[T] {
 	var emptyRes T
 	future := &futureImpl[T]{
 		LocalId: localId,
@@ -58,21 +58,25 @@ func NewDummyFuture[T uint64 | *CondLogEntry](localId uint64, resolve func() (T,
 		wg:       sync.WaitGroup{},
 		resolved: atomic.Bool{},
 	}
-	future.wg.Add(1)
+	future.result, future.err = resolve()
 	future.resolved.Store(true)
-	go func(fu *futureImpl[T]) {
-		fu.result, fu.err = resolve()
-		fu.wg.Done()
-	}(future)
 	return future
 }
 
-func (f *futureImpl[T]) GetResult() (T, error) {
-	f.wg.Wait()
+func (f *futureImpl[T]) GetResult(timeout time.Duration) (T, error) {
+	if !f.resolved.Load() {
+		if err := f.Await(timeout); err != nil {
+			return f.result, err
+		}
+	}
 	return f.result, f.err
 }
 
 func (f *futureImpl[T]) Await(timeout time.Duration) error {
+	if f.resolved.Load() {
+		return nil
+	}
+
 	// log.Printf("wait future=%+v with timeout=%v", f, timeout)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -96,6 +100,6 @@ func (f *futureImpl[T]) GetLocalId() uint64 {
 	return f.LocalId
 }
 
-func (f *futureImpl[T]) Resolved() bool {
+func (f *futureImpl[T]) IsResolved() bool {
 	return f.resolved.Load()
 }

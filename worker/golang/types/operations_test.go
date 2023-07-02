@@ -11,10 +11,10 @@ func TestCondPropagate(t *testing.T) {
 		return 2 /*seqnum*/, nil
 	})
 	{
-		client := condImpl{}
+		client := logDataWrapperImpl{}
 		client.AddDep(future.GetMeta())
 		client.AddCond(1)
-		rawData = client.WrapData([]TagMeta{}, []byte{})
+		rawData = client.WrapData([]Tag{}, []byte{})
 	}
 	// dummy propagate...
 	// restore

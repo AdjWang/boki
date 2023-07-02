@@ -3,7 +3,7 @@ package asyncstatestore
 import (
 	"context"
 	"encoding/json"
-	"strconv"
+	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
 
@@ -69,12 +69,11 @@ func (env *envImpl) TxnAbort() error {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{common.TxnMetaLogTag, txnHistoryLogTag(ctx.id)}
-	tagMetas := []types.TagMeta{
-		{FsmType: common.FsmType_TxnMetaLog, TagKeys: []string{strconv.FormatUint(common.TxnMetaLogTag, common.TagKeyBase)}},
-		{FsmType: common.FsmType_TxnHistoryLog, TagKeys: []string{strconv.FormatUint(ctx.id, common.TagKeyBase)}},
+	tags := []types.Tag{
+		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
+		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(ctx.id)},
 	}
-	if future, err := env.faasEnv.AsyncSharedLogCondAppend(env.faasCtx, tags, tagMetas, common.CompressData(encoded), []uint64{ctx.id}); err == nil {
+	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id}); err == nil {
 		// ensure durability
 		return future.Await(common.AsyncWaitTimeout)
 	} else {
@@ -102,21 +101,22 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{common.TxnMetaLogTag, txnHistoryLogTag(ctx.id)}
-	tagMetas := []types.TagMeta{
-		{FsmType: common.FsmType_TxnMetaLog, TagKeys: []string{strconv.FormatUint(common.TxnMetaLogTag, common.TagKeyBase)}},
-		{FsmType: common.FsmType_TxnHistoryLog, TagKeys: []string{strconv.FormatUint(ctx.id, common.TagKeyBase)}},
+	tags := []types.Tag{
+		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
+		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(ctx.id)},
 	}
 	for _, op := range ctx.ops {
-		tags = append(tags, objectLogTag(common.NameHash(op.ObjName)))
-		tagMetas = append(tagMetas, types.TagMeta{FsmType: common.FsmType_ObjectLog, TagKeys: []string{op.ObjName}})
+		tags = append(tags, types.Tag{
+			StreamType: common.FsmType_ObjectLog,
+			StreamId:   objectLogTag(common.NameHash(op.ObjName)),
+		})
 	}
-	future, err := env.faasEnv.AsyncSharedLogCondAppend(env.faasCtx, tags, tagMetas, common.CompressData(encoded), []uint64{ctx.id})
+	future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id})
 	if err != nil {
 		return false, newRuntimeError(err.Error())
 	}
 	// TODO: optimize
-	seqNum, err := future.GetResult()
+	seqNum, err := future.GetResult(60 * time.Second)
 	if err != nil {
 		return false, newRuntimeError(err.Error())
 	}

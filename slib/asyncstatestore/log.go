@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
+	"time"
 
 	"cs.utexas.edu/zjia/faas/protocol"
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -73,7 +73,7 @@ func (l *ObjectLogEntry) fillWriteSet() {
 	}
 }
 
-func decodeLogEntry(logEntry *types.CondLogEntry) *ObjectLogEntry {
+func decodeLogEntry(logEntry *types.LogEntryWithMeta) *ObjectLogEntry {
 	reader, err := common.DecompressReader(logEntry.Data)
 	if err != nil {
 		panic(err)
@@ -157,8 +157,8 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 		currentSeqNum := txnCommitLog.TxnId
 
 		var err error
-		var currentLogEntryFuture types.Future[*types.CondLogEntry] = nil
-		var nextLogEntryFuture types.Future[*types.CondLogEntry] = nil
+		var currentLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
+		var nextLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
 		first := true
 		for seqNum > currentSeqNum {
 			if seqNum != protocol.MaxLogSeqnum {
@@ -176,7 +176,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 			if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() <= currentSeqNum {
 				break
 			}
-			if currentLogEntryFuture.Resolved() {
+			if currentLogEntryFuture.IsResolved() {
 				// HACK: disable async read if logs are cached
 				first = true
 			} else {
@@ -193,7 +193,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 				}
 			}
 			// 2. sync the current read
-			logEntry, err := currentLogEntryFuture.GetResult()
+			logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
 			if err != nil {
 				return false, newRuntimeError(err.Error())
 			}
@@ -362,8 +362,8 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 	}
 
 	var err error
-	var currentLogEntryFuture types.Future[*types.CondLogEntry] = nil
-	var nextLogEntryFuture types.Future[*types.CondLogEntry] = nil
+	var currentLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
+	var nextLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
 	first := true
 	for seqNum > currentSeqNum {
 		if seqNum != protocol.MaxLogSeqnum {
@@ -381,7 +381,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 		if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() < currentSeqNum {
 			break
 		}
-		if currentLogEntryFuture.Resolved() {
+		if currentLogEntryFuture.IsResolved() {
 			// HACK: disable async read if logs are cached
 			first = true
 		} else {
@@ -398,7 +398,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 			}
 		}
 		// 2. sync the current read
-		logEntry, err := currentLogEntryFuture.GetResult()
+		logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
 		if err != nil {
 			return newRuntimeError(err.Error())
 		}
@@ -473,16 +473,15 @@ func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (uint64 /* seqNum */, er
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{objectLogTag(obj.nameHash)}
-	tagMetas := []types.TagMeta{
-		{FsmType: common.FsmType_ObjectLog, TagKeys: []string{strconv.FormatUint(obj.nameHash, common.TagKeyBase)}},
+	tags := []types.Tag{
+		{StreamType: common.FsmType_ObjectLog, StreamId: objectLogTag(obj.nameHash)},
 	}
-	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, tagMetas, common.CompressData(encoded))
+	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
 	if err != nil {
 		return 0, newRuntimeError(err.Error())
 	} else {
 		// TODO: optimize
-		seqNum, err := future.GetResult()
+		seqNum, err := future.GetResult(60 * time.Second)
 		if err != nil {
 			return 0, newRuntimeError(err.Error())
 		}
@@ -500,17 +499,16 @@ func (env *envImpl) appendTxnBeginLog() (uint64 /* seqNum */, error) {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{common.TxnMetaLogTag}
-	tagMetas := []types.TagMeta{
-		{FsmType: common.FsmType_TxnMetaLog, TagKeys: []string{strconv.FormatUint(common.TxnMetaLogTag, common.TagKeyBase)}},
+	tags := []types.Tag{
+		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
 	}
-	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, tagMetas, common.CompressData(encoded))
+	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
 	if err != nil {
 		return 0, newRuntimeError(err.Error())
 	} else {
 		// log.Printf("[DEBUG] Append TxnBegin log: seqNum=%#016x", seqNum)
 		// TODO: optimize
-		seqNum, err := future.GetResult()
+		seqNum, err := future.GetResult(60 * time.Second)
 		if err != nil {
 			return 0, newRuntimeError(err.Error())
 		}

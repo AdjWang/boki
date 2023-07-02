@@ -12,15 +12,6 @@ type LogEntry struct {
 	AuxData []byte
 }
 
-// Cond: User defined conditions to check if a log is taged as APPLIED or DISCARDED.
-// A log is always passed to the Fsm.Apply(log) -> bool first, in which the
-// cond is delegated to check by the user code.
-// Note that the condition is totally coupling to bussiness logic, there's no
-// gaurantee that a log not being applied if cond is not satisfied, it all
-// depends on the user.
-// Fsm.Apply(log) returns the decision from the user, then the lib sets the
-// log's aux data as the condition result, then it can be propagated later.
-//
 // Deps: User defined dependencies to check if a log is able to apply.
 //  1. If no dependency, mark the log based on the condition.
 //  2. If no condition, Fsm.Apply(log) should return true, then the log is
@@ -32,25 +23,33 @@ type LogEntry struct {
 //     or to say, being passed to the Fsm.Apply(log)
 //   - DISCARDED: Directly mark the current log as DISCARDED too, without passing
 //     to Fsm.Apply(log)
-type CondLogEntry struct {
+type LogEntryWithMeta struct {
 	LogEntry
-	Deps          []uint64
-	TagBuildMetas []TagMeta
+	Deps        []uint64
+	Identifiers []Tag
 }
 
-type Future[T uint64 | *CondLogEntry] interface {
+type Future[T uint64 | *LogEntryWithMeta] interface {
 	GetLocalId() uint64
-	GetResult() (T, error)
+	GetResult(timeout time.Duration) (T, error)
 	Await(timeout time.Duration) error
-	Resolved() bool
+	IsResolved() bool
 }
 
-type TagMeta struct {
-	FsmType uint8    `json:"deps"`
-	TagKeys []string `json:"tagKeys"`
+// When using []Tag, StreamId here forms a list of []StreamId, this is
+// identical to the Tags in the LogEntry. They will be merged in the actual
+// log data.
+type Tag struct {
+	// add stream type to support cross node replay which would not happen
+	// in boki
+	StreamType uint8 `json:"type"`
+	// original tag
+	StreamId uint64 `json:"tag"`
 }
 type DataWrapper struct {
+	// deps and streamids for now
 	Meta []byte `json:"meta"`
+	// original log data
 	Data []byte `json:"data"`
 }
 
@@ -76,19 +75,19 @@ type Environment interface {
 	// Set auxiliary data for log entry of given `seqNum`
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
 
-	AsyncSharedLogAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte) (Future[uint64], error)
-	AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte, deps []uint64) (Future[uint64], error)
-	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
-	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
-	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
-	AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*CondLogEntry, error)
+	AsyncSharedLogAppend(ctx context.Context, tags []Tag, data []byte) (Future[uint64], error)
+	AsyncSharedLogAppendWithDeps(ctx context.Context, tags []Tag, data []byte, deps []uint64) (Future[uint64], error)
+	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
+	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
+	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
+	AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*LogEntryWithMeta, error)
 	// async read API
-	AsyncSharedLogRead(ctx context.Context, localId uint64) (*CondLogEntry, error)
+	AsyncSharedLogRead(ctx context.Context, localId uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
 	// TODO: replace original blocking read
-	AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
-	AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
-	AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (Future[*CondLogEntry], error)
+	AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
+	AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
+	AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
 }
 
 type FuncHandler interface {
