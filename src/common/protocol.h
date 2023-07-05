@@ -106,7 +106,8 @@ enum class SharedLogOpType : uint16_t {
     ASYNC_READ_NEXT    = 0x21,  // FuncWorker to Engine, Engine to Index
     ASYNC_READ_NEXT_B  = 0x22,  // FuncWorker to Engine, Engine to Index
     ASYNC_READ_PREV    = 0x23,  // FuncWorker to Engine, Engine to Index
-    ASYNC_READ_LOCALID = 0x24,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_PREV_AUX= 0x24,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_LOCALID = 0x25,  // FuncWorker to Engine, Engine to Index
 
     RESPONSE           = 0x30
 };
@@ -127,6 +128,7 @@ public:
         return op_type == SharedLogOpType::READ_NEXT
             || op_type == SharedLogOpType::READ_PREV
             || op_type == SharedLogOpType::READ_NEXT_B
+            || op_type == SharedLogOpType::ASYNC_READ_PREV_AUX
             || op_type == SharedLogOpType::ASYNC_READ_NEXT
             || op_type == SharedLogOpType::ASYNC_READ_NEXT_B
             || op_type == SharedLogOpType::ASYNC_READ_PREV
@@ -605,9 +607,10 @@ public:
         return message;
     }
 
-    static SharedLogMessage NewSetAuxDataMessage(uint64_t seqnum) {
+    static SharedLogMessage NewSetAuxDataMessage(uint64_t tag, uint64_t seqnum) {
         NEW_EMPTY_SHAREDLOG_MESSAGE(message);
         message.op_type = static_cast<uint16_t>(SharedLogOpType::SET_AUXDATA);
+        message.query_tag = tag;
         message.logspace_id = bits::HighHalf64(seqnum);
         message.seqnum_lowhalf = bits::LowHalf64(seqnum);
         return message;

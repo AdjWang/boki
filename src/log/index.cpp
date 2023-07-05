@@ -13,6 +13,8 @@ IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpT
     case protocol::SharedLogOpType::READ_PREV:
     case protocol::SharedLogOpType::ASYNC_READ_PREV:
         return IndexQuery::kReadPrev;
+    case protocol::SharedLogOpType::ASYNC_READ_PREV_AUX:
+        return IndexQuery::kReadPrevAux;
     case protocol::SharedLogOpType::READ_NEXT_B:
     case protocol::SharedLogOpType::ASYNC_READ_NEXT_B:
         return IndexQuery::kReadNextB;
@@ -30,6 +32,8 @@ protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
             return protocol::SharedLogOpType::ASYNC_READ_NEXT;
         case IndexQuery::kReadPrev:
             return protocol::SharedLogOpType::ASYNC_READ_PREV;
+        case IndexQuery::kReadPrevAux:
+            return protocol::SharedLogOpType::ASYNC_READ_PREV_AUX;
         case IndexQuery::kReadNextB:
             return protocol::SharedLogOpType::ASYNC_READ_NEXT_B;
         case IndexQuery::kReadLocalId:
@@ -240,16 +244,16 @@ void Index::MakeQuery(const IndexQuery& query) {
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
         } else if (view_id < view_->id()) {
-            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query viewid={} smaller than current viewid={}",
+            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} "
+                       "since pending_query viewid={} smaller than current viewid={}",
                     uint16_t(query.type), query.query_seqnum, view_id, view_->id());
             ProcessQuery(query);
         } else {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
             if (position <= indexed_metalog_position_) {
-                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query metalog_position={} not larger than indexed_metalog_position={}",
+                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} "
+                           "since pending_query metalog_position={} not larger than indexed_metalog_position={}",
                         uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
                 ProcessQuery(query);
             } else {
@@ -434,7 +438,7 @@ void Index::ProcessQuery(const IndexQuery& query) {
         }
     } else if (query.direction == IndexQuery::kReadNext) {
         ProcessReadNext(query);
-    } else if (query.direction == IndexQuery::kReadPrev) {
+    } else if (query.direction == IndexQuery::kReadPrev || query.direction == IndexQuery::kReadPrevAux) {
         ProcessReadPrev(query);
     } else {
         UNREACHABLE();
@@ -480,7 +484,8 @@ void Index::ProcessReadNext(const IndexQuery& query) {
 }
 
 void Index::ProcessReadPrev(const IndexQuery& query) {
-    DCHECK(query.direction == IndexQuery::kReadPrev);
+    DCHECK(query.direction == IndexQuery::kReadPrev
+            || query.direction == IndexQuery::kReadPrevAux);
     HVLOG_F(1, "ProcessReadPrev: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
@@ -489,13 +494,18 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
         return;
     }
+    if (query.direction == IndexQuery::kReadPrevAux && !query.promised_auxdata.has_value()) {
+        pending_query_results_.push_back(BuildNotFoundResult(query));
+        HVLOG_F(1, "ProcessReadPrev: NotFoundResult no expected auxdata for tag={}", query.user_tag);
+        return;
+    }
     uint64_t seqnum;
     uint16_t engine_id;
     bool found = IndexFindPrev(query, &seqnum, &engine_id);
     if (found) {
         pending_query_results_.push_back(
             BuildFoundResult(query, view_->id(), seqnum, engine_id));
-        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={}", seqnum);
+        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={:016X}", seqnum);
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
@@ -539,7 +549,8 @@ bool Index::IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* e
 }
 
 bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
-    DCHECK(query.direction == IndexQuery::kReadPrev);
+    DCHECK(query.direction == IndexQuery::kReadPrev
+            || query.direction == IndexQuery::kReadPrevAux);
     if (!index_.contains(query.user_logspace)) {
         return false;
     }

@@ -38,6 +38,7 @@ void EngineBase::Start() {
     // Setup cache
     if (absl::GetFlag(FLAGS_slog_engine_enable_cache)) {
         log_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb));
+        sharded_log_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb));
     }
 }
 
@@ -119,8 +120,9 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
     case SharedLogOpType::ASYNC_READ_LOCALID:
         HandleLocalRead(op);
         break;
@@ -142,8 +144,9 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
     case SharedLogOpType::ASYNC_READ_LOCALID:
         HandleRemoteRead(message);
         break;
@@ -227,6 +230,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
@@ -238,6 +242,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::SET_AUXDATA:
+        op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         op->data.AppendData(MessageHelper::GetInlineData(message));
         break;
@@ -284,14 +289,15 @@ void EngineBase::ReplicateLogEntry(const View* view, const LogMetaData& log_meta
     }
 }
 
-void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
+void EngineBase::PropagateAuxData(const View* view, uint64_t tag,
+                                  const LogMetaData& log_metadata, 
                                   std::span<const char> aux_data) {
     uint16_t engine_id = gsl::narrow_cast<uint16_t>(
         bits::HighHalf64(log_metadata.localid));
     DCHECK(view->contains_engine_node(engine_id));
     const View::Engine* engine_node = view->GetEngineNode(engine_id);
     SharedLogMessage message = SharedLogMessageHelper::NewSetAuxDataMessage(
-        log_metadata.seqnum);
+        tag, log_metadata.seqnum);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(aux_data.size());
     for (uint16_t storage_id : engine_node->GetStorageNodes()) {
@@ -342,14 +348,26 @@ std::optional<LogEntry> EngineBase::LogCacheGet(uint64_t seqnum) {
     return log_cache_.has_value() ? log_cache_->Get(seqnum) : std::nullopt;
 }
 
-void EngineBase::LogCachePutAuxData(uint64_t seqnum, std::span<const char> data) {
-    if (log_cache_.has_value()) {
-        log_cache_->PutAuxData(seqnum, data);
+
+void EngineBase::LogCachePutAuxData(uint64_t tag, uint64_t seqnum, std::span<const char> data) {
+    if (sharded_log_cache_.has_value()) {
+        sharded_log_cache_->PutAuxData(tag, seqnum, data);
     }
 }
 
-std::optional<std::string> EngineBase::LogCacheGetAuxData(uint64_t seqnum) {
-    return log_cache_.has_value() ? log_cache_->GetAuxData(seqnum) : std::nullopt;
+// TODO: optimize tag space
+void EngineBase::LogCachePutAuxData(gsl::span<const uint64_t> tags, uint64_t seqnum, std::span<const char> data) {
+    for (const auto tag : tags) {
+        LogCachePutAuxData(tag, seqnum, data);
+    }
+}
+
+std::optional<std::string> EngineBase::LogCacheGetAuxData(uint64_t tag, uint64_t seqnum) {
+    return sharded_log_cache_.has_value() ? sharded_log_cache_->GetAuxData(tag, seqnum) : std::nullopt;
+}
+
+std::optional<std::pair<std::uint64_t, std::string>> EngineBase::LogCacheGetLastAuxData(uint64_t tag) {
+    return sharded_log_cache_.has_value() ? sharded_log_cache_->GetLastAuxData(tag) : std::nullopt;
 }
 
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,

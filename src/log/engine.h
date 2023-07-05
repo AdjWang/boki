@@ -72,6 +72,7 @@ private:
     protocol::SharedLogMessage BuildReadRequestMessage(LocalOp* op);
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
+    void QueryOnView(IndexQuery* query);
     IndexQuery BuildIndexQuery(LocalOp* op);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);

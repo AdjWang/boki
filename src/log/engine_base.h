@@ -79,7 +79,8 @@ protected:
     void ReplicateLogEntry(const View* view, const LogMetaData& log_metadata,
                            std::span<const uint64_t> user_tags,
                            std::span<const char> log_data);
-    void PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
+    void PropagateAuxData(const View* view, uint64_t tag,
+                          const LogMetaData& log_metadata, 
                           std::span<const char> aux_data);
 
     void IntermediateLocalOpWithResponse(LocalOp* op, protocol::Message* response, 
@@ -92,8 +93,11 @@ protected:
     void LogCachePut(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
                      std::span<const char> log_data);
     std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
-    void LogCachePutAuxData(uint64_t seqnum, std::span<const char> data);
-    std::optional<std::string> LogCacheGetAuxData(uint64_t seqnum);
+
+    void LogCachePutAuxData(uint64_t tag, uint64_t seqnum, std::span<const char> data);
+    void LogCachePutAuxData(gsl::span<const uint64_t> tags, uint64_t seqnum, std::span<const char> data);
+    std::optional<std::string> LogCacheGetAuxData(uint64_t tag, uint64_t seqnum);
+    std::optional<std::pair<std::uint64_t, std::string>> LogCacheGetLastAuxData(uint64_t tag);
 
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);
@@ -134,6 +138,7 @@ private:
     std::string DebugListExistingFnCall(const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>& fn_call_ctx);
 
     std::optional<LRUCache> log_cache_;
+    std::optional<ShardedLRUCache> sharded_log_cache_;
 
     void SetupZKWatchers();
     void SetupTimers();

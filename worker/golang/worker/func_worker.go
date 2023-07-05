@@ -964,7 +964,7 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -972,7 +972,7 @@ func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seq
 func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -980,7 +980,7 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64
 func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -989,7 +989,7 @@ func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seq
 func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
@@ -997,7 +997,7 @@ func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, se
 func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
@@ -1005,7 +1005,7 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint6
 func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
@@ -1036,6 +1036,15 @@ func (w *FuncWorker) AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*
 }
 
 // Implement types.Environment
+func (w *FuncWorker) AsyncSharedLogCheckTailWithAux(ctx context.Context, tag uint64) (*types.LogEntryWithMeta, error) {
+	// return w.AsyncSharedLogReadPrev(ctx, tag, protocol.MaxLogSeqnum)
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, protocol.MaxLogSeqnum, -1 /* direction */, false /* block */, true /*promiseAux*/, id)
+	return w.asyncSharedLogReadCommon(ctx, message, id)
+}
+
+// Implement types.Environment
 func (w *FuncWorker) SharedLogCheckTail(ctx context.Context, tag uint64) (*types.LogEntry, error) {
 	return w.SharedLogReadPrev(ctx, tag, protocol.MaxLogSeqnum)
 }
@@ -1052,6 +1061,41 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewSharedLogSetAuxDataMessage(currentCallId, w.clientId, seqNum, id)
+	protocol.FillInlineDataInMessage(message, auxData)
+
+	w.mux.Lock()
+	outputChan := make(chan []byte, 1)
+	w.outgoingLogOps[id] = outputChan
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	if err != nil {
+		return err
+	}
+
+	response := <-outputChan
+	result := protocol.GetSharedLogResultTypeFromMessage(response)
+	if result == protocol.SharedLogResultType_AUXDATA_OK {
+		return nil
+	} else {
+		return fmt.Errorf("Failed to set auxiliary data for log (seqnum %#016x)", seqNum)
+	}
+}
+
+// TODO: add batch set API
+// func (w *FuncWorker) AsyncSharedLogSetAuxData(ctx context.Context, tags []uint64, seqNum uint64, auxData []byte) error {
+
+// Implement types.Environment
+func (w *FuncWorker) AsyncSharedLogSetAuxData(ctx context.Context, tag uint64, seqNum uint64, auxData []byte) error {
+	if len(auxData) == 0 {
+		return fmt.Errorf("Auxiliary data cannot be empty")
+	}
+	if len(auxData) > protocol.MessageInlineDataSize {
+		return fmt.Errorf("Auxiliary data too larger (size=%d), expect no more than %d bytes", len(auxData), protocol.MessageInlineDataSize)
+	}
+
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewSharedLogSetAuxDataMessageWithShard(currentCallId, w.clientId, tag, seqNum, id)
 	protocol.FillInlineDataInMessage(message, auxData)
 
 	w.mux.Lock()
