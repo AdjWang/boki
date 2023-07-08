@@ -135,14 +135,18 @@ void StorageBase::PutLogEntryToDB(const LogEntry& log_entry) {
     db_->Put(bits::HighHalf64(seqnum), bits::LowHalf64(seqnum), STRING_AS_SPAN(data));
 }
 
-void StorageBase::LogCachePutAuxData(uint64_t seqnum, std::span<const char> data) {
+void StorageBase::LogCachePutAuxData(uint32_t user_logspace, uint64_t seqnum,
+                                     std::span<const char> data) {
     if (log_cache_.has_value()) {
-        log_cache_->PutAuxData(seqnum, data);
+        log_cache_->PutAuxData(user_logspace, seqnum, data);
     }
 }
 
-std::optional<std::string> StorageBase::LogCacheGetAuxData(uint64_t seqnum) {
-    return log_cache_.has_value() ? log_cache_->GetAuxData(seqnum) : std::nullopt;
+std::optional<std::string> StorageBase::LogCacheGetAuxData(uint32_t user_logspace,
+                                                           uint64_t seqnum) {
+    return log_cache_.has_value()
+               ? log_cache_->GetAuxData(user_logspace, seqnum)
+               : std::nullopt;
 }
 
 void StorageBase::SendIndexData(const View* view,

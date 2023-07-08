@@ -1,6 +1,8 @@
 package asyncstatestore
 
 import (
+	"encoding/json"
+
 	gabs "github.com/Jeffail/gabs/v2"
 )
 
@@ -21,6 +23,14 @@ type WriteOp struct {
 	Path     string `json:"p"`
 	Value    Value  `json:"v"`
 	IntParam int    `json:"i"`
+}
+
+func (op *WriteOp) String() string {
+	encode, err := json.Marshal(op)
+	if err != nil {
+		panic(err)
+	}
+	return string(encode)
 }
 
 type WriteResult struct {
@@ -411,5 +421,5 @@ func (view *ObjectView) applyWriteOp(op *WriteOp) (Value, error) {
 	default:
 		panic("Unknown WriteOp!")
 	}
-	return NullValue(), nil
+	// return NullValue(), nil
 }

@@ -72,27 +72,90 @@ public:
     ~PerSpaceIndex() {}
 
     void Add(uint32_t seqnum_lowhalf, uint16_t engine_id, const UserTagVec& user_tags);
+    void UpdateCacheIndex(uint32_t seqnum_lowhalf, bool cached);
 
     bool FindPrev(uint64_t query_seqnum, uint64_t user_tag,
                   uint64_t* seqnum, uint16_t* engine_id) const;
     bool FindNext(uint64_t query_seqnum, uint64_t user_tag,
                   uint64_t* seqnum, uint16_t* engine_id) const;
+    bool FindPrevCached(uint64_t query_seqnum, uint64_t user_tag,
+                        uint64_t* seqnum, uint16_t* engine_id) const;
+    bool FindNextCached(uint64_t query_seqnum, uint64_t user_tag,
+                        uint64_t* seqnum, uint16_t* engine_id) const;
 
+    // DEBUG
+    std::string Inspect() const;
 private:
+    enum TupleKey {
+        EngineId = 0,
+        UserTags = 1,
+
+        SeqNums = 0,
+        CachedSeqNums = 1,
+    };
     uint32_t logspace_id_;
     uint32_t user_logspace_;
 
-    absl::flat_hash_map</* seqnum */ uint32_t, uint16_t> engine_ids_;
-    std::vector<uint32_t> seqnums_;
-    absl::flat_hash_map</* tag */ uint64_t, std::vector<uint32_t>> seqnums_by_tag_;
+    std::tuple<std::vector<uint32_t>,
+               absl::btree_set<uint32_t>> seqnum_tp_;
+    absl::flat_hash_map</* seqnum */ uint32_t,
+                        std::tuple</* engine_id */ uint16_t,
+                                   /* user_tags */ const UserTagVec>> seqnum_map_;
+    absl::flat_hash_map< /* tag */ uint64_t,
+                        std::tuple</* seqnums */ std::vector<uint32_t>,
+                                   /* cached_seqnums */ absl::btree_set<uint32_t>>> tag_map_;
 
+    template <size_t tp_key>
+    bool FindPrevCommon(uint64_t query_seqnum, uint64_t user_tag,
+                        uint64_t* seqnum, uint16_t* engine_id) const;
+    template <size_t tp_key>
+    bool FindNextCommon(uint64_t query_seqnum, uint64_t user_tag,
+                        uint64_t* seqnum, uint16_t* engine_id) const;
     bool FindPrev(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
                   uint32_t* result_seqnum) const;
     bool FindNext(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
                   uint32_t* result_seqnum) const;
+    bool FindPrev(const absl::btree_set<uint32_t>& seqnums, uint64_t query_seqnum,
+                  uint32_t* result_seqnum) const;
+    bool FindNext(const absl::btree_set<uint32_t>& seqnums, uint64_t query_seqnum,
+                  uint32_t* result_seqnum) const;
 
     DISALLOW_COPY_AND_ASSIGN(PerSpaceIndex);
 };
+
+#define TUPLE_GET(tp, key) std::get<key>(tp)
+std::string Index::PerSpaceIndex::Inspect() const {
+    std::string output("PerSpaceIndex::Inspact:\n");
+    for (const auto& [tag, seqnumTuple] : tag_map_) {
+        {
+            std::vector<uint32_t> seqnums(TUPLE_GET(seqnumTuple, TupleKey::SeqNums));
+            std::stringstream ss;
+            for (const uint32_t seqnum : seqnums) {
+                ss << fmt::format("0x{:016X}, ", bits::JoinTwo32(logspace_id_, seqnum));
+            }
+            ss << "\b\b  \b\b"; // remove tailing 2 characters
+            if (seqnums.empty()) {
+                output.append(fmt::format("tag={}, seqnums=[none]\n", tag));
+            } else {
+                output.append(fmt::format("tag={}, seqnums=[{}]\n", tag, ss.str()));
+            }
+        }
+        {
+            absl::btree_set<uint32_t> cached_seqnums(TUPLE_GET(seqnumTuple, TupleKey::CachedSeqNums));
+            std::stringstream ss;
+            for (const uint32_t seqnum : cached_seqnums) {
+                ss << fmt::format("0x{:016X}, ", bits::JoinTwo32(logspace_id_, seqnum));
+            }
+            ss << "\b\b  \b\b"; // remove tailing 2 characters
+            if (cached_seqnums.empty()) {
+                output.append(fmt::format("cached tag={}, seqnums=[none]\n", tag));
+            } else {
+                output.append(fmt::format("cached tag={}, seqnums=[{}]\n", tag, ss.str()));
+            }
+        }
+    }
+    return output;
+}
 
 Index::PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),
@@ -100,57 +163,105 @@ Index::PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace
 
 void Index::PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
                                const UserTagVec& user_tags) {
-    DCHECK(!engine_ids_.contains(seqnum_lowhalf));
-    engine_ids_[seqnum_lowhalf] = engine_id;
-    DCHECK(seqnums_.empty() || seqnum_lowhalf > seqnums_.back());
-    seqnums_.push_back(seqnum_lowhalf);
+
+    DCHECK(!seqnum_map_.contains(seqnum_lowhalf));
+    seqnum_map_.emplace(seqnum_lowhalf, std::make_tuple(engine_id, user_tags));
+
+    auto seqnums(TUPLE_GET(seqnum_tp_, TupleKey::SeqNums));
+    DCHECK(seqnums.empty() || seqnum_lowhalf > seqnums.back());
+    seqnums.push_back(seqnum_lowhalf);
+    auto cached_seqnums(TUPLE_GET(seqnum_tp_, TupleKey::CachedSeqNums));
+    DCHECK(cached_seqnums.empty() || seqnum_lowhalf > *cached_seqnums.rbegin());
+    cached_seqnums.emplace(seqnum_lowhalf);
+
     for (uint64_t user_tag : user_tags) {
         DCHECK_NE(user_tag, kEmptyLogTag);
-        seqnums_by_tag_[user_tag].push_back(seqnum_lowhalf);
+        TUPLE_GET(tag_map_[user_tag], TupleKey::SeqNums).push_back(seqnum_lowhalf);
+    }
+}
+
+void Index::PerSpaceIndex::UpdateCacheIndex(uint32_t seqnum_lowhalf, bool cached) {
+    HVLOG_F(1, "UpdateCacheIndex seqnum={}, cached={}",
+                bits::JoinTwo32(logspace_id_, seqnum_lowhalf), cached);
+    if (!seqnum_map_.contains(seqnum_lowhalf)) {
+        return;
+    }
+    const UserTagVec user_tags(TUPLE_GET(seqnum_map_[seqnum_lowhalf], TupleKey::UserTags));
+    for (uint64_t user_tag : user_tags) {
+        DCHECK(tag_map_.contains(user_tag));
+        if (cached) {
+            TUPLE_GET(tag_map_[user_tag], TupleKey::CachedSeqNums).emplace(seqnum_lowhalf);
+        } else {
+            TUPLE_GET(tag_map_[user_tag], TupleKey::CachedSeqNums).erase(seqnum_lowhalf);
+        }
     }
 }
 
 bool Index::PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
                                     uint64_t* seqnum, uint16_t* engine_id) const {
-    uint32_t seqnum_lowhalf;
-    if (user_tag == kEmptyLogTag) {
-        if (!FindPrev(seqnums_, query_seqnum, &seqnum_lowhalf)) {
-            return false;
-        }
-    } else {
-        if (!seqnums_by_tag_.contains(user_tag)) {
-            return false;
-        }
-        if (!FindPrev(seqnums_by_tag_.at(user_tag), query_seqnum, &seqnum_lowhalf)) {
-            return false;
-        }
-    }
-    DCHECK(engine_ids_.contains(seqnum_lowhalf));
-    *seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
-    DCHECK_LE(*seqnum, query_seqnum);
-    *engine_id = engine_ids_.at(seqnum_lowhalf);
-    return true;
+    return FindPrevCommon<TupleKey::SeqNums>(query_seqnum, user_tag, seqnum, engine_id);
 }
 
 bool Index::PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
                                     uint64_t* seqnum, uint16_t* engine_id) const {
+    return FindNextCommon<TupleKey::SeqNums>(query_seqnum, user_tag, seqnum, engine_id);
+}
+
+bool Index::PerSpaceIndex::FindPrevCached(uint64_t query_seqnum, uint64_t user_tag,
+                                          uint64_t* seqnum, uint16_t* engine_id) const {
+    return FindPrevCommon<TupleKey::CachedSeqNums>(query_seqnum, user_tag, seqnum, engine_id);
+}
+
+bool Index::PerSpaceIndex::FindNextCached(uint64_t query_seqnum, uint64_t user_tag,
+                                          uint64_t* seqnum, uint16_t* engine_id) const {
+    return FindNextCommon<TupleKey::CachedSeqNums>(query_seqnum, user_tag, seqnum, engine_id);
+}
+
+template <size_t tp_key>
+bool Index::PerSpaceIndex::FindPrevCommon(uint64_t query_seqnum, uint64_t user_tag,
+                                          uint64_t* seqnum, uint16_t* engine_id) const {
     uint32_t seqnum_lowhalf;
     if (user_tag == kEmptyLogTag) {
-        if (!FindNext(seqnums_, query_seqnum, &seqnum_lowhalf)) {
+        if (!FindPrev(TUPLE_GET(seqnum_tp_, tp_key), query_seqnum, &seqnum_lowhalf)) {
             return false;
         }
     } else {
-        if (!seqnums_by_tag_.contains(user_tag)) {
+        if (!tag_map_.contains(user_tag)) {
             return false;
         }
-        if (!FindNext(seqnums_by_tag_.at(user_tag), query_seqnum, &seqnum_lowhalf)) {
+        if (!FindPrev(TUPLE_GET(tag_map_.at(user_tag), tp_key),
+                      query_seqnum, &seqnum_lowhalf)) {
             return false;
         }
     }
-    DCHECK(engine_ids_.contains(seqnum_lowhalf));
+    DCHECK(seqnum_map_.contains(seqnum_lowhalf));
+    *seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
+    DCHECK_LE(*seqnum, query_seqnum);
+    *engine_id = TUPLE_GET(seqnum_map_.at(seqnum_lowhalf), TupleKey::EngineId);
+    return true;
+}
+
+template <size_t tp_key>
+bool Index::PerSpaceIndex::FindNextCommon(uint64_t query_seqnum, uint64_t user_tag,
+                                          uint64_t* seqnum, uint16_t* engine_id) const {
+    uint32_t seqnum_lowhalf;
+    if (user_tag == kEmptyLogTag) {
+        if (!FindNext(TUPLE_GET(seqnum_tp_, tp_key), query_seqnum, &seqnum_lowhalf)) {
+            return false;
+        }
+    } else {
+        if (!tag_map_.contains(user_tag)) {
+            return false;
+        }
+        if (!FindNext(TUPLE_GET(tag_map_.at(user_tag), tp_key),
+                      query_seqnum, &seqnum_lowhalf)) {
+            return false;
+        }
+    }
+    DCHECK(seqnum_map_.contains(seqnum_lowhalf));
     *seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
     DCHECK_GE(*seqnum, query_seqnum);
-    *engine_id = engine_ids_.at(seqnum_lowhalf);
+    *engine_id = TUPLE_GET(seqnum_map_.at(seqnum_lowhalf), TupleKey::EngineId);
     return true;
 }
 
@@ -196,6 +307,41 @@ bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
     }
 }
 
+bool Index::PerSpaceIndex::FindPrev(const absl::btree_set<uint32_t>& seqnums,
+                                    uint64_t query_seqnum, uint32_t* result_seqnum) const {
+    if (seqnums.empty() || bits::JoinTwo32(logspace_id_, *seqnums.begin()) > query_seqnum) {
+        return false;
+    }
+    if (query_seqnum == kMaxLogSeqNum) {
+        *result_seqnum = *seqnums.rbegin();
+        return true;
+    }
+    uint32_t target = bits::LowHalf64(query_seqnum);
+    auto iter = seqnums.upper_bound(target);
+    if (iter == seqnums.begin()) {
+        return false;
+    } else {
+        *result_seqnum = *(--iter);
+        return true;
+    }
+}
+
+bool Index::PerSpaceIndex::FindNext(const absl::btree_set<uint32_t>& seqnums,
+                                    uint64_t query_seqnum, uint32_t* result_seqnum) const {
+    if (seqnums.empty() || bits::JoinTwo32(logspace_id_, *seqnums.rbegin()) < query_seqnum) {
+        return false;
+    }
+    uint32_t target = bits::LowHalf64(query_seqnum);
+    auto iter = seqnums.lower_bound(target);
+    if (iter == seqnums.end()) {
+        return false;
+    } else {
+        *result_seqnum = *iter;
+        return true;
+    }
+}
+#undef TUPLE_GET
+
 void Index::ProvideIndexData(const IndexDataProto& index_data) {
     DCHECK_EQ(identifier(), index_data.logspace_id());
     int n = index_data.seqnum_halves_size();
@@ -233,6 +379,23 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
         data_received_seqnum_position_++;
     }
     AdvanceIndexProgress();
+}
+
+void Index::ProvideCacheUpdates(const std::vector<LRUCache::IndexUpdate>& updates) {
+    for (const LRUCache::IndexUpdate& update : updates) {
+        uint32_t logspace_id = bits::HighHalf64(update.seqnum);
+        DCHECK_EQ(identifier(), logspace_id);
+        uint32_t seqnum_lowhalf = bits::LowHalf64(update.seqnum);
+        if (update.op_type == tkrzw::CacheDBMUpdateLogger::OpType::OP_SET) {
+            GetOrCreateIndex(update.user_logspace)
+                ->UpdateCacheIndex(seqnum_lowhalf, /*cached=*/true);
+        } else if (update.op_type == tkrzw::CacheDBMUpdateLogger::OpType::OP_REMOVE) {
+            GetOrCreateIndex(update.user_logspace)
+                ->UpdateCacheIndex(seqnum_lowhalf, /*cached=*/false);
+        } else {
+            UNREACHABLE();
+        }
+    }
 }
 
 void Index::MakeQuery(const IndexQuery& query) {
@@ -391,7 +554,7 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
 // Read local index
 // FIXME: note that boki currently propagate log indices to all the engine
 // nodes, but it can be confitured to partial propagation, in which case
-// local query must support remote engine read!! (Skip just for now)
+// local query must support remote engine read!! (leave to future)
 bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadLocalId);
     // Local id is propagated by user atop function arguments, it may faster
@@ -474,6 +637,10 @@ void Index::ProcessReadNext(const IndexQuery& query) {
             } else {
                 pending_query_results_.push_back(BuildNotFoundResult(query));
                 HVLOG(1) << "ProcessReadNext: NotFoundResult";
+                // DEBUG
+                if (index_.contains(query.user_logspace)) {
+                    HVLOG(1) << GetOrCreateIndex(query.user_logspace)->Inspect();
+                }
             }
         }
     } else {
@@ -494,11 +661,8 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
         return;
     }
-    if (query.direction == IndexQuery::kReadPrevAux && !query.promised_auxdata.has_value()) {
-        pending_query_results_.push_back(BuildNotFoundResult(query));
-        HVLOG_F(1, "ProcessReadPrev: NotFoundResult no expected auxdata for tag={}", query.user_tag);
-        return;
-    }
+    // DEBUG
+    HVLOG(1) << GetOrCreateIndex(query.user_logspace)->Inspect();
     uint64_t seqnum;
     uint16_t engine_id;
     bool found = IndexFindPrev(query, &seqnum, &engine_id);
@@ -554,8 +718,13 @@ bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* e
     if (!index_.contains(query.user_logspace)) {
         return false;
     }
-    return GetOrCreateIndex(query.user_logspace)->FindPrev(
-        query.query_seqnum, query.user_tag, seqnum, engine_id);
+    if (query.direction == IndexQuery::kReadPrev) {
+        return GetOrCreateIndex(query.user_logspace)->FindPrev(
+            query.query_seqnum, query.user_tag, seqnum, engine_id);
+    } else {
+        return GetOrCreateIndex(query.user_logspace)->FindPrevCached(
+            query.query_seqnum, query.user_tag, seqnum, engine_id);
+    }
 }
 
 IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_id,

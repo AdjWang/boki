@@ -37,8 +37,10 @@ protected:
     virtual void BackgroundThreadMain() = 0;
     virtual void SendShardProgressIfNeeded() = 0;
 
-    void LogCachePutAuxData(uint64_t seqnum, std::span<const char> data);
-    std::optional<std::string> LogCacheGetAuxData(uint64_t seqnum);
+    void LogCachePutAuxData(uint32_t user_logspace, uint64_t seqnum,
+                            std::span<const char> data);
+    std::optional<std::string> LogCacheGetAuxData(uint32_t user_logspace,
+                                                  uint64_t seqnum);
 
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);

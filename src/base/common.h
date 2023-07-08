@@ -99,6 +99,7 @@ __BEGIN_THIRD_PARTY_HEADERS
 #include <absl/container/flat_hash_set.h>
 #include <absl/container/fixed_array.h>
 #include <absl/container/inlined_vector.h>
+#include <absl/container/btree_set.h>
 #include <absl/synchronization/mutex.h>
 #include <absl/synchronization/notification.h>
 #include <absl/functional/bind_front.h>

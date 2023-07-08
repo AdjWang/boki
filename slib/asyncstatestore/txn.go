@@ -3,12 +3,42 @@ package asyncstatestore
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
 
 	"cs.utexas.edu/zjia/faas/types"
 )
+
+const (
+	TxnCommit_Pending = iota
+	TxnCommit_Committed
+	TxnCommit_Aborted
+)
+
+type txnContextCache struct {
+	Committed        uint8           `json:"c"`
+	ConflictWriteSet map[string]bool `json:"w"` // write set that must be not overlapped with the transaction
+}
+
+func (txnc *txnContextCache) UnionWriteSet(logEntry *ObjectLogEntry) {
+	for key := range logEntry.writeSet {
+		txnc.ConflictWriteSet[key] = true
+	}
+}
+
+func (txnc *txnContextCache) WriteSetOverlapped(logEntry *ObjectLogEntry) bool {
+	if txnc.ConflictWriteSet == nil || logEntry.writeSet == nil {
+		return false
+	}
+	for key := range logEntry.writeSet {
+		if _, exists := txnc.ConflictWriteSet[key]; exists {
+			return true
+		}
+	}
+	return false
+}
 
 type txnContext struct {
 	active   bool
@@ -26,6 +56,8 @@ func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 			id:       seqNum,
 			ops:      make([]*WriteOp, 0, 4),
 		}
+		// DEBUG
+		log.Printf("[DEBUG] CreateTxn id=%v", seqNum)
 		return env, nil
 	} else {
 		return nil, err
@@ -121,6 +153,7 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 		return false, newRuntimeError(err.Error())
 	}
 	// log.Printf("[DEBUG] Append TxnCommit log: seqNum=%#016x, op_size=%d", seqNum, len(ctx.ops))
+	log.Printf("[DEBUG] Append TxnCommit log: seqNum=%d, %+v", seqNum, objectLog)
 	objectLog.fillWriteSet()
 	objectLog.seqNum = seqNum
 	// Check for status

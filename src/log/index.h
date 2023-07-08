@@ -1,6 +1,7 @@
 #pragma once
 
 #include "log/log_space_base.h"
+#include "log/cache.h"
 
 namespace faas {
 namespace log {
@@ -73,6 +74,7 @@ public:
     ~Index();
 
     void ProvideIndexData(const IndexDataProto& index_data);
+    void ProvideCacheUpdates(const std::vector<LRUCache::IndexUpdate>& updates);
 
     void MakeQuery(const IndexQuery& query);
 

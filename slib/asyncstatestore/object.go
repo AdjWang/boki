@@ -1,6 +1,9 @@
 package asyncstatestore
 
 import (
+	"encoding/json"
+	"log"
+
 	"cs.utexas.edu/zjia/faas/slib/common"
 
 	"cs.utexas.edu/zjia/faas/protocol"
@@ -12,6 +15,61 @@ type ObjectView struct {
 	name       string
 	nextSeqNum uint64
 	contents   *gabs.Container
+}
+
+func NewEmptyObjectView(name string) *ObjectView {
+	return &ObjectView{
+		name:       name,
+		nextSeqNum: 0,
+		contents:   gabs.New(),
+	}
+}
+
+func (view *ObjectView) ApplyLogEntry(objectLog *ObjectLogEntry) error {
+	if objectLog.seqNum < view.nextSeqNum {
+		log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
+	}
+	view.nextSeqNum = objectLog.seqNum + 1
+	for _, op := range objectLog.Ops {
+		if op.ObjName == view.name {
+			if _, err := view.applyWriteOp(op); err != nil {
+				return err
+			}
+		}
+	}
+	// DEBUG
+	log.Printf("[DEBUG] view=%+v after apply", view)
+	return nil
+}
+
+func SerializeViewsCache(obj interface{}) ([]byte, error) {
+	encoded, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	compressed := common.CompressData(encoded)
+	// DEBUG
+	log.Printf("[DEBUG] Serialize ObjectView: %v from %+v", string(compressed), obj)
+	if obj == nil {
+		panic("unreachable")
+	}
+	return compressed, nil
+}
+
+func DeserializeViewsCache(data []byte) (map[string]interface{}, error) {
+	// DEBUG
+	log.Printf("[DEBUG] Deserialize ObjectView: %v", string(data))
+
+	reader, err := common.DecompressReader(data)
+	if err != nil {
+		return nil, err
+	}
+	var views map[string]interface{}
+	err = json.NewDecoder(reader).Decode(&views)
+	if err != nil {
+		return nil, err
+	}
+	return views, nil
 }
 
 type ObjectRef struct {

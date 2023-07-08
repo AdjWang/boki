@@ -81,7 +81,7 @@ type Environment interface {
 	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*LogEntryWithMeta, error)
-	AsyncSharedLogCheckTailWithAux(ctx context.Context, tag uint64) (*LogEntryWithMeta, error)
+	AsyncSharedLogReadPrevWithAux(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogSetAuxData(ctx context.Context, tag uint64, seqNum uint64, auxData []byte) error
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, localId uint64) (*LogEntryWithMeta, error)

@@ -19,7 +19,16 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) {}
+      current_view_active_(false) {
+    // Setup cache
+    if (absl::GetFlag(FLAGS_slog_engine_enable_cache)) {
+        log_cache_enabled_ = true;
+        absl::MutexLock cache_lk(&cache_mu_);
+        log_cache_.reset(new LRUCache(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb)));
+    } else {
+        log_cache_enabled_ = false;
+    }
+}
 
 Engine::~Engine() {}
 
@@ -270,11 +279,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
         // Use local index
         IndexQuery query = BuildIndexQuery(op);
         Index::QueryResultVec query_results;
-        {
-            auto locked_index = index_ptr.Lock();
-            locked_index->MakeQuery(query);
-            locked_index->PollQueryResults(&query_results);
-        }
+        MakeQuery(index_ptr, query, &query_results);
         ProcessIndexQueryResults(query_results);
     } else {
         HVLOG_F(1, "There is no local index for sequencer {}, "
@@ -290,9 +295,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
 }
 
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
-    uint64_t tag = op->query_tag;
+    uint32_t user_logspace = op->user_logspace;
     uint64_t seqnum = op->seqnum;
-    LogCachePutAuxData(tag, seqnum, op->data.to_span());
+    LogCachePutAuxData(user_logspace, seqnum, op->data.to_span());
     Message response = MessageHelper::NewSharedLogOpSucceeded(
         SharedLogResultType::AUXDATA_OK, seqnum);
     FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
@@ -300,12 +305,12 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
         return;
     }
     if (auto log_entry = LogCacheGet(seqnum); log_entry.has_value()) {
-        if (auto aux_data = LogCacheGetAuxData(tag, seqnum); aux_data.has_value()) {
+        if (auto aux_data = LogCacheGetAuxData(user_logspace, seqnum); aux_data.has_value()) {
             uint16_t view_id = log_utils::GetViewId(seqnum);
             absl::ReaderMutexLock view_lk(&view_mu_);
             if (view_id < views_.size()) {
                 const View* view = views_.at(view_id);
-                PropagateAuxData(view, tag, log_entry->metadata, *aux_data);
+                PropagateAuxData(view, log_entry->metadata, *aux_data);
             }
         }
     }
@@ -347,11 +352,7 @@ void Engine::HandleRemoteRead(const SharedLogMessage& request) {
     }
     IndexQuery query = BuildIndexQuery(request);
     Index::QueryResultVec query_results;
-    {
-        auto locked_index = index_ptr.Lock();
-        locked_index->MakeQuery(query);
-        locked_index->PollQueryResults(&query_results);
-    }
+    MakeQuery(index_ptr, query, &query_results);
     ProcessIndexQueryResults(query_results);
 }
 
@@ -437,6 +438,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         if (result == SharedLogResultType::ASYNC_READ_OK) {
             response = BuildLocalAsyncReadOKResponse(seqnum);
             if (message.payload_size == 0) {
+                // no payload for now, only got the seqnum
                 LocalOp* op;
                 if (!onging_local_reads_.Peak(op_id, &op)) {
                     HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
@@ -444,6 +446,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 }
                 IntermediateLocalOpWithResponse(op, &response, message.user_metalog_progress);
             } else {
+                // got cached payload, should update local cache
                 LocalOp* op;
                 if (!onging_local_reads_.Poll(op_id, &op)) {
                     HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
@@ -465,7 +468,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
                 LogCachePut(log_metadata, user_tags, log_data);
                 if (aux_data.size() > 0) {
-                    LogCachePutAuxData(user_tags, seqnum, aux_data);
+                    LogCachePutAuxData(message.user_logspace, seqnum, aux_data);
                 }
             }
         } else if (result == SharedLogResultType::ASYNC_EMPTY) {
@@ -475,14 +478,14 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
                 return;
             }
-            FinishLocalOpWithFailure(
-                op, SharedLogResultType::EMPTY, message.user_metalog_progress);
+            FinishLocalOpWithFailure(op, SharedLogResultType::EMPTY,
+                                     message.user_metalog_progress);
         } else {
             UNREACHABLE();
         }
-    } else if (    result == SharedLogResultType::READ_OK
-                || result == SharedLogResultType::EMPTY
-                || result == SharedLogResultType::DATA_LOST) {
+    } else if (result == SharedLogResultType::READ_OK ||
+               result == SharedLogResultType::EMPTY ||
+               result == SharedLogResultType::DATA_LOST) {
         uint64_t op_id = message.client_data;
         LocalOp* op;
         if (!onging_local_reads_.Poll(op_id, &op)) {
@@ -506,11 +509,11 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
             LogCachePut(log_metadata, user_tags, log_data);
             if (aux_data.size() > 0) {
-                LogCachePutAuxData(user_tags, seqnum, aux_data);
+                LogCachePutAuxData(log_metadata.user_logspace, seqnum, aux_data);
             }
         } else if (result == SharedLogResultType::EMPTY) {
-            FinishLocalOpWithFailure(
-                op, SharedLogResultType::EMPTY, message.user_metalog_progress);
+            FinishLocalOpWithFailure(op, SharedLogResultType::EMPTY,
+                                     message.user_metalog_progress);
         } else if (result == SharedLogResultType::DATA_LOST) {
             HLOG_F(WARNING, "Receive DATA_LOST response for read request: seqnum={}, tag={}",
                    bits::HexStr0x(op->seqnum), op->query_tag);
@@ -557,10 +560,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         const LogEntry& log_entry = cached_log_entry.value();
         std::optional<std::string> cached_aux_data = query.promised_auxdata;
         if (!cached_aux_data.has_value()) {
-            // enter here for queries except READ_PREV_AUX
-            // use tag 0 as all boki's aux data shard to be compatible with boki
-            uint64_t tag = (query.type == IndexQuery::kAsync) ? query.user_tag : 0;
-            cached_aux_data = LogCacheGetAuxData(tag, seqnum);
+            // enter here for queries except read with aux, so aux cache miss is allowed
+            // and no need to lock the cache here.
+            cached_aux_data = LogCacheGetAuxData(query.user_logspace, seqnum);
         }
         std::span<const char> aux_data;
         if (cached_aux_data.has_value()) {
@@ -674,9 +676,7 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
     if (index_ptr != nullptr) {
         HVLOG(1) << "Use local index";
         IndexQuery query = BuildIndexQuery(query_result);
-        auto locked_index = index_ptr.Lock();
-        locked_index->MakeQuery(query);
-        locked_index->PollQueryResults(more_results);
+        MakeQuery(index_ptr, query, /*out*/more_results);
     } else {
         HVLOG(1) << "Send to remote index";
         SharedLogMessage request = BuildReadRequestMessage(query_result);
@@ -745,6 +745,95 @@ void Engine::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
     }
 }
 
+void Engine::LogCachePut(const LogMetaData& log_metadata,
+                             std::span<const uint64_t> user_tags,
+                             std::span<const char> log_data) {
+    if (!log_cache_enabled_) {
+        return;
+    }
+    HVLOG_F(1, "Store cache for log entry (seqnum {})", bits::HexStr0x(log_metadata.seqnum));
+    // Also update aux index here because log append cache and aux data cache
+    // share the same LRUCache backend.
+    absl::MutexLock cache_lk(&cache_mu_);
+    log_cache_->Put(log_metadata, user_tags, log_data);
+    std::optional<std::vector<LRUCache::IndexUpdate>> updates =
+        log_cache_->PopAuxUpdates();
+    if (!updates.has_value()) {
+        return;
+    }
+    UpdateLogCacheIndex(updates.value());
+}
+
+// NOTE: never place LogCacheGet inside index lock to prevent potential
+// deadlock
+std::optional<LogEntry> Engine::LogCacheGet(uint64_t seqnum) {
+    if (!log_cache_enabled_) {
+        return std::nullopt;
+    }
+    absl::ReaderMutexLock cache_lk(&cache_mu_);
+    return log_cache_->Get(seqnum);
+}
+
+void Engine::LogCachePutAuxData(uint32_t user_logspace, uint64_t seqnum,
+                                std::span<const char> data) {
+    if (!log_cache_enabled_) {
+        return;
+    }
+    absl::MutexLock cache_lk(&cache_mu_);
+    log_cache_->PutAuxData(user_logspace, seqnum, data);
+    std::optional<std::vector<LRUCache::IndexUpdate>> updates =
+        log_cache_->PopAuxUpdates();
+    if (!updates.has_value()) {
+        return;
+    }
+    UpdateLogCacheIndex(updates.value());
+}
+
+// NOTE: never place LogCacheGet inside index lock to prevent potential
+// deadlock
+std::optional<std::string> Engine::LogCacheGetAuxData(uint32_t user_logspace,
+                                                      uint64_t seqnum) {
+    if (!log_cache_enabled_) {
+        return std::nullopt;
+    }
+    absl::ReaderMutexLock cache_lk(&cache_mu_);
+    return log_cache_->GetAuxData(user_logspace, seqnum);
+}
+
+void Engine::UpdateLogCacheIndex(const std::vector<LRUCache::IndexUpdate>& updates) {
+    // separate by logspace_id to reduce locks required
+    absl::flat_hash_map<uint32_t /*logspace_id*/,
+                        std::vector<LRUCache::IndexUpdate>>
+        updates_by_logspace;    // physical logspace
+
+    for (const LRUCache::IndexUpdate& update : updates) {
+        uint32_t logspace_id = bits::HighHalf64(update.seqnum);
+        updates_by_logspace[logspace_id].push_back(update);
+    }
+    // provide to log index
+    for (const auto& [logspace_id, cache_updates] : updates_by_logspace) {
+        uint16_t view_id = bits::HighHalf32(logspace_id);
+        uint16_t sequencer_id = bits::LowHalf32(logspace_id);
+        {
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            DCHECK(view_id < views_.size());
+            const View* view = views_.at(view_id);
+            if (!view->contains_engine_node(my_node_id())) {
+                continue;
+            }
+            const View::Engine* engine_node = view->GetEngineNode(my_node_id());
+            if (!engine_node->HasIndexFor(sequencer_id)) {
+                continue;
+            }
+            auto index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+            {
+                auto locked_index = index_ptr.Lock();
+                locked_index->ProvideCacheUpdates(cache_updates);
+            }
+        }
+    }
+}
+
 SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     SharedLogMessage request = SharedLogMessageHelper::NewReadMessage(op->type);
@@ -780,23 +869,8 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
     return request;
 }
 
-void Engine::QueryOnView(IndexQuery* query) {
-    DCHECK(query != nullptr);
-    if (auto cached_log_entry = LogCacheGetLastAuxData(query->user_tag); cached_log_entry.has_value()) {
-        uint64_t seqnum = cached_log_entry.value().first;
-        HVLOG_F(1, "READ_PREV_AUX found aux cache tag={}, seqnum={:016X}->{:016X}",
-                    query->user_tag, query->query_seqnum, seqnum);
-        std::string aux_data = cached_log_entry.value().second;
-        query->query_seqnum = seqnum;
-        query->promised_auxdata = std::optional<std::string>(aux_data);
-    } else {
-        HVLOG_F(1, "READ_PREV_AUX not found aux cache tag={}, seqnum={:016X}",
-                    query->user_tag, query->query_seqnum);
-    }
-}
-
 IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
-    auto query = IndexQuery {
+    return IndexQuery {
         .type = protocol::SharedLogOpTypeHelper::IsAsyncSharedLogOp(op->type) ? \
                     IndexQuery::QueryType::kAsync : IndexQuery::QueryType::kSync,
         .direction = IndexQuery::DirectionFromOpType(op->type),
@@ -815,15 +889,11 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
             .seqnum = kInvalidLogSeqNum
         }
     };
-    if (op->type == SharedLogOpType::ASYNC_READ_PREV_AUX) {
-        QueryOnView(&query);
-    }
-    return query;
 }
 
 IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
-    auto query = IndexQuery {
+    return IndexQuery {
         .type = protocol::SharedLogOpTypeHelper::IsAsyncSharedLogOp(op_type) ? \
                     IndexQuery::QueryType::kAsync : IndexQuery::QueryType::kSync,
         .direction = IndexQuery::DirectionFromOpType(op_type),
@@ -842,10 +912,6 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
             .seqnum = message.prev_found_seqnum
         }
     };
-    if (op_type == SharedLogOpType::ASYNC_READ_PREV_AUX) {
-        QueryOnView(&query);
-    }
-    return query;
 }
 
 IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
@@ -855,6 +921,46 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
     query.metalog_progress = result.metalog_progress;
     query.prev_found_result = result.found_result;
     return query;
+}
+
+void Engine::MakeQuery(LockablePtr<Index>& index_ptr,
+                       IndexQuery& query,
+                       Index::QueryResultVec* query_results) {
+    DCHECK(query_results != nullptr);
+    if (query.direction != IndexQuery::ReadDirection::kReadPrevAux) {
+        {
+            auto locked_index = index_ptr.Lock();
+            locked_index->MakeQuery(query);
+            locked_index->PollQueryResults(/*out*/query_results);
+        }
+    } else {
+        // ReaderMutexLock on the cache should outside the index lock to prevent
+        // read cache index hit -> write cache -> read cache data not found
+        // NOTE: never place LogCacheGet inside index lock to prevent potential
+        // deadlock
+        absl::ReaderMutexLock cache_lk(&cache_mu_);
+        {
+            auto locked_index = index_ptr.Lock();
+            locked_index->MakeQuery(query);
+            locked_index->PollQueryResults(/*out*/query_results);
+        }
+        // get cached aux data
+        for (IndexQueryResult& query_result : *query_results) {
+            if (query_result.state != IndexQueryResult::State::kFound) {
+                continue;
+            }
+            const IndexQuery& original_query = query_result.original_query;
+            if (original_query.direction == IndexQuery::ReadDirection::kReadPrevAux) {
+                DCHECK(!original_query.promised_auxdata.has_value());
+                auto cached_auxdata = LogCacheGetAuxData(original_query.user_logspace,
+                                                          query_result.found_result.seqnum);
+                DCHECK(cached_auxdata.has_value())
+                    << fmt::format("READ_PREV_AUX not found aux cache tag={}, seqnum={:016X}",
+                                    original_query.user_tag, original_query.query_seqnum);
+                query_result.original_query.promised_auxdata = cached_auxdata;
+            }
+        }
+    }
 }
 
 }  // namespace log

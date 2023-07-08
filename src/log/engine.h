@@ -3,6 +3,7 @@
 #include "log/engine_base.h"
 #include "log/log_space.h"
 #include "log/index.h"
+#include "log/cache.h"
 #include "log/utils.h"
 
 namespace faas {
@@ -28,6 +29,11 @@ private:
         producer_collection_         ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<Index>
         index_collection_            ABSL_GUARDED_BY(view_mu_);
+
+    // Use cache lock to make aux index&data r/w atomically
+    absl::Mutex cache_mu_;
+    std::unique_ptr<LRUCache> log_cache_ ABSL_GUARDED_BY(cache_mu_);
+    bool log_cache_enabled_;
 
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_local_reads_;
@@ -57,6 +63,16 @@ private:
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                     Index::QueryResultVec* more_results);
 
+    void LogCachePut(const LogMetaData& log_metadata,
+                     std::span<const uint64_t> user_tags,
+                     std::span<const char> log_data);
+    std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
+    void LogCachePutAuxData(uint32_t user_logspace, uint64_t seqnum,
+                            std::span<const char> data);
+    std::optional<std::string> LogCacheGetAuxData(uint32_t user_logspace,
+                                                  uint64_t seqnum);
+    void UpdateLogCacheIndex(const std::vector<LRUCache::IndexUpdate>& updates);
+
     inline LogMetaData MetaDataFromAppendOp(LocalOp* op) {
         DCHECK(op->type == protocol::SharedLogOpType::APPEND
             || op->type == protocol::SharedLogOpType::ASYNC_APPEND);
@@ -72,10 +88,12 @@ private:
     protocol::SharedLogMessage BuildReadRequestMessage(LocalOp* op);
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
-    void QueryOnView(IndexQuery* query);
     IndexQuery BuildIndexQuery(LocalOp* op);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
+    void MakeQuery(LockablePtr<Index>& index_ptr,
+                   IndexQuery& query,
+                   Index::QueryResultVec* query_results);
 
     DISALLOW_COPY_AND_ASSIGN(Engine);
 };

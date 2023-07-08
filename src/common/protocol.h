@@ -134,6 +134,10 @@ public:
             || op_type == SharedLogOpType::ASYNC_READ_PREV
             || op_type == SharedLogOpType::ASYNC_READ_LOCALID;
     }
+
+    static bool IsFuncReadWithAux(SharedLogOpType op_type) {
+        return op_type == SharedLogOpType::ASYNC_READ_PREV_AUX;
+    }
 };
 
 enum class SharedLogResultType : uint16_t {
@@ -607,10 +611,10 @@ public:
         return message;
     }
 
-    static SharedLogMessage NewSetAuxDataMessage(uint64_t tag, uint64_t seqnum) {
+    static SharedLogMessage NewSetAuxDataMessage(uint32_t user_logspace, uint64_t seqnum) {
         NEW_EMPTY_SHAREDLOG_MESSAGE(message);
         message.op_type = static_cast<uint16_t>(SharedLogOpType::SET_AUXDATA);
-        message.query_tag = tag;
+        message.user_logspace = user_logspace;
         message.logspace_id = bits::HighHalf64(seqnum);
         message.seqnum_lowhalf = bits::LowHalf64(seqnum);
         return message;

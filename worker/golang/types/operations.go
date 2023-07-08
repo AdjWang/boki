@@ -3,6 +3,8 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/pkg/errors"
 )
 
 func check(err error) {
@@ -81,12 +83,12 @@ func UnwrapData(rawData []byte) (*logDataWrapperImpl, []byte, error) {
 	var wrapperData DataWrapper
 	err := json.Unmarshal(rawData, &wrapperData)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.Wrapf(err, "Failed to unmarshal json to DataWrapper: %v", rawData)
 	} else {
 		var meta logDataWrapperImpl
 		err = json.Unmarshal(wrapperData.Meta, &meta)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.Wrapf(err, "Failed to unmarshal json to logDataWrapperImpl: %v", wrapperData.Meta)
 		}
 		return &meta, wrapperData.Data, nil
 	}

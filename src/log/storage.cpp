@@ -207,7 +207,7 @@ void Storage::OnRecvLogAuxData(const protocol::SharedLogMessage& message,
                                std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::SET_AUXDATA);
     uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
-    LogCachePutAuxData(seqnum, payload);
+    LogCachePutAuxData(message.user_logspace, seqnum, payload);
 }
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
@@ -278,7 +278,8 @@ void Storage::SendEngineLogResult(const protocol::SharedLogMessage& request,
                                   std::span<const char> tags_data,
                                   std::span<const char> log_data) {
     uint64_t seqnum = bits::JoinTwo32(response->logspace_id, response->seqnum_lowhalf);
-    std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
+    std::optional<std::string> cached_aux_data = LogCacheGetAuxData(response->user_logspace,
+                                                                    seqnum);
     std::span<const char> aux_data;
     if (cached_aux_data.has_value()) {
         size_t full_size = log_data.size() + tags_data.size() + cached_aux_data->size();
