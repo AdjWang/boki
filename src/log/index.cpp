@@ -181,8 +181,6 @@ void Index::PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
 }
 
 void Index::PerSpaceIndex::UpdateCacheIndex(uint32_t seqnum_lowhalf, bool cached) {
-    HVLOG_F(1, "UpdateCacheIndex seqnum={}, cached={}",
-                bits::JoinTwo32(logspace_id_, seqnum_lowhalf), cached);
     if (!seqnum_map_.contains(seqnum_lowhalf)) {
         return;
     }
@@ -662,7 +660,7 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
         return;
     }
     // DEBUG
-    HVLOG(1) << GetOrCreateIndex(query.user_logspace)->Inspect();
+    // HVLOG(1) << GetOrCreateIndex(query.user_logspace)->Inspect();
     uint64_t seqnum;
     uint16_t engine_id;
     bool found = IndexFindPrev(query, &seqnum, &engine_id);

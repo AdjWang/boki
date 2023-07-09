@@ -1080,11 +1080,8 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	}
 }
 
-// TODO: add batch set API
-// func (w *FuncWorker) AsyncSharedLogSetAuxData(ctx context.Context, tags []uint64, seqNum uint64, auxData []byte) error {
-
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogSetAuxData(ctx context.Context, tag uint64, seqNum uint64, auxData []byte) error {
+func (w *FuncWorker) AsyncSharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error {
 	if len(auxData) == 0 {
 		return fmt.Errorf("Auxiliary data cannot be empty")
 	}
@@ -1094,7 +1091,7 @@ func (w *FuncWorker) AsyncSharedLogSetAuxData(ctx context.Context, tag uint64, s
 
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogSetAuxDataMessageWithShard(currentCallId, w.clientId, tag, seqNum, id)
+	message := protocol.NewSharedLogSetAuxDataMessage(currentCallId, w.clientId, seqNum, id)
 	protocol.FillInlineDataInMessage(message, auxData)
 
 	w.mux.Lock()
