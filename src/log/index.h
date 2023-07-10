@@ -1,6 +1,7 @@
 #pragma once
 
 #include "log/log_space_base.h"
+#include "log/cache.h"
 
 namespace faas {
 namespace log {
@@ -9,6 +10,7 @@ struct IndexFoundResult {
     uint16_t view_id;
     uint16_t engine_id;
     uint64_t seqnum;
+    std::optional<std::string> aux_data;
 };
 
 struct IndexQuery {
@@ -27,7 +29,6 @@ struct IndexQuery {
     uint16_t hop_times;
     bool     initial;
     uint64_t client_data;
-    std::optional<std::string> promised_auxdata;
 
     uint32_t user_logspace;
     uint64_t user_tag;
@@ -54,13 +55,13 @@ class DebugQueryResultVec final : public absl::InlinedVector<IndexQueryResult, 4
 public:
     void push_back(const IndexQueryResult& v) {
         // DEBUG
-        DCHECK(v.original_query.origin_node_id != 28524) << utils::DumpStackTrace();
+        DCHECK(v.original_query.origin_node_id != 28524) << debug::DumpStackTrace();
         static_cast<void>(emplace_back(v));
     }
 
     void push_back(IndexQueryResult&& v) {
         // DEBUG
-        DCHECK(v.original_query.origin_node_id != 28524) << utils::DumpStackTrace();
+        DCHECK(v.original_query.origin_node_id != 28524) << debug::DumpStackTrace();
         static_cast<void>(emplace_back(std::move(v)));
     }
 };
@@ -69,7 +70,7 @@ class Index final : public LogSpaceBase {
 public:
     static constexpr absl::Duration kBlockingQueryTimeout = absl::Seconds(1);
 
-    Index(const View* view, uint16_t sequencer_id);
+    Index(const View* view, uint16_t sequencer_id, std::optional<LRUCache>& cache);
     ~Index();
 
     void ProvideIndexData(const IndexDataProto& index_data);
@@ -114,6 +115,8 @@ private:
     };
     std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
 
+    std::optional<LRUCache>& cache_;
+
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);
     }
@@ -129,17 +132,53 @@ private:
     void ProcessReadPrev(const IndexQuery& query);
     bool ProcessBlockingQuery(const IndexQuery& query);
 
-    bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
-    bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+    bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum,
+                       uint16_t* engine_id,
+                       /*out*/ std::optional<std::string>& aux_data);
+    bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum,
+                       uint16_t* engine_id,
+                       /*out*/ std::optional<std::string>& aux_data);
 
-    IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
-                                      uint64_t seqnum, uint16_t engine_id);
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
-    IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
-                                         uint64_t seqnum, uint16_t engine_id);
+    IndexQueryResult BuildFoundResult(
+        const IndexQuery& query, uint16_t view_id, uint64_t seqnum,
+        uint16_t engine_id, const std::optional<std::string>& aux_data);
+    IndexQueryResult BuildFoundResult(
+        const IndexQuery& query, uint16_t view_id, uint64_t seqnum,
+        uint16_t engine_id, const std::optional<std::string>&& aux_data);
+    IndexQueryResult BuildContinueResult(
+        const IndexQuery& query, bool found, uint64_t seqnum,
+        uint16_t engine_id, const std::optional<std::string>& aux_data);
+    IndexQueryResult BuildContinueResult(
+        const IndexQuery& query, bool found, uint64_t seqnum,
+        uint16_t engine_id, const std::optional<std::string>&& aux_data);
 
     DISALLOW_COPY_AND_ASSIGN(Index);
 };
 
 }  // namespace log
 }  // namespace faas
+
+template <> struct fmt::formatter<faas::log::IndexQuery::ReadDirection>: formatter<std::string_view> {
+    auto format(faas::log::IndexQuery::ReadDirection dir, format_context& ctx) const {
+        std::string_view result = "unknown";
+        switch (dir) {
+            case faas::log::IndexQuery::ReadDirection::kReadNext:
+                result = "kReadNext";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadPrev:
+                result = "kReadPrev";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadPrevAux:
+                result = "kReadPrevAux";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadNextB:
+                result = "kReadNextB";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadLocalId:
+                result = "kReadLocalId";
+                break;
+        }
+        return formatter<string_view>::format(result, ctx);
+    }
+};

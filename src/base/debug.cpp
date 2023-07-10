@@ -1,7 +1,7 @@
 #include "debug.h"
 
 namespace faas {
-namespace utils {
+namespace debug {
 
 // Print a program counter and its symbol name.
 static std::string DumpPCAndSymbol(void *pc) {
@@ -27,6 +27,6 @@ std::string DumpStackTrace() {
     return res;
 }
 
-}  // namespace utils
+}  // namespace debug
 }  // namespace faas
 

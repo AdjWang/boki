@@ -29,6 +29,8 @@ private:
     LogSpaceCollection<Index>
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
+    std::optional<LRUCache> log_cache_;
+
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_local_reads_;
 
@@ -69,10 +71,15 @@ private:
         };
     }
 
+    void LogCachePut(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
+                     std::span<const char> log_data);
+    std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
+    void LogCachePutAuxData(uint64_t seqnum, std::span<const char> data);
+    std::optional<std::string> LogCacheGetAuxData(uint64_t seqnum);
+
     protocol::SharedLogMessage BuildReadRequestMessage(LocalOp* op);
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
-    void QueryOnView(IndexQuery* query);
     IndexQuery BuildIndexQuery(LocalOp* op);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);

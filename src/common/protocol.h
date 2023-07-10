@@ -3,7 +3,7 @@
 #include "base/common.h"
 #include "common/time.h"
 #include "utils/bits.h"
-#include "utils/debug.h"
+#include "base/debug.h"
 
 namespace faas {
 namespace protocol {
@@ -607,10 +607,9 @@ public:
         return message;
     }
 
-    static SharedLogMessage NewSetAuxDataMessage(uint64_t tag, uint64_t seqnum) {
+    static SharedLogMessage NewSetAuxDataMessage(uint64_t seqnum) {
         NEW_EMPTY_SHAREDLOG_MESSAGE(message);
         message.op_type = static_cast<uint16_t>(SharedLogOpType::SET_AUXDATA);
-        message.query_tag = tag;
         message.logspace_id = bits::HighHalf64(seqnum);
         message.seqnum_lowhalf = bits::LowHalf64(seqnum);
         return message;

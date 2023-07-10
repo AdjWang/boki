@@ -300,19 +300,12 @@ func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, 
 	return buffer
 }
 
-// for boki
 func NewSharedLogSetAuxDataMessage(currentCallId uint64, myClientId uint16, seqNum uint64, clientData uint64) []byte {
-	return NewSharedLogSetAuxDataMessageWithShard(currentCallId, myClientId, 0 /*tag*/, seqNum, clientData)
-}
-
-// for asynclog
-func NewSharedLogSetAuxDataMessageWithShard(currentCallId uint64, myClientId uint16, tag uint64, seqNum uint64, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
 	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_SET_AUXDATA)
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
-	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
 	return buffer

@@ -3,10 +3,10 @@
 #include "base/common.h"
 
 namespace faas {
-namespace utils {
+namespace debug {
 
 std::string DumpStackTrace();
 
-}  // namespace utils
+}  // namespace debug
 }  // namespace faas
 

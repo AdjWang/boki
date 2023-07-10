@@ -102,105 +102,105 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
 }
 
 
-ShardedLRUCache::ShardedLRUCache(int mem_cap_mb)
-    : log_header_("LogCache[]: "),
-      mem_cap_mb_(mem_cap_mb) {}
-
-ShardedLRUCache::~ShardedLRUCache() {}
-
-void ShardedLRUCache::PutAuxData(uint64_t tag, uint64_t seqnum, std::span<const char> data) {
-    HVLOG_F(1, "ShardedLRUCache::PutAuxData tag={}, seqnum=0x{:016X}", tag, seqnum);
-    std::string key_str = fmt::format("1_{:016x}", seqnum);
-    GetOrCreateDBM(tag)->Set(key_str, std::string_view(data.data(), data.size()),
-                             /* overwrite= */ true);
-}
-
-std::optional<std::string> ShardedLRUCache::GetAuxData(uint64_t tag, uint64_t seqnum) {
-    std::string key_str = fmt::format("1_{:016x}", seqnum);
-    std::string data;
-    tkrzw::CacheDBM* dbm = GetDBM(tag);
-    int64_t count = 0;
-    if (dbm == nullptr || dbm->Count(&count) != tkrzw::Status::SUCCESS || count == 0) {
-        HVLOG_F(1, "ShardedLRUCache::GetAuxData tag={}, seqnum=0x{:016X}, found=false", tag, seqnum);
-        return std::nullopt;
-    }
-    auto status = dbm->Get(key_str, &data);
-    HVLOG_F(1, "ShardedLRUCache::GetAuxData tag={}, seqnum=0x{:016X}, found={}", tag, seqnum, status.IsOK());
-    if (status.IsOK()) {
-        return data;
-    } else {
-        return std::nullopt;
-    }
-}
-
-std::optional<std::pair<std::uint64_t, std::string>> ShardedLRUCache::GetLastAuxData(uint64_t tag) {
-    tkrzw::CacheDBM* dbm = GetDBM(tag);
-    int64_t count = 0;
-    if (dbm == nullptr || !dbm->Count(&count).IsOK() || count == 0) {
-        HVLOG_F(1, "ShardedLRUCache::GetTailAuxData tag={}, found=false", tag);
-        return std::nullopt;
-    }
-    bool found = false;
-    std::string max_seqnum(fmt::format("1_{:016x}", 0));
-    std::string data;
-    std::unique_ptr<tkrzw::DBM::Iterator> iter = dbm->MakeIterator();
-    iter->First();
-    std::string key, value;
-    HVLOG_F(1, "ShardedLRUCache::GetTailAuxData iter count={}", count);
-    while (iter->Get(&key, &value).IsOK()) {
-        // HVLOG_F(1, "ShardedLRUCache::GetTailAuxData iter recs key={}, value={}", key, value);
-        if (max_seqnum.compare(key) <= 0) {
-            found = true;
-            max_seqnum = key;
-            data = value;
-        }
-        iter->Next();
-    }
-    if (found) {
-        DCHECK(data != "");
-        char *end = nullptr;
-        // +2 to skip "1_"
-        uint64_t seqnum = std::strtoul((max_seqnum.c_str()+2), &end, 16);
-        HVLOG_F(1, "ShardedLRUCache::GetTailAuxData tag={}, found: seqnum=0x{:016X}", tag, seqnum);
-        return std::make_pair(seqnum, data);
-    } else {
-        HVLOG_F(1, "ShardedLRUCache::GetTailAuxData tag={}, found=false", tag);
-        return std::nullopt;
-    }
-}
-
-tkrzw::CacheDBM* ShardedLRUCache::GetDBM(uint64_t tag) {
-    absl::ReaderMutexLock lk(&mu_);
-    if (dbs_.contains(tag)) {
-        return dbs_.at(tag).get();
-    } else {
-        return nullptr;
-    }
-}
-
-tkrzw::CacheDBM* ShardedLRUCache::GetOrCreateDBM(uint64_t tag) {
-    tkrzw::CacheDBM* dbm = GetDBM(tag);
-    if (dbm != nullptr) {
-        return dbm;
-    } else {
-        int64_t cap_mem_size = -1;
-        if (mem_cap_mb_ > 0) {
-            cap_mem_size = int64_t{mem_cap_mb_} << 20;
-        }
-        HVLOG_F(1, "ShardedLRUCache::GetOrCreateDBM new CacheDBM for tag={}, cap={}", tag, cap_mem_size);
-        dbm = new tkrzw::CacheDBM(/* cap_rec_num= */ -1, cap_mem_size);
-        {
-            absl::MutexLock lk(&mu_);
-            if (!dbs_.contains(tag)) {
-                dbs_[tag].reset(DCHECK_NOTNULL(dbm));
-                return dbm;
-            } else {
-                delete dbm;
-                return dbs_.at(tag).get();
-            }
-        }
-    }
-}
+// ShardedLRUCache::ShardedLRUCache(int mem_cap_mb)
+//     : log_header_("LogCache[]: "),
+//       mem_cap_mb_(mem_cap_mb) {}
+// 
+// ShardedLRUCache::~ShardedLRUCache() {}
+// 
+// void ShardedLRUCache::PutAuxData(uint64_t tag, uint64_t seqnum, std::span<const char> data) {
+//     HVLOG_F(1, "ShardedLRUCache::PutAuxData tag={}, seqnum=0x{:016X}", tag, seqnum);
+//     std::string key_str = fmt::format("1_{:016x}", seqnum);
+//     GetOrCreateDBM(tag)->Set(key_str, std::string_view(data.data(), data.size()),
+//                              /* overwrite= */ true);
+// }
+// 
+// std::optional<std::string> ShardedLRUCache::GetAuxData(uint64_t tag, uint64_t seqnum) {
+//     std::string key_str = fmt::format("1_{:016x}", seqnum);
+//     std::string data;
+//     tkrzw::CacheDBM* dbm = GetDBM(tag);
+//     int64_t count = 0;
+//     if (dbm == nullptr || dbm->Count(&count) != tkrzw::Status::SUCCESS || count == 0) {
+//         HVLOG_F(1, "ShardedLRUCache::GetAuxData tag={}, seqnum=0x{:016X}, found=false", tag, seqnum);
+//         return std::nullopt;
+//     }
+//     auto status = dbm->Get(key_str, &data);
+//     HVLOG_F(1, "ShardedLRUCache::GetAuxData tag={}, seqnum=0x{:016X}, found={}", tag, seqnum, status.IsOK());
+//     if (status.IsOK()) {
+//         return data;
+//     } else {
+//         return std::nullopt;
+//     }
+// }
+// 
+// std::optional<std::pair<std::uint64_t, std::string>> ShardedLRUCache::GetLastAuxData(uint64_t tag) {
+//     tkrzw::CacheDBM* dbm = GetDBM(tag);
+//     int64_t count = 0;
+//     if (dbm == nullptr || !dbm->Count(&count).IsOK() || count == 0) {
+//         HVLOG_F(1, "ShardedLRUCache::GetTailAuxData tag={}, found=false", tag);
+//         return std::nullopt;
+//     }
+//     bool found = false;
+//     std::string max_seqnum(fmt::format("1_{:016x}", 0));
+//     std::string data;
+//     std::unique_ptr<tkrzw::DBM::Iterator> iter = dbm->MakeIterator();
+//     iter->First();
+//     std::string key, value;
+//     HVLOG_F(1, "ShardedLRUCache::GetTailAuxData iter count={}", count);
+//     while (iter->Get(&key, &value).IsOK()) {
+//         // HVLOG_F(1, "ShardedLRUCache::GetTailAuxData iter recs key={}, value={}", key, value);
+//         if (max_seqnum.compare(key) <= 0) {
+//             found = true;
+//             max_seqnum = key;
+//             data = value;
+//         }
+//         iter->Next();
+//     }
+//     if (found) {
+//         DCHECK(data != "");
+//         char *end = nullptr;
+//         // +2 to skip "1_"
+//         uint64_t seqnum = std::strtoul((max_seqnum.c_str()+2), &end, 16);
+//         HVLOG_F(1, "ShardedLRUCache::GetTailAuxData tag={}, found: seqnum=0x{:016X}", tag, seqnum);
+//         return std::make_pair(seqnum, data);
+//     } else {
+//         HVLOG_F(1, "ShardedLRUCache::GetTailAuxData tag={}, found=false", tag);
+//         return std::nullopt;
+//     }
+// }
+// 
+// tkrzw::CacheDBM* ShardedLRUCache::GetDBM(uint64_t tag) {
+//     absl::ReaderMutexLock lk(&mu_);
+//     if (dbs_.contains(tag)) {
+//         return dbs_.at(tag).get();
+//     } else {
+//         return nullptr;
+//     }
+// }
+// 
+// tkrzw::CacheDBM* ShardedLRUCache::GetOrCreateDBM(uint64_t tag) {
+//     tkrzw::CacheDBM* dbm = GetDBM(tag);
+//     if (dbm != nullptr) {
+//         return dbm;
+//     } else {
+//         int64_t cap_mem_size = -1;
+//         if (mem_cap_mb_ > 0) {
+//             cap_mem_size = int64_t{mem_cap_mb_} << 20;
+//         }
+//         HVLOG_F(1, "ShardedLRUCache::GetOrCreateDBM new CacheDBM for tag={}, cap={}", tag, cap_mem_size);
+//         dbm = new tkrzw::CacheDBM(/* cap_rec_num= */ -1, cap_mem_size);
+//         {
+//             absl::MutexLock lk(&mu_);
+//             if (!dbs_.contains(tag)) {
+//                 dbs_[tag].reset(DCHECK_NOTNULL(dbm));
+//                 return dbm;
+//             } else {
+//                 delete dbm;
+//                 return dbs_.at(tag).get();
+//             }
+//         }
+//     }
+// }
 
 }  // namespace log
 }  // namespace faas

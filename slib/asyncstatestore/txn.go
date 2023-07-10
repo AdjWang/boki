@@ -3,6 +3,7 @@ package asyncstatestore
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -15,6 +16,10 @@ type txnContext struct {
 	readonly bool
 	id       uint64 // TxnId is the seqnum of TxnBegin log
 	ops      []*WriteOp
+}
+
+func (txnCtx *txnContext) String() string {
+	return fmt.Sprintf("%+v", txnCtx)
 }
 
 func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
@@ -73,7 +78,9 @@ func (env *envImpl) TxnAbort() error {
 		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
 		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(ctx.id)},
 	}
-	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id}); err == nil {
+	// TODO: use deps on combined index
+	// if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id}); err == nil {
+	if future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, common.CompressData(encoded)); err == nil {
 		// ensure durability
 		return future.Await(common.AsyncWaitTimeout)
 	} else {
@@ -111,7 +118,9 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 			StreamId:   objectLogTag(common.NameHash(op.ObjName)),
 		})
 	}
-	future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id})
+	// TODO: use deps on combined index
+	// future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id})
+	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
 	if err != nil {
 		return false, newRuntimeError(err.Error())
 	}

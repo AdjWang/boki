@@ -55,11 +55,12 @@ protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
     }
 }
 
-Index::Index(const View* view, uint16_t sequencer_id)
+Index::Index(const View* view, uint16_t sequencer_id, std::optional<LRUCache>& cache)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       indexed_metalog_position_(0),
       data_received_seqnum_position_(0),
-      indexed_seqnum_position_(0) {
+      indexed_seqnum_position_(0),
+      cache_(cache) {
     log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
 }
@@ -68,35 +69,68 @@ Index::~Index() {}
 
 class Index::PerSpaceIndex {
 public:
-    PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace);
+    PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace,
+                  std::optional<LRUCache>& cache);
     ~PerSpaceIndex() {}
 
     void Add(uint32_t seqnum_lowhalf, uint16_t engine_id, const UserTagVec& user_tags);
 
-    bool FindPrev(uint64_t query_seqnum, uint64_t user_tag,
-                  uint64_t* seqnum, uint16_t* engine_id) const;
-    bool FindNext(uint64_t query_seqnum, uint64_t user_tag,
-                  uint64_t* seqnum, uint16_t* engine_id) const;
+    bool FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint64_t* seqnum,
+                  uint16_t* engine_id, size_t* index = nullptr) const;
+    bool FindNext(uint64_t query_seqnum, uint64_t user_tag, uint64_t* seqnum,
+                  uint16_t* engine_id, size_t* index = nullptr) const;
+    bool FindNextAuxData(size_t seqnum_index, uint64_t user_tag,
+                         uint64_t* seqnum,
+                         /*out*/std::string& aux_data) const;
+    bool FindPrevAuxData(size_t seqnum_index, uint64_t user_tag,
+                         uint64_t* seqnum,
+                         /*out*/std::string& aux_data) const;
 
-private:
+    // DEBUG
+    std::string Inspect() const;
+
+   private:
+    std::string log_header_;
     uint32_t logspace_id_;
     uint32_t user_logspace_;
+    std::optional<LRUCache>& cache_;
 
     absl::flat_hash_map</* seqnum */ uint32_t, uint16_t> engine_ids_;
     std::vector<uint32_t> seqnums_;
     absl::flat_hash_map</* tag */ uint64_t, std::vector<uint32_t>> seqnums_by_tag_;
 
     bool FindPrev(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
-                  uint32_t* result_seqnum) const;
+                  uint32_t* result_seqnum, size_t* index) const;
     bool FindNext(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
-                  uint32_t* result_seqnum) const;
+                  uint32_t* result_seqnum, size_t* index) const;
 
     DISALLOW_COPY_AND_ASSIGN(PerSpaceIndex);
 };
 
-Index::PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
-    : logspace_id_(logspace_id),
-      user_logspace_(user_logspace) {}
+std::string Index::PerSpaceIndex::Inspect() const {
+    std::string output("PerSpaceIndex::Inspact:\n");
+    for (const auto& [tag, seqnums] : seqnums_by_tag_) {
+        std::stringstream ss;
+        for (const uint32_t seqnum : seqnums) {
+            ss << fmt::format("0x{:016X}, ", bits::JoinTwo32(logspace_id_, seqnum));
+        }
+        ss << "\b\b  \b\b";  // remove tailing 2 characters
+        if (seqnums.empty()) {
+            output.append(fmt::format("tag={}, seqnums=[none]\n", tag));
+        } else {
+            output.append(fmt::format("tag={}, seqnums=[{}]\n", tag, ss.str()));
+        }
+    }
+    return output;
+}
+
+Index::PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id,
+                                    uint32_t user_logspace,
+                                    std::optional<LRUCache>& cache)
+    : log_header_(fmt::format("PerSpaceIndex[{}-{}]: ", logspace_id, user_logspace)),
+      logspace_id_(logspace_id),
+      user_logspace_(user_logspace),
+      cache_(cache) {}
 
 void Index::PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
                                const UserTagVec& user_tags) {
@@ -111,17 +145,18 @@ void Index::PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
 }
 
 bool Index::PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
-                                    uint64_t* seqnum, uint16_t* engine_id) const {
+                                    uint64_t* seqnum, uint16_t* engine_id,
+                                    size_t* index) const {
     uint32_t seqnum_lowhalf;
     if (user_tag == kEmptyLogTag) {
-        if (!FindPrev(seqnums_, query_seqnum, &seqnum_lowhalf)) {
+        if (!FindPrev(seqnums_, query_seqnum, &seqnum_lowhalf, index)) {
             return false;
         }
     } else {
         if (!seqnums_by_tag_.contains(user_tag)) {
             return false;
         }
-        if (!FindPrev(seqnums_by_tag_.at(user_tag), query_seqnum, &seqnum_lowhalf)) {
+        if (!FindPrev(seqnums_by_tag_.at(user_tag), query_seqnum, &seqnum_lowhalf, index)) {
             return false;
         }
     }
@@ -133,17 +168,18 @@ bool Index::PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
 }
 
 bool Index::PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
-                                    uint64_t* seqnum, uint16_t* engine_id) const {
+                                    uint64_t* seqnum, uint16_t* engine_id,
+                                    size_t* index) const {
     uint32_t seqnum_lowhalf;
     if (user_tag == kEmptyLogTag) {
-        if (!FindNext(seqnums_, query_seqnum, &seqnum_lowhalf)) {
+        if (!FindNext(seqnums_, query_seqnum, &seqnum_lowhalf, index)) {
             return false;
         }
     } else {
         if (!seqnums_by_tag_.contains(user_tag)) {
             return false;
         }
-        if (!FindNext(seqnums_by_tag_.at(user_tag), query_seqnum, &seqnum_lowhalf)) {
+        if (!FindNext(seqnums_by_tag_.at(user_tag), query_seqnum, &seqnum_lowhalf, index)) {
             return false;
         }
     }
@@ -154,13 +190,72 @@ bool Index::PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
     return true;
 }
 
+bool Index::PerSpaceIndex::FindPrevAuxData(size_t seqnum_index, uint64_t user_tag,
+                                           uint64_t* seqnum,
+                                           /*out*/std::string& aux_data) const {
+    if (!cache_.has_value()) {
+        return false;
+    }
+    DCHECK(seqnum != nullptr);
+    DCHECK(seqnums_by_tag_.contains(user_tag));
+    const std::vector<uint32_t>& seqnums(seqnums_by_tag_.at(user_tag));
+    DCHECK(seqnums.size() > 0);
+    if (seqnum_index == 0) {
+        uint32_t seqnum_lowhalf = seqnums[seqnum_index];
+        uint64_t temp_seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
+        if(auto data = cache_->GetAuxData(temp_seqnum); data.has_value()) {
+            HVLOG(1) << "FindPrevWithAuxData iter_count=0";
+            *seqnum = temp_seqnum;
+            aux_data = data.value();
+            return true;
+        }
+    } else {
+        for (size_t i = seqnum_index - 1; i > 0; --i) {
+            DCHECK(i < seqnums.size()) << fmt::format("i={}, seqnums.size()={}", i, seqnums.size());
+            uint32_t seqnum_lowhalf = seqnums[i];
+            uint64_t temp_seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
+            if(auto data = cache_->GetAuxData(temp_seqnum); data.has_value()) {
+                HVLOG_F(1, "FindPrevWithAuxData iter_count={}", seqnum_index - i);
+                *seqnum = temp_seqnum;
+                aux_data = data.value();
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool Index::PerSpaceIndex::FindNextAuxData(size_t seqnum_index, uint64_t user_tag,
+                                           uint64_t* seqnum,
+                                           /*out*/std::string& aux_data) const {
+    if (!cache_.has_value()) {
+        return false;
+    }
+    const std::vector<uint32_t>& seqnums(seqnums_by_tag_.at(user_tag));
+    for (size_t i = seqnum_index; i < seqnums.size(); ++i) {
+        uint32_t seqnum_lowhalf = seqnums[i];
+        uint64_t temp_seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
+        if(auto data = cache_->GetAuxData(temp_seqnum); data.has_value()) {
+            HVLOG_F(1, "FindNextWithAuxData iter_count={}", i - seqnum_index + 1);
+            *seqnum = temp_seqnum;
+            aux_data = data.value();
+            return true;
+        }
+    }
+    return false;
+}
+
 bool Index::PerSpaceIndex::FindPrev(const std::vector<uint32_t>& seqnums,
-                                    uint64_t query_seqnum, uint32_t* result_seqnum) const {
+                                    uint64_t query_seqnum, uint32_t* result_seqnum,
+                                    size_t* index) const {
     if (seqnums.empty() || bits::JoinTwo32(logspace_id_, seqnums.front()) > query_seqnum) {
         return false;
     }
     if (query_seqnum == kMaxLogSeqNum) {
         *result_seqnum = seqnums.back();
+        if (index != nullptr) {
+            *index = seqnums.size() - 1;
+        }
         return true;
     }
     auto iter = absl::c_upper_bound(
@@ -172,13 +267,18 @@ bool Index::PerSpaceIndex::FindPrev(const std::vector<uint32_t>& seqnums,
     if (iter == seqnums.begin()) {
         return false;
     } else {
-        *result_seqnum = *(--iter);
+        --iter;
+        *result_seqnum = *iter;
+        if (index != nullptr) {
+            *index = static_cast<size_t>(iter - seqnums.begin());
+        }
         return true;
     }
 }
 
 bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
-                                    uint64_t query_seqnum, uint32_t* result_seqnum) const {
+                                    uint64_t query_seqnum, uint32_t* result_seqnum,
+                                    size_t* index) const {
     if (seqnums.empty() || bits::JoinTwo32(logspace_id_, seqnums.back()) < query_seqnum) {
         return false;
     }
@@ -192,6 +292,9 @@ bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
         return false;
     } else {
         *result_seqnum = *iter;
+        if (index != nullptr) {
+            *index = static_cast<size_t>(iter - seqnums.begin());
+        }
         return true;
     }
 }
@@ -383,7 +486,7 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
         return index_.at(user_logspace).get();
     }
     HVLOG_F(1, "Create index of user logspace {}", user_logspace);
-    PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace);
+    PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace, cache_);
     index_[user_logspace].reset(index);
     return index;
 }
@@ -411,14 +514,20 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
         // found
         AsyncIndexData index_data = log_index_map_[local_id];
         uint64_t seqnum = index_data.seqnum;
+        std::optional<std::string> aux_data;
+        if (cache_.has_value()) {
+            aux_data = cache_->GetAuxData(seqnum);
+        } else {
+            aux_data = std::nullopt;
+        }
         // HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
         //         local_id, seqnum);
         // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
         // causing functions failed to send back the query result to the target engine node.
-        DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
+        DCHECK(query.origin_node_id != 28524) << debug::DumpStackTrace();
 
         uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(local_id));
-        auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id);
+        auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id, aux_data);
         pending_query_results_.push_back(result);
         return true;
     }
@@ -457,28 +566,29 @@ void Index::ProcessReadNext(const IndexQuery& query) {
     }
     uint64_t seqnum;
     uint16_t engine_id;
-    bool found = IndexFindNext(query, &seqnum, &engine_id);
+    std::optional<std::string> aux_data;
+    bool found = IndexFindNext(query, &seqnum, &engine_id, /*out*/aux_data);
     if (query_view_id == view_->id()) {
         if (found) {
             pending_query_results_.push_back(
-                BuildFoundResult(query, view_->id(), seqnum, engine_id));
-            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum={}", seqnum);
+                BuildFoundResult(query, view_->id(), seqnum, engine_id, aux_data));
+            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum=0x{:016X}", seqnum);
         } else {
             if (query.prev_found_result.seqnum != kInvalidLogSeqNum) {
                 const IndexFoundResult& found_result = query.prev_found_result;
                 pending_query_results_.push_back(
                     BuildFoundResult(query, found_result.view_id,
-                                     found_result.seqnum, found_result.engine_id));
-                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum={}",
+                                     found_result.seqnum, found_result.engine_id, found_result.aux_data));
+                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum=0x{:016X}",
                         found_result.seqnum);
             } else {
                 pending_query_results_.push_back(BuildNotFoundResult(query));
-                HVLOG(1) << "ProcessReadNext: NotFoundResult";
+                HVLOG(1) << "ProcessReadNext: NotFoundResult" << GetOrCreateIndex(query.user_logspace)->Inspect();
             }
         }
     } else {
         pending_query_results_.push_back(
-            BuildContinueResult(query, found, seqnum, engine_id));
+            BuildContinueResult(query, found, seqnum, engine_id, aux_data));
         HVLOG(1) << "ProcessReadNext: ContinueResult";
     }
 }
@@ -490,24 +600,20 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id < view_->id()) {
-        pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
+        pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, std::nullopt));
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
-        return;
-    }
-    if (query.direction == IndexQuery::kReadPrevAux && !query.promised_auxdata.has_value()) {
-        pending_query_results_.push_back(BuildNotFoundResult(query));
-        HVLOG_F(1, "ProcessReadPrev: NotFoundResult no expected auxdata for tag={}", query.user_tag);
         return;
     }
     uint64_t seqnum;
     uint16_t engine_id;
-    bool found = IndexFindPrev(query, &seqnum, &engine_id);
+    std::optional<std::string> aux_data;
+    bool found = IndexFindPrev(query, &seqnum, &engine_id, /*out*/aux_data);
     if (found) {
         pending_query_results_.push_back(
-            BuildFoundResult(query, view_->id(), seqnum, engine_id));
+            BuildFoundResult(query, view_->id(), seqnum, engine_id, aux_data));
         HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={:016X}", seqnum);
     } else if (view_->id() > 0) {
-        pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
+        pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, std::nullopt));
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
     } else {
         pending_query_results_.push_back(BuildNotFoundResult(query));
@@ -524,54 +630,81 @@ bool Index::ProcessBlockingQuery(const IndexQuery& query) {
     }
     uint64_t seqnum;
     uint16_t engine_id;
-    bool found = IndexFindNext(query, &seqnum, &engine_id);
+    std::optional<std::string> aux_data;
+    bool found = IndexFindNext(query, &seqnum, &engine_id, /*out*/aux_data);
     if (query_view_id == view_->id()) {
         if (found) {
             pending_query_results_.push_back(
-                BuildFoundResult(query, view_->id(), seqnum, engine_id));
+                BuildFoundResult(query, view_->id(), seqnum, engine_id, aux_data));
         }
         return found;
     } else {
         pending_query_results_.push_back(
-            BuildContinueResult(query, found, seqnum, engine_id));
+            BuildContinueResult(query, found, seqnum, engine_id, aux_data));
         return true;
     }
 }
 
-bool Index::IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
+bool Index::IndexFindNext(const IndexQuery& query, uint64_t* seqnum,
+                          uint16_t* engine_id,
+                          /*out*/ std::optional<std::string>& aux_data) {
     DCHECK(query.direction == IndexQuery::kReadNext
             || query.direction == IndexQuery::kReadNextB);
     if (!index_.contains(query.user_logspace)) {
         return false;
     }
-    return GetOrCreateIndex(query.user_logspace)->FindNext(
-        query.query_seqnum, query.user_tag, seqnum, engine_id);
+    if (GetOrCreateIndex(query.user_logspace)->FindNext(
+        query.query_seqnum, query.user_tag, seqnum, engine_id)) {
+        if (cache_.has_value()) {
+            aux_data = cache_->GetAuxData(query.query_seqnum);
+        }
+        return true;
+    } else {
+        return false;
+    }
 }
 
-bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
+bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum,
+                          uint16_t* engine_id,
+                          /*out*/ std::optional<std::string>& aux_data) {
     DCHECK(query.direction == IndexQuery::kReadPrev
             || query.direction == IndexQuery::kReadPrevAux);
     if (!index_.contains(query.user_logspace)) {
         return false;
     }
-    return GetOrCreateIndex(query.user_logspace)->FindPrev(
-        query.query_seqnum, query.user_tag, seqnum, engine_id);
-}
-
-IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_id,
-                                         uint64_t seqnum, uint16_t engine_id) {
-    return IndexQueryResult {
-        .state = IndexQueryResult::kFound,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
-        .next_view_id = 0,
-        .original_query = query,
-        .found_result = IndexFoundResult {
-            .view_id = view_id,
-            .engine_id = engine_id,
-            .seqnum = seqnum
-        },
-    };
+    Index::PerSpaceIndex* per_space_index = GetOrCreateIndex(query.user_logspace);
+    DCHECK(per_space_index != nullptr);
+    size_t index;
+    if (query.direction == IndexQuery::kReadPrev) {
+        if (per_space_index->FindPrev(query.query_seqnum, query.user_tag,
+                                       seqnum, engine_id, &index)) {
+            if (cache_.has_value()) {
+                aux_data = cache_->GetAuxData(*seqnum);
+                HVLOG_F(1, "IndexFindPrev GetAuxData seqnum=0x{:016X} got={}",
+                           query.query_seqnum, aux_data.has_value());
+            }
+            return true;
+        } else {
+            return false;
+        }
+    } else {
+        if (per_space_index->FindPrev(query.query_seqnum, query.user_tag,
+                                       seqnum, engine_id, &index)) {
+            std::string temp_aux_data;
+            if (per_space_index->FindPrevAuxData(index, query.user_tag,
+                                                 seqnum, /*out*/ temp_aux_data)) {
+                aux_data = temp_aux_data;
+                HVLOG_F(1, "IndexFindPrev FindPrevAuxData seqnum=0x{:016X} got={}",
+                           *seqnum, aux_data.has_value());
+                return true;
+            } else {
+                aux_data = std::nullopt;
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
 }
 
 IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query) {
@@ -584,13 +717,38 @@ IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query) {
         .found_result = IndexFoundResult {
             .view_id = 0,
             .engine_id = 0,
-            .seqnum = kInvalidLogSeqNum
+            .seqnum = kInvalidLogSeqNum,
+            .aux_data = std::nullopt
         },
     };
 }
 
-IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
-                                            uint64_t seqnum, uint16_t engine_id) {
+IndexQueryResult Index::BuildFoundResult(
+    const IndexQuery& query, uint16_t view_id, uint64_t seqnum,
+    uint16_t engine_id, const std::optional<std::string>& aux_data) {
+    return IndexQueryResult {
+        .state = IndexQueryResult::kFound,
+        .metalog_progress = query.initial ? index_metalog_progress()
+                                          : query.metalog_progress,
+        .next_view_id = 0,
+        .original_query = query,
+        .found_result = IndexFoundResult {
+            .view_id = view_id,
+            .engine_id = engine_id,
+            .seqnum = seqnum,
+            .aux_data = aux_data
+        },
+    };
+}
+IndexQueryResult Index::BuildFoundResult(
+    const IndexQuery& query, uint16_t view_id, uint64_t seqnum,
+    uint16_t engine_id, const std::optional<std::string>&& aux_data) {
+    return BuildFoundResult(query, view_id, seqnum, engine_id, aux_data);
+}
+
+IndexQueryResult Index::BuildContinueResult(
+    const IndexQuery& query, bool found, uint64_t seqnum, uint16_t engine_id,
+    const std::optional<std::string>& aux_data) {
     DCHECK(view_->id() > 0);
     IndexQueryResult result = {
         .state = IndexQueryResult::kContinue,
@@ -601,7 +759,8 @@ IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
         .found_result = IndexFoundResult {
             .view_id = 0,
             .engine_id = 0,
-            .seqnum = kInvalidLogSeqNum
+            .seqnum = kInvalidLogSeqNum,
+            .aux_data = std::nullopt
         },
     };
     if (query.direction == IndexQuery::kReadNextB) {
@@ -614,12 +773,18 @@ IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
         result.found_result = IndexFoundResult {
             .view_id = view_->id(),
             .engine_id = engine_id,
-            .seqnum = seqnum
+            .seqnum = seqnum,
+            .aux_data = aux_data
         };
     } else if (!query.initial && query.prev_found_result.seqnum != kInvalidLogSeqNum) {
         result.found_result = query.prev_found_result;
     }
     return result;
+}
+IndexQueryResult Index::BuildContinueResult(
+    const IndexQuery& query, bool found, uint64_t seqnum, uint16_t engine_id,
+    const std::optional<std::string>&& aux_data) {
+    return BuildContinueResult(query, found, seqnum, engine_id, aux_data);
 }
 
 }  // namespace log

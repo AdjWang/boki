@@ -35,11 +35,6 @@ zk::ZKSession* EngineBase::zk_session() {
 void EngineBase::Start() {
     SetupZKWatchers();
     SetupTimers();
-    // Setup cache
-    if (absl::GetFlag(FLAGS_slog_engine_enable_cache)) {
-        log_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb));
-        sharded_log_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb));
-    }
 }
 
 void EngineBase::Stop() {}
@@ -242,7 +237,6 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::SET_AUXDATA:
-        op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         op->data.AppendData(MessageHelper::GetInlineData(message));
         break;
@@ -289,7 +283,7 @@ void EngineBase::ReplicateLogEntry(const View* view, const LogMetaData& log_meta
     }
 }
 
-void EngineBase::PropagateAuxData(const View* view, uint64_t tag,
+void EngineBase::PropagateAuxData(const View* view,
                                   const LogMetaData& log_metadata, 
                                   std::span<const char> aux_data) {
     uint16_t engine_id = gsl::narrow_cast<uint16_t>(
@@ -297,7 +291,7 @@ void EngineBase::PropagateAuxData(const View* view, uint64_t tag,
     DCHECK(view->contains_engine_node(engine_id));
     const View::Engine* engine_node = view->GetEngineNode(engine_id);
     SharedLogMessage message = SharedLogMessageHelper::NewSetAuxDataMessage(
-        tag, log_metadata.seqnum);
+        log_metadata.seqnum);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(aux_data.size());
     for (uint16_t storage_id : engine_node->GetStorageNodes()) {
@@ -332,42 +326,6 @@ void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType resul
                                           uint64_t metalog_progress) {
     Message response = MessageHelper::NewSharedLogOpFailed(result);
     FinishLocalOpWithResponse(op, &response, metalog_progress);
-}
-
-void EngineBase::LogCachePut(const LogMetaData& log_metadata,
-                             std::span<const uint64_t> user_tags,
-                             std::span<const char> log_data) {
-    if (!log_cache_.has_value()) {
-        return;
-    }
-    HVLOG_F(1, "Store cache for log entry (seqnum {})", bits::HexStr0x(log_metadata.seqnum));
-    log_cache_->Put(log_metadata, user_tags, log_data);
-}
-
-std::optional<LogEntry> EngineBase::LogCacheGet(uint64_t seqnum) {
-    return log_cache_.has_value() ? log_cache_->Get(seqnum) : std::nullopt;
-}
-
-
-void EngineBase::LogCachePutAuxData(uint64_t tag, uint64_t seqnum, std::span<const char> data) {
-    if (sharded_log_cache_.has_value()) {
-        sharded_log_cache_->PutAuxData(tag, seqnum, data);
-    }
-}
-
-// TODO: optimize tag space
-void EngineBase::LogCachePutAuxData(gsl::span<const uint64_t> tags, uint64_t seqnum, std::span<const char> data) {
-    for (const auto tag : tags) {
-        LogCachePutAuxData(tag, seqnum, data);
-    }
-}
-
-std::optional<std::string> EngineBase::LogCacheGetAuxData(uint64_t tag, uint64_t seqnum) {
-    return sharded_log_cache_.has_value() ? sharded_log_cache_->GetAuxData(tag, seqnum) : std::nullopt;
-}
-
-std::optional<std::pair<std::uint64_t, std::string>> EngineBase::LogCacheGetLastAuxData(uint64_t tag) {
-    return sharded_log_cache_.has_value() ? sharded_log_cache_->GetLastAuxData(tag) : std::nullopt;
 }
 
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,
@@ -429,7 +387,7 @@ void EngineBase::SendReadResponse(const IndexQuery& query,
         engine_id, *response, user_tags_payload, data_payload, aux_data_payload);
     if (!success) {
         HLOG_F(WARNING, "Failed to send read response to engine {}", engine_id);
-        HLOG_F(WARNING, "[DEBUG] StackTrace:\n{}", utils::DumpStackTrace());
+        HLOG_F(WARNING, "[DEBUG] StackTrace:\n{}", debug::DumpStackTrace());
     }
 }
 
