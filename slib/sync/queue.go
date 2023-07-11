@@ -339,6 +339,153 @@ func (q *Queue) appendPopLogAndSync() error {
 	}
 }
 
+func (q *Queue) fastAppendPopLogAndSync() error {
+	logEntry := &QueueLogEntry{
+		QueueName: q.name,
+		IsPush:    false,
+	}
+	encoded, err := json.Marshal(logEntry)
+	if err != nil {
+		panic(err)
+	}
+	tags := []types.Tag{
+		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
+	}
+	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, encoded); err != nil {
+		return err
+	} else {
+		return q.syncToFuture(future)
+	}
+}
+
+func (q *Queue) syncToFuture(future types.Future[uint64]) error {
+	tag := queueLogTag(q.nameHash)
+	targetSeqNum := protocol.MaxLogSeqnum
+	queueLogs := make([]*QueueLogEntry, 0, 4)
+	var err error
+	{
+		queueLogsPrev := make([]*QueueLogEntry, 0, 4)
+		var seqNum uint64
+		if future.IsResolved() {
+			seqNum, err = future.GetResult(time.Second)
+			if err != nil {
+				return err
+			}
+		} else {
+			seqNum = protocol.MaxLogSeqnum
+		}
+		for seqNum > q.nextSeqNum {
+			if seqNum != protocol.MaxLogSeqnum {
+				seqNum -= 1
+			}
+			logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
+			if err != nil {
+				return err
+			}
+			if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
+				break
+			}
+			seqNum = logEntry.SeqNum
+
+			// if future.IsResolved() {
+			// 	targetSeqNum, _ = future.GetResult(time.Second)
+			// 	if targetSeqNum-1 < q.nextSeqNum {
+			// 		break
+			// 	}
+			// 	if seqNum >= targetSeqNum {
+			// 		// would reduce to targetSeqNum-1 in next loop
+			// 		seqNum = targetSeqNum
+			// 		// target reseted, previous read logs are useless
+			// 		queueLogs = make([]*QueueLogEntry, 0, 4) // clear
+			// 		continue
+			// 	}
+			// }
+
+			queueLog := decodeQueueLogEntry(logEntry)
+			if queueLog.QueueName != q.name {
+				continue
+			}
+			if queueLog.auxData != nil {
+				q.nextSeqNum = queueLog.seqNum + 1
+				q.consumed = queueLog.auxData.Consumed
+				q.tail = queueLog.auxData.Tail
+				break
+			} else {
+				queueLogsPrev = append(queueLogsPrev, queueLog)
+			}
+		}
+
+		// if targetSeqNum != protocol.MaxLogSeqnum {
+		// 	// TODO: remove logs later than targetSeqNum in queueLogs
+		// }
+
+		// reverse
+		if future.IsResolved() {
+			targetSeqNum, err = future.GetResult(time.Second)
+			if err != nil {
+				return err
+			}
+		}
+		for i := len(queueLogsPrev) - 1; i >= 0; i-- {
+			queueLog := queueLogsPrev[i]
+			if queueLog.seqNum < targetSeqNum {
+				queueLogs = append(queueLogs, queueLog)
+			}
+		}
+	}
+	{
+		if targetSeqNum < q.nextSeqNum {
+			log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", q.nextSeqNum, targetSeqNum)
+		}
+		var seqNum uint64
+		if len(queueLogs) > 0 {
+			seqNum = queueLogs[len(queueLogs)-1].seqNum + 1
+		} else {
+			seqNum = q.nextSeqNum + 1
+		}
+		for seqNum < targetSeqNum {
+			logEntry, err := q.env.AsyncSharedLogReadNextBlock(q.ctx, tag, seqNum)
+			if err != nil {
+				return err
+			}
+			if logEntry == nil || logEntry.SeqNum >= targetSeqNum {
+				break
+			}
+			seqNum = logEntry.SeqNum + 1
+			if future.IsResolved() {
+				targetSeqNum, err = future.GetResult(time.Second)
+				if err != nil {
+					return err
+				}
+			}
+			queueLog := decodeQueueLogEntry(logEntry)
+			if queueLog.seqNum < targetSeqNum {
+				queueLogs = append(queueLogs, queueLog)
+			}
+		}
+	}
+	targetSeqNum, err = future.GetResult(time.Second)
+	if err != nil {
+		return err
+	}
+	if len(queueLogs) == 0 {
+		panic("should not happen since using blocking read")
+	}
+	for _, queueLog := range queueLogs {
+		if queueLog.seqNum < targetSeqNum {
+			q.applyLog(queueLog)
+			auxData := &QueueAuxData{
+				Consumed: q.consumed,
+				Tail:     q.tail,
+			}
+			if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 var kQueueEmptyError = errors.New("Queue empty")
 var kQueueTimeoutError = errors.New("Blocking pop timeout")
 
@@ -359,7 +506,8 @@ func (q *Queue) Pop() (string /* payload */, error) {
 			return "", kQueueEmptyError
 		}
 	}
-	if err := q.appendPopLogAndSync(); err != nil {
+	// if err := q.appendPopLogAndSync(); err != nil {
+	if err := q.fastAppendPopLogAndSync(); err != nil {
 		return "", err
 	}
 	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {

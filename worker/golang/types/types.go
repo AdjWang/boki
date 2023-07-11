@@ -30,6 +30,7 @@ type LogEntryWithMeta struct {
 }
 
 type Future[T uint64 | *LogEntryWithMeta] interface {
+	// TODO: to GetLogId()
 	GetLocalId() uint64
 	GetResult(timeout time.Duration) (T, error)
 	Await(timeout time.Duration) error

@@ -103,3 +103,59 @@ func (f *futureImpl[T]) GetLocalId() uint64 {
 func (f *futureImpl[T]) IsResolved() bool {
 	return f.resolved.Load()
 }
+
+// specificialize future to read and write
+
+type readFutureImpl struct {
+	future futureImpl[*LogEntryWithMeta]
+}
+
+func NewReadFuture(seqNum uint64, resolve func() (*LogEntryWithMeta, error)) Future[*LogEntryWithMeta] {
+	return NewFuture[*LogEntryWithMeta](seqNum, resolve)
+}
+
+func (rFuture *readFutureImpl) GetLocalId() uint64 {
+	panic("not implemented")
+}
+
+func (rFuture *readFutureImpl) GetSeqNum() uint64 {
+	// TODO: handle timeout and error
+	logEntry, _ := rFuture.future.GetResult(60 * time.Second)
+	return logEntry.SeqNum
+}
+
+func (rFuture *readFutureImpl) GetLogEntry() *LogEntryWithMeta {
+	// TODO: handle timeout and error
+	logEntry, _ := rFuture.future.GetResult(60 * time.Second)
+	return logEntry
+}
+
+func (rFuture *readFutureImpl) IsResolved() bool {
+	return rFuture.future.IsResolved()
+}
+
+type writeFutureImpl struct {
+	future futureImpl[uint64]
+}
+
+func NewWriteFuture(localId uint64, resolve func() (uint64, error)) Future[uint64] {
+	return NewFuture[uint64](localId, resolve)
+}
+
+func (wFuture *writeFutureImpl) GetLocalId() uint64 {
+	return wFuture.future.GetLocalId()
+}
+
+func (wFuture *writeFutureImpl) GetSeqNum() uint64 {
+	// TODO: handle timeout and error
+	seqNum, _ := wFuture.future.GetResult(60 * time.Second)
+	return seqNum
+}
+
+func (wFuture *writeFutureImpl) GetLogEntry() *LogEntryWithMeta {
+	panic("not implemented")
+}
+
+func (wFuture *writeFutureImpl) IsResolved() bool {
+	return wFuture.future.IsResolved()
+}
