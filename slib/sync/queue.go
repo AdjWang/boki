@@ -359,6 +359,9 @@ func (q *Queue) fastAppendPopLogAndSync() error {
 }
 
 func (q *Queue) syncToFuture(future types.Future[uint64]) error {
+	// log.SetPrefix(fmt.Sprintf("[%p] ", q))
+	// defer log.SetPrefix("")
+
 	tag := queueLogTag(q.nameHash)
 	targetSeqNum := protocol.MaxLogSeqnum
 	queueLogs := make([]*QueueLogEntry, 0, 4)
@@ -382,6 +385,7 @@ func (q *Queue) syncToFuture(future types.Future[uint64]) error {
 			if err != nil {
 				return err
 			}
+			// log.Printf("[DEBUG] read prev seqnum=%016X got %+v, until target=%016X", seqNum, logEntry, q.nextSeqNum)
 			if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
 				break
 			}
@@ -415,17 +419,13 @@ func (q *Queue) syncToFuture(future types.Future[uint64]) error {
 			}
 		}
 
-		// if targetSeqNum != protocol.MaxLogSeqnum {
-		// 	// TODO: remove logs later than targetSeqNum in queueLogs
-		// }
-
-		// reverse
 		if future.IsResolved() {
 			targetSeqNum, err = future.GetResult(time.Second)
 			if err != nil {
 				return err
 			}
 		}
+		// reverse
 		for i := len(queueLogsPrev) - 1; i >= 0; i-- {
 			queueLog := queueLogsPrev[i]
 			if queueLog.seqNum < targetSeqNum {
@@ -441,13 +441,14 @@ func (q *Queue) syncToFuture(future types.Future[uint64]) error {
 		if len(queueLogs) > 0 {
 			seqNum = queueLogs[len(queueLogs)-1].seqNum + 1
 		} else {
-			seqNum = q.nextSeqNum + 1
+			seqNum = q.nextSeqNum
 		}
 		for seqNum < targetSeqNum {
 			logEntry, err := q.env.AsyncSharedLogReadNextBlock(q.ctx, tag, seqNum)
 			if err != nil {
 				return err
 			}
+			// log.Printf("[DEBUG] read nextB seqnum=%016X got %+v, until target=%016X", seqNum, logEntry, targetSeqNum)
 			if logEntry == nil || logEntry.SeqNum >= targetSeqNum {
 				break
 			}
@@ -468,11 +469,10 @@ func (q *Queue) syncToFuture(future types.Future[uint64]) error {
 	if err != nil {
 		return err
 	}
-	if len(queueLogs) == 0 {
-		panic("should not happen since using blocking read")
-	}
+	// log.Printf("[DEBUG] targetSeqNum=%016X", targetSeqNum)
 	for _, queueLog := range queueLogs {
 		if queueLog.seqNum < targetSeqNum {
+			// log.Printf("[DEBUG] applying seqnum=%016X", queueLog.seqNum)
 			q.applyLog(queueLog)
 			auxData := &QueueAuxData{
 				Consumed: q.consumed,
@@ -483,6 +483,15 @@ func (q *Queue) syncToFuture(future types.Future[uint64]) error {
 			}
 		}
 	}
+	// DEBUG: assert syncTo the target correctly, i.e. continuous reading on tag
+	// logEntry, err := q.env.AsyncSharedLogReadNext(q.ctx, tag, q.nextSeqNum)
+	// if err != nil {
+	// 	return err
+	// }
+	// if logEntry == nil || logEntry.SeqNum != targetSeqNum {
+	// 	log.Printf("[FATAL] next log: %+v, targetSeqNum=%016X", logEntry, targetSeqNum)
+	// 	panic("[FATAL] hole found. syncToFuture failed.")
+	// }
 	return nil
 }
 
