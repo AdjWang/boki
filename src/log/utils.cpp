@@ -86,7 +86,7 @@ void SplitPayloadForMessage(const protocol::SharedLogMessage& message,
                             std::span<const char> payload,
                             std::span<const uint64_t>* user_tags,
                             std::span<const char>* log_data,
-                            std::span<const char>* aux_data) {
+                            std::span<const char>* aux_entry_data) {
     size_t total_size = message.payload_size;
     DCHECK_EQ(payload.size(), total_size);
     size_t num_tags = message.num_tags;
@@ -107,11 +107,11 @@ void SplitPayloadForMessage(const protocol::SharedLogMessage& message,
         *log_data = std::span<const char>(ptr, log_data_size);
     }
     ptr += log_data_size;
-    if (aux_data != nullptr) {
+    if (aux_entry_data != nullptr) {
         if (aux_data_size > 0) {
-            *aux_data = std::span<const char>(ptr, aux_data_size);
+            *aux_entry_data = std::span<const char>(ptr, aux_data_size);
         } else {
-            *aux_data = std::span<const char>();
+            *aux_entry_data = std::span<const char>();
         }
     }
 }

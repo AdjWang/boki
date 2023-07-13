@@ -13,6 +13,7 @@ namespace log {
 constexpr uint64_t kEmptyLogTag      = 0;
 constexpr uint64_t kMaxLogSeqNum     = 0xffff000000000000ULL;
 constexpr uint64_t kInvalidLogSeqNum = protocol::kInvalidLogSeqNum;
+constexpr uint64_t kInvalidLogId     = protocol::kInvalidLogLocalId;
 constexpr uint64_t kInvalidLogTag    = protocol::kInvalidLogTag;
 
 struct SharedLogRequest {
@@ -46,6 +47,21 @@ struct LogMetaData {
 
 struct LogEntry {
     LogMetaData metadata;
+    UserTagVec  user_tags;
+    std::string data;
+};
+
+struct AuxMetaData {
+    uint64_t seqnum;
+    size_t num_tags;
+    size_t data_size;
+};
+
+struct AuxEntry {
+    AuxMetaData metadata;
+    // NOT the copy of the user_tags in LogEntry
+    // tags in LogEntry are used to indicate which object had operated
+    // tags here are used to indicate which object had cached
     UserTagVec  user_tags;
     std::string data;
 };

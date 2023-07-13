@@ -35,10 +35,6 @@ zk::ZKSession* EngineBase::zk_session() {
 void EngineBase::Start() {
     SetupZKWatchers();
     SetupTimers();
-    // Setup cache
-    if (absl::GetFlag(FLAGS_slog_engine_enable_cache)) {
-        log_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb));
-    }
 }
 
 void EngineBase::Stop() {}
@@ -120,6 +116,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_LOCALID:
         HandleLocalRead(op);
@@ -143,6 +140,7 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_LOCALID:
         HandleRemoteRead(message);
@@ -162,7 +160,8 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
 }
 
 void EngineBase::PopulateLogTagsAndData(const Message& message, LocalOp* op) {
-    DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type));
+    DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type) ||
+           op->type == SharedLogOpType::SET_AUXDATA);
     DCHECK_EQ(message.log_aux_data_size, 0U);
     std::span<const char> data = MessageHelper::GetInlineData(message);
     size_t num_tags = message.log_num_tags;
@@ -227,19 +226,20 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::ASYNC_READ_LOCALID:
-        op->seqnum = message.log_seqnum;
+        op->seqnum = message.log_localid;
         break;
     case SharedLogOpType::TRIM:
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::SET_AUXDATA:
+        PopulateLogTagsAndData(message, op);
         op->seqnum = message.log_seqnum;
-        op->data.AppendData(MessageHelper::GetInlineData(message));
         break;
     default:
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
@@ -261,6 +261,7 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT_B)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_PREV)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_PREV_AUX)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
@@ -326,30 +327,6 @@ void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType resul
                                           uint64_t metalog_progress) {
     Message response = MessageHelper::NewSharedLogOpFailed(result);
     FinishLocalOpWithResponse(op, &response, metalog_progress);
-}
-
-void EngineBase::LogCachePut(const LogMetaData& log_metadata,
-                             std::span<const uint64_t> user_tags,
-                             std::span<const char> log_data) {
-    if (!log_cache_.has_value()) {
-        return;
-    }
-    HVLOG_F(1, "Store cache for log entry (seqnum {})", bits::HexStr0x(log_metadata.seqnum));
-    log_cache_->Put(log_metadata, user_tags, log_data);
-}
-
-std::optional<LogEntry> EngineBase::LogCacheGet(uint64_t seqnum) {
-    return log_cache_.has_value() ? log_cache_->Get(seqnum) : std::nullopt;
-}
-
-void EngineBase::LogCachePutAuxData(uint64_t seqnum, std::span<const char> data) {
-    if (log_cache_.has_value()) {
-        log_cache_->PutAuxData(seqnum, data);
-    }
-}
-
-std::optional<std::string> EngineBase::LogCacheGetAuxData(uint64_t seqnum) {
-    return log_cache_.has_value() ? log_cache_->GetAuxData(seqnum) : std::nullopt;
 }
 
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,

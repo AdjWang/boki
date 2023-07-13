@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"cs.utexas.edu/zjia/faas/protocol"
 )
 
 var InvalidLocalId uint64 = math.MaxUint64
@@ -16,22 +18,24 @@ func IsLocalIdValid(localId uint64) bool {
 
 // Implement types.Future
 type futureImpl[T uint64 | *LogEntryWithMeta] struct {
-	LocalId uint64
+	LocalId uint64 // always available
+	SeqNum  uint64 // invalid when appending, always available when reading
 	// result union
 	result T
 	err    error
-
 	// sync
 	wg       sync.WaitGroup
 	resolved atomic.Bool
 }
 
-func NewFuture[T uint64 | *LogEntryWithMeta](localId uint64, resolve func() (T, error)) Future[T] {
+func NewFuture[T uint64 | *LogEntryWithMeta](localId uint64, seqNum uint64, resolve func() (T, error)) Future[T] {
 	var emptyRes T
 	future := &futureImpl[T]{
 		LocalId: localId,
-		result:  emptyRes,
-		err:     nil,
+		SeqNum:  seqNum,
+
+		result: emptyRes,
+		err:    nil,
 
 		wg:       sync.WaitGroup{},
 		resolved: atomic.Bool{},
@@ -48,12 +52,14 @@ func NewFuture[T uint64 | *LogEntryWithMeta](localId uint64, resolve func() (T, 
 
 // speed up cached read
 // dummy future only wraps data, the resolve function must be finished
-func NewDummyFuture[T uint64 | *LogEntryWithMeta](localId uint64, resolve func() (T, error)) Future[T] {
+func NewDummyFuture[T uint64 | *LogEntryWithMeta](localId uint64, seqNum uint64, resolve func() (T, error)) Future[T] {
 	var emptyRes T
 	future := &futureImpl[T]{
 		LocalId: localId,
-		result:  emptyRes,
-		err:     nil,
+		SeqNum:  seqNum,
+
+		result: emptyRes,
+		err:    nil,
 
 		wg:       sync.WaitGroup{},
 		resolved: atomic.Bool{},
@@ -110,8 +116,8 @@ type readFutureImpl struct {
 	future futureImpl[*LogEntryWithMeta]
 }
 
-func NewReadFuture(seqNum uint64, resolve func() (*LogEntryWithMeta, error)) Future[*LogEntryWithMeta] {
-	return NewFuture[*LogEntryWithMeta](seqNum, resolve)
+func NewReadFuture(localId uint64, seqNum uint64, resolve func() (*LogEntryWithMeta, error)) Future[*LogEntryWithMeta] {
+	return NewFuture[*LogEntryWithMeta](localId, seqNum, resolve)
 }
 
 func (rFuture *readFutureImpl) GetLocalId() uint64 {
@@ -139,7 +145,8 @@ type writeFutureImpl struct {
 }
 
 func NewWriteFuture(localId uint64, resolve func() (uint64, error)) Future[uint64] {
-	return NewFuture[uint64](localId, resolve)
+	// seqNum is invalid when appending
+	return NewFuture[uint64](localId, protocol.MaxLogSeqnum, resolve)
 }
 
 func (wFuture *writeFutureImpl) GetLocalId() uint64 {

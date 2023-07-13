@@ -89,12 +89,6 @@ protected:
     void FinishLocalOpWithFailure(LocalOp* op, protocol::SharedLogResultType result,
                                   uint64_t metalog_progress = 0);
 
-    void LogCachePut(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
-                     std::span<const char> log_data);
-    std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
-    void LogCachePutAuxData(uint64_t seqnum, std::span<const char> data);
-    std::optional<std::string> LogCacheGetAuxData(uint64_t seqnum);
-
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);
     bool SendStorageReadRequest(const IndexQueryResult& result,
@@ -131,9 +125,9 @@ private:
     absl::Mutex fn_ctx_mu_;
     absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>
         fn_call_ctx_ ABSL_GUARDED_BY(fn_ctx_mu_);
-    std::string DebugListExistingFnCall(const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>& fn_call_ctx);
-
-    std::optional<LRUCache> log_cache_;
+    std::string DebugListExistingFnCall(
+        const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>&
+            fn_call_ctx);
 
     void SetupZKWatchers();
     void SetupTimers();

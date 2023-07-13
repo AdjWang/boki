@@ -9,6 +9,7 @@ struct IndexFoundResult {
     uint16_t view_id;
     uint16_t engine_id;
     uint64_t seqnum;
+    uint64_t localid;
 };
 
 struct IndexQuery {
@@ -20,16 +21,21 @@ struct IndexQuery {
     // determines how to interpret the query_seqnum
     // kReadNext, kReadPrev, kReadNextB: query_seqnum is the seqnum of the shared log
     // kReadLocalId: query_seqnum is the local_id
-    enum ReadDirection { kReadNext, kReadPrev, kReadNextB, kReadLocalId };
+    enum ReadDirection { kReadNext, kReadPrev, kReadPrevAux, kReadNextB, kReadLocalId };
     QueryType type;
     ReadDirection direction;
     uint16_t origin_node_id;
     uint16_t hop_times;
     bool     initial;
     uint64_t client_data;
+    // For ReadWithAux, perform aux read first
+    // if found aux data, then use it as the final auxdata
+    // if not found aux data, fallback to normal read
+    std::optional<AuxEntry> promised_auxdata;
 
     uint32_t user_logspace;
     uint64_t user_tag;
+    uint64_t query_log_id;
     uint64_t query_seqnum;
     uint64_t metalog_progress;
 
@@ -128,17 +134,42 @@ private:
     void ProcessReadPrev(const IndexQuery& query);
     bool ProcessBlockingQuery(const IndexQuery& query);
 
-    bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
-    bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+    bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id, uint64_t* localid);
+    bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id, uint64_t* localid);
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
-                                      uint64_t seqnum, uint16_t engine_id);
+                                      uint64_t seqnum, uint16_t engine_id, uint64_t localid);
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
     IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
-                                         uint64_t seqnum, uint16_t engine_id);
+                                         uint64_t seqnum, uint16_t engine_id, uint64_t localid);
 
     DISALLOW_COPY_AND_ASSIGN(Index);
 };
 
 }  // namespace log
 }  // namespace faas
+
+template <>
+struct fmt::formatter<faas::log::IndexQuery::ReadDirection>: formatter<std::string_view> {
+    auto format(faas::log::IndexQuery::ReadDirection dir, format_context& ctx) const {
+        std::string_view result = "unknown";
+        switch (dir) {
+            case faas::log::IndexQuery::ReadDirection::kReadNext:
+                result = "kReadNext";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadPrev:
+                result = "kReadPrev";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadPrevAux:
+                result = "kReadPrevAux";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadNextB:
+                result = "kReadNextB";
+                break;
+            case faas::log::IndexQuery::ReadDirection::kReadLocalId:
+                result = "kReadLocalId";
+                break;
+        }
+        return formatter<string_view>::format(result, ctx);
+    }
+};

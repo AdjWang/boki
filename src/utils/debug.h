@@ -10,3 +10,13 @@ std::string DumpStackTrace();
 }  // namespace utils
 }  // namespace faas
 
+template <typename T>
+struct fmt::formatter<std::span<T>>: formatter<std::string_view> {
+    auto format(std::span<T> s, format_context& ctx) const {
+        std::string result;
+        for (const auto data : s) {
+            result.append(fmt::format("{} ", data));
+        }
+        return formatter<string_view>::format(result, ctx);
+    }
+};

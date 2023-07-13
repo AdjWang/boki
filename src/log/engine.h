@@ -29,6 +29,9 @@ private:
     LogSpaceCollection<Index>
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
+    bool log_cache_enabled_;
+    std::unique_ptr<ShardedLRUCache> log_cache_;
+
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_local_reads_;
 
@@ -57,6 +60,27 @@ private:
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                     Index::QueryResultVec* more_results);
 
+    void LogCachePut(const LogMetaData& log_metadata,
+                     std::span<const uint64_t> user_tags,
+                     std::span<const char> log_data);
+    std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
+    void LogCachePutAuxData(std::span<const char> aux_entry_data);
+    void LogCachePutAuxData(const AuxMetaData& aux_metadata,
+                            std::span<const uint64_t> user_tags,
+                            std::span<const char> aux_data);
+    std::optional<AuxEntry> LogCacheGetAuxData(uint64_t seqnum);
+    std::optional<AuxEntry> LogCacheGetAuxDataPrev(uint64_t tag, uint64_t seqnum);
+    std::optional<AuxEntry> LogCacheGetAuxDataNext(uint64_t tag, uint64_t seqnum);
+
+    inline AuxMetaData AuxMetaDataFromOp(LocalOp* op) {
+        DCHECK(op->type == protocol::SharedLogOpType::SET_AUXDATA);
+        return AuxMetaData {
+            .seqnum = op->seqnum,
+            .num_tags = op->user_tags.size(),
+            .data_size = op->data.length()
+        };
+    }
+
     inline LogMetaData MetaDataFromAppendOp(LocalOp* op) {
         DCHECK(op->type == protocol::SharedLogOpType::APPEND
             || op->type == protocol::SharedLogOpType::ASYNC_APPEND);
@@ -72,6 +96,7 @@ private:
     protocol::SharedLogMessage BuildReadRequestMessage(LocalOp* op);
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
+    IndexQuery UpdateQueryWithAux(/*ref*/ IndexQuery& query);
     IndexQuery BuildIndexQuery(LocalOp* op);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);

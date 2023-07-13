@@ -106,7 +106,8 @@ enum class SharedLogOpType : uint16_t {
     ASYNC_READ_NEXT    = 0x21,  // FuncWorker to Engine, Engine to Index
     ASYNC_READ_NEXT_B  = 0x22,  // FuncWorker to Engine, Engine to Index
     ASYNC_READ_PREV    = 0x23,  // FuncWorker to Engine, Engine to Index
-    ASYNC_READ_LOCALID = 0x24,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_PREV_AUX= 0x24,  // FuncWorker to Engine, Engine to Index
+    ASYNC_READ_LOCALID = 0x25,  // FuncWorker to Engine, Engine to Index
 
     RESPONSE           = 0x30
 };
@@ -127,6 +128,7 @@ public:
         return op_type == SharedLogOpType::READ_NEXT
             || op_type == SharedLogOpType::READ_PREV
             || op_type == SharedLogOpType::READ_NEXT_B
+            || op_type == SharedLogOpType::ASYNC_READ_PREV_AUX
             || op_type == SharedLogOpType::ASYNC_READ_NEXT
             || op_type == SharedLogOpType::ASYNC_READ_NEXT_B
             || op_type == SharedLogOpType::ASYNC_READ_PREV
@@ -180,7 +182,6 @@ struct Message {
             int32_t processing_time;  // [12:16] Used in FUNC_CALL_COMPLETE
         } __attribute__ ((packed));
         uint64_t log_seqnum;          // [8:16]  Used in SHARED_LOG_OP
-        uint64_t log_localid;         // [8:16]  Used in SHARED_LOG_OP
     };
     int64_t send_timestamp;       // [16:24]
     int32_t payload_size;         // [24:28] Used in HANDSHAKE_RESPONSE, INVOKE_FUNC,
@@ -202,7 +203,7 @@ struct Message {
     uint64_t log_tag;             // [40:48]
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
-    uint64_t _8_padding_8_;
+    uint64_t log_localid;         // [56:64] Used in SHARED_LOG_OP carry localid simultaneous with log_seqnum
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
         __attribute__ ((aligned (__FAAS_CACHE_LINE_SIZE)));
@@ -496,13 +497,16 @@ public:
         return message;
     }
 
+    // seqnum only invalid when appending
     static Message NewSharedLogOpSucceeded(SharedLogResultType result,
+                                           uint64_t log_localid,
                                            uint64_t log_seqnum = kInvalidLogSeqNum) {
         NEW_EMPTY_MESSAGE(message);
         message.message_type = static_cast<uint16_t>(MessageType::SHARED_LOG_OP);
         message.log_op = static_cast<uint16_t>(SharedLogOpType::RESPONSE);
         message.log_result = static_cast<uint16_t>(result);
         message.log_seqnum = log_seqnum;
+        message.log_localid = log_localid;
         return message;
     }
 

@@ -6,6 +6,7 @@ import (
 )
 
 type LogEntry struct {
+	LocalId uint64
 	SeqNum  uint64
 	Tags    []uint64
 	Data    []byte
@@ -82,6 +83,8 @@ type Environment interface {
 	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*LogEntryWithMeta, error)
+	AsyncSharedLogReadPrevWithAux(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
+	SharedLogSetAuxDataWithShards(ctx context.Context, tags []uint64, seqNum uint64, auxData []byte) error
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, localId uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)

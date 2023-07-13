@@ -71,6 +71,52 @@ void PopulateMetaDataToMessage(const log::LogMetaData& metadata,
 void PopulateMetaDataToMessage(const log::LogEntryProto& log_entry,
                                protocol::SharedLogMessage* message);
 
+// encode/decode LogMetaData+LogEntry or AuxMetaData+AuxEntry
+template <typename TEntryMeta>
+inline std::string EncodeEntry(const TEntryMeta& log_metadata,
+                               std::span<const uint64_t> user_tags,
+                               std::span<const char> log_data) {
+    DCHECK_EQ(log_metadata.num_tags, user_tags.size());
+    DCHECK_EQ(log_metadata.data_size, log_data.size());
+    size_t total_size = log_data.size()
+                      + user_tags.size() * sizeof(uint64_t)
+                      + sizeof(TEntryMeta);
+    std::string encoded;
+    encoded.resize(total_size);
+    char* ptr = encoded.data();
+    DCHECK_GT(log_data.size(), 0U);
+    memcpy(ptr, log_data.data(), log_data.size());
+    ptr += log_data.size();
+    if (user_tags.size() > 0) {
+        memcpy(ptr, user_tags.data(), user_tags.size() * sizeof(uint64_t));
+        ptr += user_tags.size() * sizeof(uint64_t);
+    }
+    memcpy(ptr, &log_metadata, sizeof(TEntryMeta));
+    return encoded;
+}
+template <typename TEntryMeta, typename TEntry>
+inline void DecodeEntry(std::string encoded, TEntry* log_entry) {
+    DCHECK_GT(encoded.size(), sizeof(TEntryMeta));
+    TEntryMeta& metadata = log_entry->metadata;
+    memcpy(&metadata,
+           encoded.data() + encoded.size() - sizeof(TEntryMeta),
+           sizeof(TEntryMeta));
+    size_t total_size = metadata.data_size
+                      + metadata.num_tags * sizeof(uint64_t)
+                      + sizeof(TEntryMeta);
+    DCHECK_EQ(total_size, encoded.size());
+    if (metadata.num_tags > 0) {
+        std::span<const uint64_t> user_tags(
+            reinterpret_cast<const uint64_t*>(encoded.data() + metadata.data_size),
+            metadata.num_tags);
+        log_entry->user_tags.assign(user_tags.begin(), user_tags.end());
+    } else {
+        log_entry->user_tags.clear();
+    }
+    encoded.resize(metadata.data_size);
+    log_entry->data = std::move(encoded);
+}
+
 // Start implementation of ThreadedMap
 
 template<class T>
