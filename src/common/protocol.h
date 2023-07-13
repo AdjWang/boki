@@ -165,7 +165,18 @@ constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
 constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
-constexpr uint32_t kLogDataCachedFlag             = (1 << 3);   // Used to check if the first async response had carried the log data
+// Async response hint flag
+// Continue: median response with data, next one is on the way
+// EOFData: last response with data
+// EOF: last response without data
+constexpr uint32_t kLogResponseContinueFlag       = (1 << 3);
+constexpr uint32_t kLogResponseEOFDataFlag        = (1 << 4);
+constexpr uint32_t kLogResponseEOFFlag            = (1 << 5);
+#define SET_LOG_RESP_FLAG(target, flag)                        \
+    do {                                                       \
+        target &= ~(uint32_t)((1 << 3) | (1 << 4) | (1 << 5)); \
+        target |= flag;                                        \
+    } while (0)
 
 struct Message {
     struct {
@@ -500,13 +511,15 @@ public:
     // seqnum only invalid when appending
     static Message NewSharedLogOpSucceeded(SharedLogResultType result,
                                            uint64_t log_localid,
-                                           uint64_t log_seqnum = kInvalidLogSeqNum) {
+                                           uint64_t log_seqnum = kInvalidLogSeqNum,
+                                           uint32_t flags = kLogResponseEOFFlag) {
         NEW_EMPTY_MESSAGE(message);
         message.message_type = static_cast<uint16_t>(MessageType::SHARED_LOG_OP);
         message.log_op = static_cast<uint16_t>(SharedLogOpType::RESPONSE);
         message.log_result = static_cast<uint16_t>(result);
         message.log_seqnum = log_seqnum;
         message.log_localid = log_localid;
+        SET_LOG_RESP_FLAG(message.flags, flags);
         return message;
     }
 
@@ -515,6 +528,7 @@ public:
         message.message_type = static_cast<uint16_t>(MessageType::SHARED_LOG_OP);
         message.log_op = static_cast<uint16_t>(SharedLogOpType::RESPONSE);
         message.log_result = static_cast<uint16_t>(result);
+        SET_LOG_RESP_FLAG(message.flags, kLogResponseEOFFlag);
         return message;
     }
 

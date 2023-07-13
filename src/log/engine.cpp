@@ -142,6 +142,7 @@ static Message BuildLocalReadOKResponse(uint64_t localid, uint64_t seqnum,
               user_tags.size(), log_data.size());
     }
     response.log_num_tags = gsl::narrow_cast<uint16_t>(user_tags.size());
+    SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
     MessageHelper::AppendInlineData(&response, user_tags);
     MessageHelper::AppendInlineData(&response, log_data);
     return response;
@@ -162,8 +163,10 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
 // }
 
 static Message BuildLocalAsyncReadOKResponse(uint64_t localid, uint64_t seqnum) {
-    return MessageHelper::NewSharedLogOpSucceeded(
+    Message response = MessageHelper::NewSharedLogOpSucceeded(
         SharedLogResultType::ASYNC_READ_OK, localid, seqnum);
+    SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseContinueFlag);
+    return response;
 }
 
 static Message BuildLocalAsyncReadCachedOKResponse(uint64_t localid, uint64_t seqnum,
@@ -175,7 +178,7 @@ static Message BuildLocalAsyncReadCachedOKResponse(uint64_t localid, uint64_t se
               user_tags.size(), log_data.size());
     }
     // client would not wait for the second response if log is cached
-    response.flags |= protocol::kLogDataCachedFlag;
+    SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
     response.log_num_tags = gsl::narrow_cast<uint16_t>(user_tags.size());
     MessageHelper::AppendInlineData(&response, user_tags);
     MessageHelper::AppendInlineData(&response, log_data);
@@ -237,6 +240,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         // sync append
         Message response = MessageHelper::NewSharedLogOpSucceeded(
             SharedLogResultType::ASYNC_APPEND_OK, log_metadata.localid);
+        SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseContinueFlag);
         // Not update metalog_progress here because the generation of local op id
         // not affects the metalog_progress.
         IntermediateLocalOpWithResponse(op, &response, /*metalog_progress*/0);
@@ -308,6 +312,7 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
     // localid and seqnum are useless here, set any value
     Message response = MessageHelper::NewSharedLogOpSucceeded(
         SharedLogResultType::AUXDATA_OK, protocol::kInvalidLogLocalId, seqnum);
+    SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
     FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
     if (!absl::GetFlag(FLAGS_slog_engine_propagate_auxdata)) {
         return;
@@ -553,6 +558,7 @@ void Engine::ProcessAppendResults(const LogProducer::AppendResultVec& results) {
             LogCachePut(log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
             Message response = MessageHelper::NewSharedLogOpSucceeded(
                 SharedLogResultType::APPEND_OK, result.localid, result.seqnum);
+            SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
             FinishLocalOpWithResponse(op, &response, result.metalog_progress);
         } else {
             HVLOG_F(1, "Discard append result due to seqnum={:016X} invalid", result.seqnum);

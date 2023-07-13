@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"fmt"
 )
 
 type FuncCall struct {
@@ -104,11 +105,34 @@ const (
 	FLAG_FuncWorkerUseEngineSocket uint32 = (1 << 0)
 	FLAG_UseFifoForNestedCall      uint32 = (1 << 1)
 	FLAG_kAsyncInvokeFuncFlag      uint32 = (1 << 2)
-	FLAG_kLogDataCachedFlag        uint32 = (1 << 3)
+	FLAG_kLogResponseContinueFlag  uint32 = (1 << 3)
+	FLAG_kLogResponseEOFDataFlag   uint32 = (1 << 4)
+	FLAG_kLogResponseEOFFlag       uint32 = (1 << 5)
 )
 
 func GetFlagsFromMessage(buffer []byte) uint32 {
 	return binary.LittleEndian.Uint32(buffer[28:32])
+}
+
+func GetSharedLogOpFlagsFromMessage(buffer []byte) uint32 {
+	flags := GetFlagsFromMessage(buffer)
+
+	// DEBUG: can only set one log response hint flag
+	logRespFlagCount := 0
+	if (flags & FLAG_kLogResponseContinueFlag) != 0 {
+		logRespFlagCount++
+	}
+	if (flags & FLAG_kLogResponseEOFDataFlag) != 0 {
+		logRespFlagCount++
+	}
+	if (flags & FLAG_kLogResponseEOFFlag) != 0 {
+		logRespFlagCount++
+	}
+	if logRespFlagCount != 1 {
+		panic(fmt.Sprintf("invalid flags: %b", flags))
+	}
+
+	return flags
 }
 
 func GetFuncCallFromMessage(buffer []byte) FuncCall {
