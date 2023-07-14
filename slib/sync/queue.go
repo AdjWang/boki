@@ -173,7 +173,7 @@ func (q *Queue) applyLog(queueLog *QueueLogEntry) error {
 }
 
 func (q *Queue) setAuxData(seqNum uint64, auxData *QueueAuxData) error {
-	tag := queuePushLogTag(q.nameHash)
+	tag := queueLogTag(q.nameHash)
 	encoded, err := json.Marshal(auxData)
 	if err != nil {
 		panic(err)
