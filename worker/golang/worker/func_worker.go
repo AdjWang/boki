@@ -20,8 +20,6 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
-
-	"github.com/enriquebris/goconcurrentqueue"
 )
 
 // region debug pipe
@@ -67,11 +65,6 @@ func hexBytes2String(data []byte) string {
 
 const PIPE_BUF = 4096
 
-func NewLogOpsQueue() goconcurrentqueue.Queue {
-	return goconcurrentqueue.NewFIFO()
-	// return goconcurrentqueue.NewFixedFIFO(10)
-}
-
 type FuncWorker struct {
 	funcId               uint16
 	clientId             uint16
@@ -85,8 +78,8 @@ type FuncWorker struct {
 	outputPipe           *os.File // protected by mux
 	// DEBUG
 	// outputPipe         *dbgPipe                 // protected by mux
-	outgoingFuncCalls  map[uint64](chan []byte)             // protected by mux
-	outgoingLogOps     map[uint64](goconcurrentqueue.Queue) // protected by mux
+	outgoingFuncCalls  map[uint64](chan []byte) // protected by mux
+	outgoingLogOps     map[uint64](chan []byte) // protected by mux
 	handler            types.FuncHandler
 	grpcHandler        types.GrpcFuncHandler
 	nextCallId         uint32
@@ -113,7 +106,7 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		useFifoForNestedCall: false,
 		newFuncCallChan:      make(chan []byte, 4),
 		outgoingFuncCalls:    make(map[uint64](chan []byte)),
-		outgoingLogOps:       make(map[uint64](goconcurrentqueue.Queue)),
+		outgoingLogOps:       make(map[uint64](chan []byte)),
 		nextCallId:           0,
 		nextLogOpId:          0,
 		currentCall:          0,
@@ -153,11 +146,8 @@ func (w *FuncWorker) Run() {
 			id := protocol.GetLogClientDataFromMessage(message)
 			flags := protocol.GetSharedLogOpFlagsFromMessage(message)
 			w.mux.Lock()
-			if queue, exists := w.outgoingLogOps[id]; exists {
-				if err := queue.Enqueue(message); err != nil {
-					log.Fatalf("[FATAL] Failed to enqueue message: %v to queue: %v, err: %v",
-						message, queue, err)
-				}
+			if ch, exists := w.outgoingLogOps[id]; exists {
+				ch <- message
 				if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
 					delete(w.outgoingLogOps, id)
 				}
@@ -647,7 +637,7 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 			protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, data}, nil /* sep */))
 		}
 
-		queue := NewLogOpsQueue()
+		queue := make(chan []byte, 2)
 		w.mux.Lock()
 		w.outgoingLogOps[id] = queue
 		_, err = w.outputPipe.Write(message)
@@ -656,8 +646,7 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 			return 0, err
 		}
 
-		rawResponse, _ := queue.DequeueOrWaitForNextElement()
-		response := rawResponse.([]byte)
+		response := <-queue
 		result := protocol.GetSharedLogResultTypeFromMessage(response)
 		if result == protocol.SharedLogResultType_APPEND_OK {
 			return protocol.GetLogSeqNumFromMessage(response), nil
@@ -726,7 +715,7 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 			protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, data}, nil /* sep */))
 		}
 
-		queue := NewLogOpsQueue()
+		queue := make(chan []byte, 2)
 		w.mux.Lock()
 		w.outgoingLogOps[id] = queue
 		_, err = w.outputPipe.Write(message)
@@ -735,14 +724,12 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 			return nil, err
 		}
 
-		rawResponse, _ := queue.DequeueOrWaitForNextElement()
-		response := rawResponse.([]byte)
+		response := <-queue
 		result := protocol.GetSharedLogResultTypeFromMessage(response)
 		if result == protocol.SharedLogResultType_ASYNC_APPEND_OK {
 			localId := protocol.GetLogLocalIdFromMessage(response)
 			resolve := func() (uint64, error) {
-				rawResponse, _ := queue.DequeueOrWaitForNextElement()
-				response := rawResponse.([]byte)
+				response := <-queue
 				result := protocol.GetSharedLogResultTypeFromMessage(response)
 				if result == protocol.SharedLogResultType_APPEND_OK {
 					return protocol.GetLogSeqNumFromMessage(response), nil
@@ -801,7 +788,7 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
 	// }
 
-	queue := NewLogOpsQueue()
+	queue := make(chan []byte, 2)
 	w.mux.Lock()
 	w.outgoingLogOps[opId] = queue
 	_, err := w.outputPipe.Write(message)
@@ -810,12 +797,7 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 		return nil, err
 	}
 
-	rawResponse, err := queue.DequeueOrWaitForNextElementContext(ctx)
-	if err != nil {
-		// TODO: slightly different than before?
-		return nil, err
-	}
-	response := rawResponse.([]byte)
+	response := <-queue
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
 	if result == protocol.SharedLogResultType_READ_OK {
 		return buildLogEntryFromReadResponse(response), nil
@@ -844,7 +826,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
 	// }
 
-	queue := NewLogOpsQueue()
+	queue := make(chan []byte, 2)
 	w.mux.Lock()
 	w.outgoingLogOps[opId] = queue
 	_, err := w.outputPipe.Write(message)
@@ -853,8 +835,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 		return nil, err
 	}
 
-	rawResponse, _ := queue.DequeueOrWaitForNextElement()
-	response := rawResponse.([]byte)
+	response := <-queue
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
 	if result == protocol.SharedLogResultType_ASYNC_READ_OK {
 		seqNum := protocol.GetLogSeqNumFromMessage(response)
@@ -879,12 +860,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 			return types.NewDummyFuture(localId, seqNum, resolve), nil
 		} else if (flags & protocol.FLAG_kLogResponseContinueFlag) != 0 {
 			resolve := func() (*types.LogEntryWithMeta, error) {
-				rawResponse, err := queue.DequeueOrWaitForNextElementContext(ctx)
-				if err != nil {
-					// TODO: slightly different than before?
-					return nil, err
-				}
-				response := rawResponse.([]byte)
+				response := <-queue
 				result := protocol.GetSharedLogResultTypeFromMessage(response)
 				if result == protocol.SharedLogResultType_READ_OK {
 					logEntry := buildLogEntryFromReadResponse(response)
@@ -1045,7 +1021,7 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	message := protocol.NewSharedLogSetAuxDataMessage(currentCallId, w.clientId, seqNum, id)
 	protocol.FillInlineDataInMessage(message, auxData)
 
-	queue := NewLogOpsQueue()
+	queue := make(chan []byte, 1)
 	w.mux.Lock()
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
@@ -1054,8 +1030,7 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 		return err
 	}
 
-	rawResponse, _ := queue.DequeueOrWaitForNextElement()
-	response := rawResponse.([]byte)
+	response := <-queue
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
 	if result == protocol.SharedLogResultType_AUXDATA_OK {
 		return nil
@@ -1088,7 +1063,7 @@ func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, tags []u
 		protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, auxData}, nil /* sep */))
 	}
 
-	queue := NewLogOpsQueue()
+	queue := make(chan []byte, 1)
 	w.mux.Lock()
 	w.outgoingLogOps[id] = queue
 	_, err = w.outputPipe.Write(message)
@@ -1097,8 +1072,7 @@ func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, tags []u
 		return err
 	}
 
-	rawResponse, _ := queue.DequeueOrWaitForNextElement()
-	response := rawResponse.([]byte)
+	response := <-queue
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
 	if result == protocol.SharedLogResultType_AUXDATA_OK {
 		return nil

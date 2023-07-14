@@ -24,6 +24,9 @@ type Queue struct {
 	consumed   uint64
 	tail       uint64
 	nextSeqNum uint64
+
+	// DEBUG
+	profInfos []*profInfo
 }
 
 type QueueAuxData struct {
@@ -82,6 +85,27 @@ func NewQueue(ctx context.Context, env types.Environment, name string) (*Queue, 
 	return q, nil
 }
 
+func (q *Queue) GetProfInfo() []string {
+	// limit the size of the buffer
+	if len(q.profInfos) > 1000 {
+		q.profInfos = q.profInfos[len(q.profInfos)-1000:]
+	}
+	return []string{fmt.Sprint(q.profInfos)}
+
+	// var buf bytes.Buffer
+	// zw := gzip.NewWriter(&buf)
+
+	// _, err := zw.Write([]byte(fmt.Sprint(q.profInfos)))
+	// if err != nil {
+	// 	return []byte(fmt.Sprint(err))
+	// }
+
+	// if err := zw.Close(); err != nil {
+	// 	return []byte(fmt.Sprint(err))
+	// }
+	// return buf.Bytes()
+}
+
 func (q *Queue) BatchPush(payloads []string) error {
 	futures := make([]types.Future[uint64], 0, len(payloads))
 	for _, payload := range payloads {
@@ -100,11 +124,15 @@ func (q *Queue) BatchPush(payloads []string) error {
 }
 
 func (q *Queue) Push(payload string) error {
+	tracer := ProfStart(ProfType_Append)
 	future, err := q.doPush(payload)
 	if err != nil {
 		return errors.Wrap(err, "doPush")
 	}
-	return future.Await(60 * time.Second)
+	err = future.Await(60 * time.Second)
+	tracer.ProfStop("Push append")
+	q.profInfos = append(q.profInfos, tracer)
+	return err
 }
 
 func (q *Queue) doPush(payload string) (types.Future[uint64], error) {
@@ -199,83 +227,98 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 	var currentLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
 	var nextLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
 	first := true
-	for seqNum > currentSeqNum {
-		if seqNum != protocol.MaxLogSeqnum {
-			seqNum -= 1
-		}
-		if first {
-			first = false
-			// 1. first read
-			currentLogEntryFuture, err = q.env.AsyncSharedLogReadPrev2(q.ctx, tag, seqNum)
-			if err != nil {
-				return err
-			}
-		}
-		// seqNum is stored as the LocalId
-		if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() < currentSeqNum {
-			break
-		}
-		// 3. aggressively do next read
-		seqNum = currentLogEntryFuture.GetLocalId()
-		if seqNum > currentSeqNum {
+	{
+		tracer := ProfStart(ProfType_AAR)
+		for seqNum > currentSeqNum {
 			if seqNum != protocol.MaxLogSeqnum {
 				seqNum -= 1
 			}
-			nextLogEntryFuture, err = q.env.AsyncSharedLogReadPrev2(q.ctx, tag, seqNum)
+			if first {
+				first = false
+				// 1. first read
+				currentLogEntryFuture, err = q.env.AsyncSharedLogReadPrev2(q.ctx, tag, seqNum)
+				if err != nil {
+					return err
+				}
+			}
+			// seqNum is stored as the LocalId
+			if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() < currentSeqNum {
+				break
+			}
+			// 3. aggressively do next read
+			seqNum = currentLogEntryFuture.GetLocalId()
+			if seqNum > currentSeqNum {
+				if seqNum != protocol.MaxLogSeqnum {
+					seqNum -= 1
+				}
+				nextLogEntryFuture, err = q.env.AsyncSharedLogReadPrev2(q.ctx, tag, seqNum)
+				if err != nil {
+					return err
+				}
+			}
+			// 2. sync the read
+			logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
 			if err != nil {
 				return err
 			}
-		}
-		// 2. sync the read
-		logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
-		if err != nil {
-			return err
-		}
-		if logEntry == nil || logEntry.SeqNum < currentSeqNum {
-			// unreachable since the log's seqnum exists and had been asserted
-			// by the future object above
-			panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
-		}
-		seqNum = logEntry.SeqNum
+			if logEntry == nil || logEntry.SeqNum < currentSeqNum {
+				// unreachable since the log's seqnum exists and had been asserted
+				// by the future object above
+				panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
+			}
+			seqNum = logEntry.SeqNum
 
-		currentLogEntryFuture = nextLogEntryFuture
-		nextLogEntryFuture = nil
+			currentLogEntryFuture = nextLogEntryFuture
+			nextLogEntryFuture = nil
 
-		// for seqNum > q.nextSeqNum {
-		// 	if seqNum != protocol.MaxLogSeqnum {
-		// 		seqNum -= 1
-		// 	}
-		// 	logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
-		// 	if err != nil {
-		// 		return err
-		// 	}
-		// 	if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
-		// 		break
-		// 	}
-		// 	seqNum = logEntry.SeqNum
-		queueLog := decodeQueueLogEntry(logEntry)
-		if queueLog.QueueName != q.name {
-			continue
+			// for seqNum > q.nextSeqNum {
+			// 	if seqNum != protocol.MaxLogSeqnum {
+			// 		seqNum -= 1
+			// 	}
+			// 	logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
+			// 	if err != nil {
+			// 		return err
+			// 	}
+			// 	if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
+			// 		break
+			// 	}
+			// 	seqNum = logEntry.SeqNum
+			queueLog := decodeQueueLogEntry(logEntry)
+			if queueLog.QueueName != q.name {
+				continue
+			}
+			if queueLog.auxData != nil {
+				q.nextSeqNum = queueLog.seqNum + 1
+				q.consumed = queueLog.auxData.Consumed
+				q.tail = queueLog.auxData.Tail
+				break
+			} else {
+				queueLogs = append(queueLogs, queueLog)
+			}
 		}
-		if queueLog.auxData != nil {
-			q.nextSeqNum = queueLog.seqNum + 1
-			q.consumed = queueLog.auxData.Consumed
-			q.tail = queueLog.auxData.Tail
-			break
-		} else {
-			queueLogs = append(queueLogs, queueLog)
-		}
+		tracer.ProfStop("Pop AAR sync to future")
+		q.profInfos = append(q.profInfos, tracer)
 	}
 
 	for i := len(queueLogs) - 1; i >= 0; i-- {
 		queueLog := queueLogs[i]
-		q.applyLog(queueLog)
+		{
+			tracer := ProfStart(ProfType_AAR)
+			q.applyLog(queueLog)
+			tracer.ProfStop("Pop AAR apply")
+			q.profInfos = append(q.profInfos, tracer)
+		}
 		auxData := &QueueAuxData{
 			Consumed: q.consumed,
 			Tail:     q.tail,
 		}
-		if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
-			return err
+		{
+			tracer := ProfStart(ProfType_AAR)
+			if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
+				return err
+			}
+			tracer.ProfStop("Pop AAR set aux")
+			q.profInfos = append(q.profInfos, tracer)
 		}
 	}
 	return nil
@@ -499,60 +542,90 @@ func (q *Queue) syncToFuture(future types.Future[uint64]) error {
 	// log.SetPrefix(fmt.Sprintf("[%p] ", q))
 	// defer log.SetPrefix("")
 	tag := queueLogTag(q.nameHash)
-	// try to sync last view
-	lastViewLogEntry, err := q.env.AsyncSharedLogReadPrevWithAux(q.ctx, tag, protocol.MaxLogSeqnum)
-	if err != nil {
-		return err
-	}
-	if lastViewLogEntry != nil && lastViewLogEntry.SeqNum >= q.nextSeqNum {
-		queueLog := decodeQueueLogEntry(lastViewLogEntry)
-		if queueLog.QueueName != q.name {
-			panic(fmt.Sprintf("last view queue name: %v not match self name: %v",
-				queueLog.QueueName, q.name))
-		}
-		if queueLog.auxData == nil {
-			panic(fmt.Sprintf("cached log %+v should have view", queueLog))
-		}
-		q.nextSeqNum = queueLog.seqNum + 1
-		q.consumed = queueLog.auxData.Consumed
-		q.tail = queueLog.auxData.Tail
-	}
-	// start seqNum
-	seqNum := q.nextSeqNum
-	queueLogs := make([]*QueueLogEntry, 0, 4)
-	for {
-		logEntry, err := q.env.AsyncSharedLogReadNextBlock(q.ctx, tag, seqNum)
+	{
+		tracer := ProfStart(ProfType_AAR)
+		// try to sync last view
+		lastViewLogEntry, err := q.env.AsyncSharedLogReadPrevWithAux(q.ctx, tag, protocol.MaxLogSeqnum)
 		if err != nil {
 			return err
 		}
-		// log.Printf("[DEBUG] read nextB seqnum=%016X got %+v, until target=%016X", seqNum, logEntry, targetSeqNum)
-		if logEntry.LogEntry.LocalId == future.GetLocalId() {
-			break
-		} else if future.IsResolved() {
-			targetSeqNum, _ := future.GetResult(time.Second)
-			if logEntry.SeqNum >= targetSeqNum {
-				break
+		if lastViewLogEntry != nil && lastViewLogEntry.SeqNum >= q.nextSeqNum {
+			queueLog := decodeQueueLogEntry(lastViewLogEntry)
+			if queueLog.QueueName != q.name {
+				panic(fmt.Sprintf("last view queue name: %v not match self name: %v",
+					queueLog.QueueName, q.name))
 			}
+			if queueLog.auxData == nil {
+				panic(fmt.Sprintf("cached log %+v should have view", queueLog))
+			}
+			q.nextSeqNum = queueLog.seqNum + 1
+			q.consumed = queueLog.auxData.Consumed
+			q.tail = queueLog.auxData.Tail
 		}
-		seqNum = logEntry.SeqNum + 1
-		queueLog := decodeQueueLogEntry(logEntry)
-		queueLogs = append(queueLogs, queueLog)
+		tracer.ProfStop("Pop AAR find first view")
+		q.profInfos = append(q.profInfos, tracer)
 	}
-	targetSeqNum, err := future.GetResult(time.Second)
-	if err != nil {
-		return err
+	queueLogs := make([]*QueueLogEntry, 0, 4)
+	{
+		tracer := ProfStart(ProfType_AAR)
+		// start seqNum
+		seqNum := q.nextSeqNum
+		for {
+			logEntry, err := q.env.AsyncSharedLogReadNextBlock(q.ctx, tag, seqNum)
+			if err != nil {
+				return err
+			}
+			// log.Printf("[DEBUG] read nextB seqnum=%016X got %016X", seqNum, logEntry.SeqNum)
+			if logEntry.LogEntry.LocalId == future.GetLocalId() {
+				// log.Printf("[DEBUG] break reaching future localid=%016X", future.GetLocalId())
+				break
+			} else if future.IsResolved() {
+				targetSeqNum, _ := future.GetResult(time.Second)
+				if logEntry.SeqNum >= targetSeqNum {
+					// log.Printf("[DEBUG] unnormal break seqnum=%016X >= target=%016X",
+					// 	logEntry.SeqNum, targetSeqNum)
+					break
+				}
+			}
+			seqNum = logEntry.SeqNum + 1
+			queueLog := decodeQueueLogEntry(logEntry)
+			queueLogs = append(queueLogs, queueLog)
+		}
+		tracer.ProfStop("Pop AAR sync to future")
+		q.profInfos = append(q.profInfos, tracer)
 	}
-	// log.Printf("[DEBUG] targetSeqNum=%016X", targetSeqNum)
+	var targetSeqNum uint64
+	{
+		tracer := ProfStart(ProfType_AAR)
+		var err error
+		targetSeqNum, err = future.GetResult(time.Second)
+		if err != nil {
+			return err
+		}
+		tracer.ProfStop("Pop AAR await future")
+		q.profInfos = append(q.profInfos, tracer)
+		// log.Printf("[DEBUG] targetSeqNum=%016X", targetSeqNum)
+	}
 	for _, queueLog := range queueLogs {
 		if queueLog.seqNum < targetSeqNum {
 			// log.Printf("[DEBUG] applying seqnum=%016X", queueLog.seqNum)
-			q.applyLog(queueLog)
+			{
+				tracer := ProfStart(ProfType_AAR)
+				q.applyLog(queueLog)
+				tracer.ProfStop("Pop AAR apply")
+				q.profInfos = append(q.profInfos, tracer)
+			}
 			auxData := &QueueAuxData{
 				Consumed: q.consumed,
 				Tail:     q.tail,
 			}
-			if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
-				return err
+			{
+				tracer := ProfStart(ProfType_AAR)
+				if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
+					return err
+				}
+				tracer.ProfStop("Pop AAR set aux")
+				q.profInfos = append(q.profInfos, tracer)
 			}
 		}
 	}
@@ -581,23 +654,37 @@ func IsQueueTimeoutError(err error) bool {
 
 func (q *Queue) Pop() (string /* payload */, error) {
 	if q.isEmpty() {
+		tracer := ProfStart(ProfType_SyncTo)
 		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
-			return "", errors.Wrap(err, "syncTo")
+			return "", err
 		}
+		tracer.ProfStop("Pop initial syncTo")
+		q.profInfos = append(q.profInfos, tracer)
 		if q.isEmpty() {
 			return "", kQueueEmptyError
 		}
 	}
-	// if err := q.appendPopLogAndSync(); err != nil {
-	if err := q.fastAppendPopLogAndSync(); err != nil {
-		return "", errors.Wrap(err, "appendPopLogAndSync")
+	{
+		tracer := ProfStart(ProfType_AAR)
+		// if err := q.appendPopLogAndSync(); err != nil {
+		if err := q.fastAppendPopLogAndSync(); err != nil {
+			return "", err
+		}
+		tracer.ProfStop("Pop AAR")
+		q.profInfos = append(q.profInfos, tracer)
 	}
-	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
-		return "", errors.Wrap(err, "findNext")
-	} else if nextLog != nil {
-		return nextLog.Payload, nil
-	} else {
-		return "", kQueueEmptyError
+	{
+		tracer := ProfStart(ProfType_FindNext)
+		nextLog, err := q.findNext(q.consumed, q.tail)
+		tracer.ProfStop("Pop FindNext")
+		q.profInfos = append(q.profInfos, tracer)
+		if err != nil {
+			return "", err
+		} else if nextLog != nil {
+			return nextLog.Payload, nil
+		} else {
+			return "", kQueueEmptyError
+		}
 	}
 }
 
