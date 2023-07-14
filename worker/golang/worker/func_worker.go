@@ -741,18 +741,16 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 		if result == protocol.SharedLogResultType_ASYNC_APPEND_OK {
 			localId := protocol.GetLogLocalIdFromMessage(response)
 			resolve := func() (uint64, error) {
-				for {
-					rawResponse, _ := queue.DequeueOrWaitForNextElement()
-					response := rawResponse.([]byte)
-					result := protocol.GetSharedLogResultTypeFromMessage(response)
-					if result == protocol.SharedLogResultType_APPEND_OK {
-						return protocol.GetLogSeqNumFromMessage(response), nil
-					} else if result == protocol.SharedLogResultType_DISCARDED {
-						// TODO: remove these mess by checking log response hint flags
-						return 0, fmt.Errorf("failed to append log due to discarded, should retry")
-					} else {
-						return 0, fmt.Errorf("failed to append log, unacceptable result type: %d", result)
-					}
+				rawResponse, _ := queue.DequeueOrWaitForNextElement()
+				response := rawResponse.([]byte)
+				result := protocol.GetSharedLogResultTypeFromMessage(response)
+				if result == protocol.SharedLogResultType_APPEND_OK {
+					return protocol.GetLogSeqNumFromMessage(response), nil
+				} else if result == protocol.SharedLogResultType_DISCARDED {
+					// TODO: remove these mess by checking log response hint flags
+					return 0, fmt.Errorf("failed to append log due to discarded, should retry")
+				} else {
+					return 0, fmt.Errorf("failed to resolve log, unacceptable result type: %d", result)
 				}
 			}
 			// seqNum is invalid when appending
@@ -768,7 +766,7 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 				return nil, fmt.Errorf("failed to append log, exceeds maximum number of retries")
 			}
 		} else {
-			return nil, fmt.Errorf("failed to append log, unacceptable result type: 0x%02X", result)
+			return nil, fmt.Errorf("failed to append async log, unacceptable result type: 0x%02X", result)
 		}
 	}
 }
@@ -911,7 +909,7 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 	} else if result == protocol.SharedLogResultType_ASYNC_EMPTY {
 		return nil, nil
 	} else {
-		return nil, fmt.Errorf("failed to append log, unacceptable result type: 0x%02X", result)
+		return nil, fmt.Errorf("failed to read log, unacceptable result type: 0x%02X", result)
 	}
 }
 

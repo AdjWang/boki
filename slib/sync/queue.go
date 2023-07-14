@@ -102,7 +102,7 @@ func (q *Queue) BatchPush(payloads []string) error {
 func (q *Queue) Push(payload string) error {
 	future, err := q.doPush(payload)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "doPush")
 	}
 	return future.Await(60 * time.Second)
 }
@@ -330,7 +330,7 @@ func (q *Queue) appendPopLogAndSync() error {
 		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
 	}
 	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, encoded); err != nil {
-		return err
+		return errors.Wrap(err, "AsyncSharedLogAppend")
 	} else {
 		if seqNum, err := future.GetResult(60 * time.Second); err != nil {
 			return err
@@ -519,30 +519,26 @@ func (q *Queue) syncToFuture(future types.Future[uint64]) error {
 	}
 	// start seqNum
 	seqNum := q.nextSeqNum
-	targetSeqNum := protocol.MaxLogSeqnum
 	queueLogs := make([]*QueueLogEntry, 0, 4)
-	for seqNum < targetSeqNum {
+	for {
 		logEntry, err := q.env.AsyncSharedLogReadNextBlock(q.ctx, tag, seqNum)
 		if err != nil {
 			return err
 		}
 		// log.Printf("[DEBUG] read nextB seqnum=%016X got %+v, until target=%016X", seqNum, logEntry, targetSeqNum)
-		if logEntry == nil || logEntry.SeqNum >= targetSeqNum {
+		if logEntry.LogEntry.LocalId == future.GetLocalId() {
 			break
-		}
-		seqNum = logEntry.SeqNum + 1
-		if future.IsResolved() {
-			targetSeqNum, err = future.GetResult(time.Second)
-			if err != nil {
-				return err
+		} else if future.IsResolved() {
+			targetSeqNum, _ := future.GetResult(time.Second)
+			if logEntry.SeqNum >= targetSeqNum {
+				break
 			}
 		}
+		seqNum = logEntry.SeqNum + 1
 		queueLog := decodeQueueLogEntry(logEntry)
-		if queueLog.seqNum < targetSeqNum {
-			queueLogs = append(queueLogs, queueLog)
-		}
+		queueLogs = append(queueLogs, queueLog)
 	}
-	targetSeqNum, err = future.GetResult(time.Second)
+	targetSeqNum, err := future.GetResult(time.Second)
 	if err != nil {
 		return err
 	}
@@ -586,7 +582,7 @@ func IsQueueTimeoutError(err error) bool {
 func (q *Queue) Pop() (string /* payload */, error) {
 	if q.isEmpty() {
 		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
-			return "", err
+			return "", errors.Wrap(err, "syncTo")
 		}
 		if q.isEmpty() {
 			return "", kQueueEmptyError
@@ -594,10 +590,10 @@ func (q *Queue) Pop() (string /* payload */, error) {
 	}
 	// if err := q.appendPopLogAndSync(); err != nil {
 	if err := q.fastAppendPopLogAndSync(); err != nil {
-		return "", err
+		return "", errors.Wrap(err, "appendPopLogAndSync")
 	}
 	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
-		return "", err
+		return "", errors.Wrap(err, "findNext")
 	} else if nextLog != nil {
 		return nextLog.Payload, nil
 	} else {
