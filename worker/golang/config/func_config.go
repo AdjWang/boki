@@ -31,7 +31,7 @@ func InitFuncConfig(jsonContents []byte) error {
 		}
 		entriesByFuncId[entry.FuncId] = entry
 		if entriesByFuncName[entry.FuncName] != nil {
-			return fmt.Errorf("Duplicate func_name %d", entry.FuncName)
+			return fmt.Errorf("Duplicate func_name %s", entry.FuncName)
 		}
 		if strings.HasPrefix(entry.FuncName, "grpc:") {
 			serviceName := strings.TrimPrefix(entry.FuncName, "grpc:")

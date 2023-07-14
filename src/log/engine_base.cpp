@@ -215,6 +215,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->query_tag = kInvalidLogTag;
     op->user_tags.clear();
     op->data.Reset();
+    op->response_count = 0;
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -314,6 +315,12 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
         }
     }
     response->log_client_data = op->client_data;
+    response->response_count = op->response_count;
+    if (op->response_count ==
+        std::numeric_limits<decltype(op->response_count)>::max()) {
+        HLOG(FATAL) << "Response count reaches max limit";
+    }
+    ++op->response_count;
     engine_->SendFuncWorkerMessage(op->client_id, response);
 }
 

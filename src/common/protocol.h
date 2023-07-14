@@ -162,19 +162,19 @@ constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogLocalId = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 
-constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
-constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
-constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
+constexpr uint16_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
+constexpr uint16_t kUseFifoForNestedCallFlag      = (1 << 1);
+constexpr uint16_t kAsyncInvokeFuncFlag           = (1 << 2);
 // Async response hint flag
 // Continue: median response with data, next one is on the way
 // EOFData: last response with data
 // EOF: last response without data
-constexpr uint32_t kLogResponseContinueFlag       = (1 << 3);
-constexpr uint32_t kLogResponseEOFDataFlag        = (1 << 4);
-constexpr uint32_t kLogResponseEOFFlag            = (1 << 5);
+constexpr uint16_t kLogResponseContinueFlag       = (1 << 3);
+constexpr uint16_t kLogResponseEOFDataFlag        = (1 << 4);
+constexpr uint16_t kLogResponseEOFFlag            = (1 << 5);
 #define SET_LOG_RESP_FLAG(target, flag)                        \
     do {                                                       \
-        target &= ~(uint32_t)((1 << 3) | (1 << 4) | (1 << 5)); \
+        target &= ~(uint16_t)((1 << 3) | (1 << 4) | (1 << 5)); \
         target |= flag;                                        \
     } while (0)
 
@@ -197,7 +197,8 @@ struct Message {
     int64_t send_timestamp;       // [16:24]
     int32_t payload_size;         // [24:28] Used in HANDSHAKE_RESPONSE, INVOKE_FUNC,
                                   //                 FUNC_CALL_COMPLETE, SHARED_LOG_OP
-    uint32_t flags;               // [28:32]
+    uint16_t response_count;      // [28:30] Used in SHARED_LOG_OP
+    uint16_t flags;               // [30:32]
 
     struct {
         uint16_t log_op;          // [32:34]
@@ -512,7 +513,7 @@ public:
     static Message NewSharedLogOpSucceeded(SharedLogResultType result,
                                            uint64_t log_localid,
                                            uint64_t log_seqnum = kInvalidLogSeqNum,
-                                           uint32_t flags = kLogResponseEOFFlag) {
+                                           uint16_t flags = kLogResponseEOFFlag) {
         NEW_EMPTY_MESSAGE(message);
         message.message_type = static_cast<uint16_t>(MessageType::SHARED_LOG_OP);
         message.log_op = static_cast<uint16_t>(SharedLogOpType::RESPONSE);

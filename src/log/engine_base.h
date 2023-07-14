@@ -67,6 +67,7 @@ protected:
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
+        uint16_t response_count;
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;

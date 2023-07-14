@@ -3,18 +3,20 @@ package types
 import (
 	"reflect"
 	"testing"
+
+	"cs.utexas.edu/zjia/faas/protocol"
 )
 
 func TestCondPropagate(t *testing.T) {
 	var rawData []byte
-	future := NewFuture(1 /*localid*/, func() (uint64, error) {
+	future := NewFuture(1 /*localid*/, protocol.MaxLogSeqnum, func() (uint64, error) {
 		return 2 /*seqnum*/, nil
 	})
 	{
 		client := logDataWrapperImpl{}
-		client.AddDep(future.GetMeta())
-		client.AddCond(1)
-		rawData = client.WrapData([]Tag{}, []byte{})
+		client.WithDeps([]uint64{future.GetLocalId()})
+		client.WithStreamTypes([]uint8{1})
+		rawData = client.Build([]byte{})
 	}
 	// dummy propagate...
 	// restore
@@ -26,11 +28,11 @@ func TestCondPropagate(t *testing.T) {
 		if !reflect.DeepEqual(restData, []byte{}) {
 			t.Fatalf("expected empty data, got %v", restData)
 		}
-		if !reflect.DeepEqual(client.Deps, []FutureMeta{future.GetMeta()}) {
-			t.Fatalf("unexpected deps: %+v, expected %+v", client.Deps, []FutureMeta{future.GetMeta()})
+		if !reflect.DeepEqual(client.Deps, []uint64{future.GetLocalId()}) {
+			t.Fatalf("unexpected deps: %+v, expected %+v", client.Deps, []uint64{future.GetLocalId()})
 		}
-		if !reflect.DeepEqual(client.CondMetas, []CondMeta{{1}}) {
-			t.Fatalf("unexpected deps: %+v, expected %+v", client.CondMetas, []CondMeta{{1}})
+		if !reflect.DeepEqual(client.StreamTypes, []uint8{1}) {
+			t.Fatalf("unexpected stream types: %+v, expected %+v", client.StreamTypes, []uint8{1})
 		}
 	}
 }
