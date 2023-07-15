@@ -594,6 +594,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                                 + cached_aux_data.size();
             if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
                 aux_data = STRING_AS_SPAN(cached_aux_data);
+                HVLOG_F(1, "returning auxdata={}", cached_aux_data);
             } else {
                 HLOG_F(WARNING, "Inline buffer of message not large enough "
                                 "for auxiliary data of log (seqnum {}): "
