@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "base/macro.h"
+#include "utils/debug.h"
 
 #define __ATTRIBUTE_NORETURN __attribute__((noreturn))
 
@@ -146,7 +147,7 @@ T CheckNotNull(const char* file, int line, const char* exprtext, T&& t) {
 #define VLOG(level) LOG_IF(INFO, __FAAS_PREDICT_FALSE((level) <= faas::logging::get_vlog_level()))
 #define VLOG_IS_ON(level) __FAAS_PREDICT_FALSE((level) <= faas::logging::get_vlog_level())
 #define CHECK(condition) \
-    LOG_IF(FATAL, __FAAS_PREDICT_FALSE(!(condition))) << "Check failed: " #condition " "
+    LOG_IF(FATAL, __FAAS_PREDICT_FALSE(!(condition))) << "Check failed: " #condition " " << utils::DumpStackTrace()
 
 #define COMPACT_FAAS_PLOG_INFO    faas::logging::LogMessage(__FILE__, __LINE__, faas::logging::INFO, true)
 #define COMPACT_FAAS_PLOG_WARNING faas::logging::LogMessage(__FILE__, __LINE__, faas::logging::WARNING, true)
