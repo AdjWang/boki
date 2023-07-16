@@ -258,8 +258,6 @@ void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     HVLOG_F(1, "Handle local read: op_type=0x{:02X}, op_id={}, logspace={}, tag={}, seqnum={}",
             uint16_t(op->type), op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
-    onging_local_reads_.PutChecked(op->id, op);
-
     const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
     {
@@ -271,6 +269,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
             index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
         }
     }
+    onging_local_reads_.PutChecked(op->id, op);
+
     bool use_local_index = true;
     if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
         use_local_index = false;

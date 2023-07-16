@@ -588,8 +588,8 @@ func (q *Queue) Pop() (string /* payload */, error) {
 			return "", kQueueEmptyError
 		}
 	}
-	// if err := q.appendPopLogAndSync(); err != nil {
-	if err := q.fastAppendPopLogAndSync(); err != nil {
+	if err := q.appendPopLogAndSync(); err != nil {
+		// if err := q.fastAppendPopLogAndSync(); err != nil {
 		return "", errors.Wrap(err, "appendPopLogAndSync")
 	}
 	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {

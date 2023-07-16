@@ -11,8 +11,8 @@ std::string DumpStackTrace();
 }  // namespace faas
 
 template <typename T>
-struct fmt::formatter<std::span<T>>: formatter<std::string_view> {
-    auto format(std::span<T> s, format_context& ctx) const {
+struct fmt::formatter<gsl::span<T>>: formatter<std::string_view> {
+    auto format(gsl::span<T> s, format_context& ctx) const {
         std::string result;
         for (const auto data : s) {
             result.append(fmt::format("{} ", data));
