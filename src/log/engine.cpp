@@ -320,13 +320,13 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
     if (auto log_entry = LogCacheGet(seqnum); log_entry.has_value()) {
         if (auto aux_entry = LogCacheGetAuxData(seqnum); aux_entry.has_value()) {
             uint16_t view_id = log_utils::GetViewId(seqnum);
-            std::string aux_data = log_utils::EncodeEntry<AuxMetaData>(
+            std::string aux_entry_data = log_utils::EncodeEntry<AuxMetaData>(
                 aux_entry->metadata, VECTOR_AS_SPAN(aux_entry->user_tags),
                 STRING_AS_SPAN(aux_entry->data));
             absl::ReaderMutexLock view_lk(&view_mu_);
             if (view_id < views_.size()) {
                 const View* view = views_.at(view_id);
-                PropagateAuxData(view, log_entry->metadata, STRING_AS_SPAN(aux_data));
+                PropagateAuxData(view, log_entry->metadata, STRING_AS_SPAN(aux_entry_data));
             }
         }
     }
@@ -449,88 +449,86 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                             std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::RESPONSE);
     SharedLogResultType result = SharedLogMessageHelper::GetResultType(message);
-    if (result == SharedLogResultType::ASYNC_READ_OK || 
-        result == SharedLogResultType::ASYNC_EMPTY) {
-        uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
-        uint64_t localid = message.localid;
-        uint64_t op_id = message.client_data;
+    uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
+    uint64_t localid = message.localid;
 
+    auto ResponseAndCache = [this, result, localid, seqnum](
+                                LocalOp* op, const SharedLogMessage& message,
+                                std::span<const char> payload) {
+        std::span<const uint64_t> user_tags;
+        std::span<const char> log_data;
+        std::span<const char> aux_entry_data;
+        // decode log entry
+        log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_entry_data);
+        // decode aux entry
+        AuxEntry aux_entry;
+        if (aux_entry_data.size() > 0) {
+            std::string str_aux_entry_data(aux_entry_data.begin(), aux_entry_data.end());
+            log_utils::DecodeEntry<AuxMetaData, AuxEntry>(str_aux_entry_data, &aux_entry);
+        }
+        // make response message
         Message response;
         if (result == SharedLogResultType::ASYNC_READ_OK) {
-            response = BuildLocalAsyncReadOKResponse(localid, seqnum);
+            response = BuildLocalAsyncReadCachedOKResponse(localid, seqnum, user_tags, log_data);
+        } else if (result == SharedLogResultType::READ_OK) {
+            response = BuildLocalReadOKResponse(localid, seqnum, user_tags, log_data);
+        } else {
+            UNREACHABLE();
+        }
+        if (aux_entry_data.size() > 0) {
+            auto aux_data = STRING_AS_SPAN(aux_entry.data);
+            response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+            MessageHelper::AppendInlineData(&response, aux_data);
+        }
+        FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
+        // Put the received log entry into log cache
+        LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
+        LogCachePut(log_metadata, user_tags, log_data);
+        if (aux_entry_data.size() > 0) {
+            LogCachePutAuxData(aux_entry);
+        }
+    };
+
+    uint64_t op_id = message.client_data;
+    LocalOp* op;
+    if (result == SharedLogResultType::ASYNC_READ_OK || 
+        result == SharedLogResultType::ASYNC_EMPTY) {
+        if (result == SharedLogResultType::ASYNC_READ_OK) {
             if (message.payload_size == 0) {
-                LocalOp* op;
                 if (!onging_local_reads_.Peak(op_id, &op)) {
                     HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
                     return;
                 }
+                Message response = BuildLocalAsyncReadOKResponse(localid, seqnum);
                 IntermediateLocalOpWithResponse(op, &response, message.user_metalog_progress);
             } else {
-                LocalOp* op;
                 if (!onging_local_reads_.Poll(op_id, &op)) {
                     HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
                     return;
                 }
-                uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
                 HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
-                std::span<const uint64_t> user_tags;
-                std::span<const char> log_data;
-                std::span<const char> aux_entry_data;
-                log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_entry_data);
-                Message response = BuildLocalAsyncReadCachedOKResponse(localid, seqnum, user_tags, log_data);
-                if (aux_entry_data.size() > 0) {
-                    response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_entry_data.size());
-                    MessageHelper::AppendInlineData(&response, aux_entry_data);
-                }
-                FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
-                // Put the received log entry into log cache
-                LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
-                LogCachePut(log_metadata, user_tags, log_data);
-                if (aux_entry_data.size() > 0) {
-                    LogCachePutAuxData(aux_entry_data);
-                }
+                ResponseAndCache(op, message, payload);
             }
         } else if (result == SharedLogResultType::ASYNC_EMPTY) {
-            response = MessageHelper::NewSharedLogOpFailed(SharedLogResultType::ASYNC_EMPTY);
-            LocalOp* op;
             if (!onging_local_reads_.Poll(op_id, &op)) {
                 HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
                 return;
             }
             FinishLocalOpWithFailure(
-                op, SharedLogResultType::EMPTY, message.user_metalog_progress);
+                op, SharedLogResultType::ASYNC_EMPTY, message.user_metalog_progress);
         } else {
             UNREACHABLE();
         }
     } else if (    result == SharedLogResultType::READ_OK
                 || result == SharedLogResultType::EMPTY
                 || result == SharedLogResultType::DATA_LOST) {
-        uint64_t op_id = message.client_data;
-        LocalOp* op;
         if (!onging_local_reads_.Poll(op_id, &op)) {
             HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
             return;
         }
         if (result == SharedLogResultType::READ_OK) {
-            uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
-            uint64_t localid = message.localid;
             HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
-            std::span<const uint64_t> user_tags;
-            std::span<const char> log_data;
-            std::span<const char> aux_entry_data;
-            log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_entry_data);
-            Message response = BuildLocalReadOKResponse(localid, seqnum, user_tags, log_data);
-            if (aux_entry_data.size() > 0) {
-                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_entry_data.size());
-                MessageHelper::AppendInlineData(&response, aux_entry_data);
-            }
-            FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
-            // Put the received log entry into log cache
-            LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
-            LogCachePut(log_metadata, user_tags, log_data);
-            if (aux_entry_data.size() > 0) {
-                LogCachePutAuxData(aux_entry_data);
-            }
+            ResponseAndCache(op, message, payload);
         } else if (result == SharedLogResultType::EMPTY) {
             FinishLocalOpWithFailure(
                 op, SharedLogResultType::EMPTY, message.user_metalog_progress);
@@ -594,7 +592,6 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                                 + cached_aux_data.size();
             if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
                 aux_data = STRING_AS_SPAN(cached_aux_data);
-                HVLOG_F(1, "returning auxdata={}", cached_aux_data);
             } else {
                 HLOG_F(WARNING, "Inline buffer of message not large enough "
                                 "for auxiliary data of log (seqnum {}): "
@@ -790,11 +787,11 @@ std::optional<LogEntry> Engine::LogCacheGet(uint64_t seqnum) {
     return log_cache_->GetLogData(seqnum);
 }
 
-void Engine::LogCachePutAuxData(std::span<const char> aux_entry_data) {
+void Engine::LogCachePutAuxData(const AuxEntry& aux_entry) {
     if (!log_cache_enabled_) {
         return;
     }
-    log_cache_->PutAuxData(aux_entry_data);
+    log_cache_->PutAuxData(aux_entry);
 }
 
 void Engine::LogCachePutAuxData(const AuxMetaData& aux_metadata,

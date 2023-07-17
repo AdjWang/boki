@@ -158,7 +158,7 @@ T CheckNotNull(const char* file, int line, const char* exprtext, T&& t) {
 #define PLOG_IF(severity, condition) \
     !(condition) ? (void)0 : faas::logging::LogMessageVoidify() & PLOG(severity)
 #define PCHECK(condition) \
-    PLOG_IF(FATAL, __FAAS_PREDICT_FALSE(!(condition))) << "Check failed: " #condition " "
+    PLOG_IF(FATAL, __FAAS_PREDICT_FALSE(!(condition))) << "Check failed: " #condition " " << utils::DumpStackTrace()
 
 #define CHECK_OP_LOG(name, op, val1, val2, log)            \
     while (auto _result = std::unique_ptr<std::string>(    \
@@ -166,7 +166,7 @@ T CheckNotNull(const char* file, int line, const char* exprtext, T&& t) {
                faas::logging::GetReferenceableValue(val1), \
                faas::logging::GetReferenceableValue(val2), \
                #val1 " " #op " " #val2)))                  \
-        log(__FILE__, __LINE__, *_result).stream()
+        log(__FILE__, __LINE__, *_result).stream() << utils::DumpStackTrace()
 
 #define CHECK_OP(name, op, val1, val2) \
     CHECK_OP_LOG(name, op, val1, val2, faas::logging::LogMessageFatal)

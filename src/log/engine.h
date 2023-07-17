@@ -64,7 +64,7 @@ private:
                      std::span<const uint64_t> user_tags,
                      std::span<const char> log_data);
     std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
-    void LogCachePutAuxData(std::span<const char> aux_entry_data);
+    void LogCachePutAuxData(const AuxEntry& aux_entry);
     void LogCachePutAuxData(const AuxMetaData& aux_metadata,
                             std::span<const uint64_t> user_tags,
                             std::span<const char> aux_data);

@@ -1,6 +1,7 @@
 #define __FAAS_USED_IN_BINDING
 #include "base/diagnostic.h"
 #include "base/logging.h"
+#include "utils/debug.h"
 
 #include <errno.h>
 #include <fcntl.h>

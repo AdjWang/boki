@@ -123,7 +123,7 @@ public:
                     std::span<const char> log_data);
     std::optional<LogEntry> GetLogData(uint64_t seqnum);
 
-    void PutAuxData(std::span<const char> aux_entry_data);
+    void PutAuxData(const AuxEntry& aux_entry);
     void PutAuxData(const AuxMetaData& aux_metadata,
                     std::span<const uint64_t> user_tags,
                     std::span<const char> aux_data);
