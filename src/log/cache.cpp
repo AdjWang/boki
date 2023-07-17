@@ -235,18 +235,9 @@ std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) {
     }
 }
 
-void ShardedLRUCache::PutAuxData(std::span<const char> aux_entry_data) {
-    AuxEntry aux_entry;
-    std::string str_aux_entry_data(aux_entry_data.begin(), aux_entry_data.end());
-    log_utils::DecodeEntry<AuxMetaData, AuxEntry>(str_aux_entry_data, &aux_entry);
-    const AuxMetaData& aux_metadata = aux_entry.metadata;
-    std::string key_str = fmt::format("1_{:016x}", aux_metadata.seqnum);
-    {
-        absl::MutexLock cache_lk_(&cache_mu_);
-        aux_index_->Add(VECTOR_AS_SPAN(aux_entry.user_tags), aux_metadata.seqnum);
-        dbm_->Set(key_str, str_aux_entry_data, /* overwrite= */ true);
-        UpdateCacheIndex();
-    }
+void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
+    PutAuxData(aux_entry.metadata, VECTOR_AS_SPAN(aux_entry.user_tags),
+               STRING_AS_SPAN(aux_entry.data));
 }
 
 void ShardedLRUCache::PutAuxData(const AuxMetaData& aux_metadata,
