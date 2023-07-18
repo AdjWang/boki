@@ -172,8 +172,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 					return false, newRuntimeError(err.Error())
 				}
 			}
-			// seqNum is stored as the LocalId
-			if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() <= currentSeqNum {
+			if currentLogEntryFuture == nil || currentLogEntryFuture.GetSeqNum() <= currentSeqNum {
 				break
 			}
 			if currentLogEntryFuture.IsResolved() {
@@ -181,7 +180,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 				first = true
 			} else {
 				// 3. aggressively do next read
-				seqNum = currentLogEntryFuture.GetLocalId()
+				seqNum = currentLogEntryFuture.GetSeqNum()
 				if seqNum > currentSeqNum {
 					if seqNum != protocol.MaxLogSeqnum {
 						seqNum -= 1
@@ -377,8 +376,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 				return newRuntimeError(err.Error())
 			}
 		}
-		// seqNum is stored as the LocalId
-		if currentLogEntryFuture == nil || currentLogEntryFuture.GetLocalId() < currentSeqNum {
+		if currentLogEntryFuture == nil || currentLogEntryFuture.GetSeqNum() < currentSeqNum {
 			break
 		}
 		if currentLogEntryFuture.IsResolved() {
@@ -386,7 +384,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 			first = true
 		} else {
 			// 3. aggressively do next read
-			seqNum = currentLogEntryFuture.GetLocalId()
+			seqNum = currentLogEntryFuture.GetSeqNum()
 			if seqNum > currentSeqNum {
 				if seqNum != protocol.MaxLogSeqnum {
 					seqNum -= 1

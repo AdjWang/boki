@@ -37,6 +37,7 @@ type LogEntryIndex struct {
 
 type Future[T uint64 | *LogEntryWithMeta] interface {
 	GetLocalId() uint64
+	GetSeqNum() uint64
 	GetResult(timeout time.Duration) (T, error)
 	Await(timeout time.Duration) error
 	IsResolved() bool

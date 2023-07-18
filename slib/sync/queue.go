@@ -24,6 +24,9 @@ type Queue struct {
 	consumed   uint64
 	tail       uint64
 	nextSeqNum uint64
+
+	// DEBUG
+	profInfos []*profInfo
 }
 
 type QueueAuxData struct {
@@ -81,6 +84,27 @@ func NewQueue(ctx context.Context, env types.Environment, name string) (*Queue, 
 		return nil, err
 	}
 	return q, nil
+}
+
+func (q *Queue) GetProfInfo() []string {
+	// limit the size of the buffer
+	if len(q.profInfos) > 2000 {
+		q.profInfos = q.profInfos[len(q.profInfos)-2000:]
+	}
+	return []string{fmt.Sprint(q.profInfos)}
+
+	// var buf bytes.Buffer
+	// zw := gzip.NewWriter(&buf)
+
+	// _, err := zw.Write([]byte(fmt.Sprint(q.profInfos)))
+	// if err != nil {
+	// 	return []byte(fmt.Sprint(err))
+	// }
+
+	// if err := zw.Close(); err != nil {
+	// 	return []byte(fmt.Sprint(err))
+	// }
+	// return buf.Bytes()
 }
 
 func (q *Queue) Push(payload string) error {
@@ -166,6 +190,7 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 	queueLogs := make([]*QueueLogEntry, 0, 4)
 
 	seqNum := tailSeqNum
+	tracer1 := ProfStart(ProfType_AAR)
 	for seqNum > q.nextSeqNum {
 		if seqNum != protocol.MaxLogSeqnum {
 			seqNum -= 1
@@ -191,7 +216,10 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 			queueLogs = append(queueLogs, queueLog)
 		}
 	}
+	tracer1.ProfStop("Pop AAR ReadPrev")
+	q.profInfos = append(q.profInfos, tracer1)
 
+	tracer2 := ProfStart(ProfType_AAR)
 	for i := len(queueLogs) - 1; i >= 0; i-- {
 		queueLog := queueLogs[i]
 		q.applyLog(queueLog)
@@ -203,6 +231,8 @@ func (q *Queue) syncToBackward(tailSeqNum uint64) error {
 			return err
 		}
 	}
+	tracer2.ProfStop("Pop AAR ApplyLogs")
+	q.profInfos = append(q.profInfos, tracer2)
 	return nil
 }
 
@@ -252,9 +282,12 @@ func (q *Queue) appendPopLogAndSync() error {
 		panic(err)
 	}
 	tags := []uint64{queueLogTag(q.nameHash)}
+	tracer := ProfStart(ProfType_AAR)
 	if seqNum, err := q.env.SharedLogAppend(q.ctx, tags, encoded); err != nil {
 		return err
 	} else {
+		tracer.ProfStop("Pop AAR Append")
+		q.profInfos = append(q.profInfos, tracer)
 		return q.syncTo(seqNum)
 	}
 }
@@ -272,22 +305,36 @@ func IsQueueTimeoutError(err error) bool {
 
 func (q *Queue) Pop() (string /* payload */, error) {
 	if q.isEmpty() {
+		tracer := ProfStart(ProfType_SyncTo)
 		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
 			return "", err
 		}
+		tracer.ProfStop("Pop initial syncTo")
+		q.profInfos = append(q.profInfos, tracer)
 		if q.isEmpty() {
 			return "", kQueueEmptyError
 		}
 	}
-	if err := q.appendPopLogAndSync(); err != nil {
-		return "", err
+	{
+		tracer := ProfStart(ProfType_AAR)
+		if err := q.appendPopLogAndSync(); err != nil {
+			return "", err
+		}
+		tracer.ProfStop("Pop AAR")
+		q.profInfos = append(q.profInfos, tracer)
 	}
-	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
-		return "", err
-	} else if nextLog != nil {
-		return nextLog.Payload, nil
-	} else {
-		return "", kQueueEmptyError
+	{
+		tracer := ProfStart(ProfType_FindNext)
+		nextLog, err := q.findNext(q.consumed, q.tail)
+		tracer.ProfStop("Pop FindNext")
+		q.profInfos = append(q.profInfos, tracer)
+		if err != nil {
+			return "", err
+		} else if nextLog != nil {
+			return nextLog.Payload, nil
+		} else {
+			return "", kQueueEmptyError
+		}
 	}
 }
 

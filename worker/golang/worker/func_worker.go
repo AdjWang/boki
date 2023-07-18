@@ -156,7 +156,8 @@ func (w *FuncWorker) Run() {
 					delete(w.outgoingLogOps, id)
 				}
 			} else {
-				log.Printf("[WARN] Unexpected log message id for sync ops: %d", id)
+				log.Printf("[WARN] Unexpected log message id for sync ops: %d, InspectMessage=%v",
+					id, protocol.InspectMessage(message))
 			}
 			w.mux.Unlock()
 		} else {

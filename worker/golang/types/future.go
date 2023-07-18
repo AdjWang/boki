@@ -106,6 +106,10 @@ func (f *futureImpl[T]) GetLocalId() uint64 {
 	return f.LocalId
 }
 
+func (f *futureImpl[T]) GetSeqNum() uint64 {
+	return f.SeqNum
+}
+
 func (f *futureImpl[T]) IsResolved() bool {
 	return f.resolved.Load()
 }

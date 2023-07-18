@@ -110,6 +110,17 @@ const (
 	FLAG_kLogResponseEOFFlag       uint16 = (1 << 5)
 )
 
+// DEBUG
+func InspectMessage(buffer []byte) string {
+	localId := GetLogLocalIdFromMessage(buffer)
+	seqNum := GetLogSeqNumFromMessage(buffer)
+	result := GetSharedLogResultTypeFromMessage(buffer)
+	flags := GetFlagsFromMessage(buffer)
+	respCount := GetResponseCountFromMessage(buffer)
+	return fmt.Sprintf("localId=%016X, seqNum=%016X, resultType=%v, flags=%v, respCount=%v",
+		localId, seqNum, result, flags, respCount)
+}
+
 func GetResponseCountFromMessage(buffer []byte) uint16 {
 	return binary.LittleEndian.Uint16(buffer[28:30])
 }
