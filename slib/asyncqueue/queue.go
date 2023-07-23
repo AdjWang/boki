@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"runtime/debug"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -22,9 +20,7 @@ type Queue struct {
 	name     string
 	nameHash uint64
 
-	consumed   uint64
-	tail       uint64
-	nextSeqNum uint64
+	view *QueueAuxData
 }
 
 type QueueAuxData struct {
@@ -49,50 +45,194 @@ func queuePushLogTag(nameHash uint64) uint64 {
 	return (nameHash << common.LogTagReserveBits) + common.QueuePushLogTagLowBits
 }
 
-func decodeQueueLogEntry(condLogEntry *types.LogEntryWithMeta) *QueueLogEntry {
+func decodeQueueLogEntry(logEntry *types.LogEntryWithMeta) *QueueLogEntry {
 	queueLog := &QueueLogEntry{}
-	err := json.Unmarshal(condLogEntry.Data, queueLog)
+	err := json.Unmarshal(logEntry.Data, queueLog)
 	if err != nil {
-		panic(errors.Wrapf(err, "decodeQueueLogEntry json unmarshal error: %+v", condLogEntry))
+		panic(errors.Wrapf(err, "decodeQueueLogEntry json unmarshal error: %+v", logEntry))
 	}
-	if len(condLogEntry.AuxData) > 0 {
+	if len(logEntry.AuxData) > 0 {
 		auxData := &QueueAuxData{}
-		err := json.Unmarshal(condLogEntry.AuxData, auxData)
+		err := json.Unmarshal(logEntry.AuxData, auxData)
 		if err != nil {
 			panic(errors.Wrapf(err, "auxdata json unmarshal error: %v:%+v",
-				string(condLogEntry.AuxData), condLogEntry))
+				string(logEntry.AuxData), logEntry))
 		}
 		queueLog.auxData = auxData
 	}
-	queueLog.seqNum = condLogEntry.SeqNum
+	queueLog.seqNum = logEntry.SeqNum
 	return queueLog
 }
 
 func NewQueue(ctx context.Context, env types.Environment, name string) (*Queue, error) {
 	q := &Queue{
-		ctx:        ctx,
-		env:        env,
-		name:       name,
-		nameHash:   common.NameHash(name),
-		consumed:   0,
-		tail:       0,
-		nextSeqNum: 0,
+		ctx:      ctx,
+		env:      env,
+		name:     name,
+		nameHash: common.NameHash(name),
+		view:     nil,
 	}
-	if err := q.syncToBackward(protocol.MaxLogSeqnum); err != nil {
-		return nil, err
+	if err := q.syncTo(types.LogEntryIndex{
+		LocalId: protocol.InvalidLogLocalId,
+		SeqNum:  protocol.MaxLogSeqnum,
+	}); err != nil {
+		return nil, errors.Wrap(err, "initial syncTo")
 	}
 	return q, nil
 }
 
+func (q *Queue) GetTag() uint64 {
+	return queueLogTag(q.nameHash)
+}
+
+func (q *Queue) UpdateView(view interface{}, logEntry *types.LogEntryWithMeta) ([]uint64, interface{}) {
+	if logEntry == nil {
+		panic("unreachable")
+	}
+	queueLog := decodeQueueLogEntry(logEntry)
+	if queueLog.auxData != nil {
+		panic("unreachable")
+	}
+	queueAuxData := &QueueAuxData{Consumed: 0, Tail: 0}
+	if view != nil {
+		queueAuxData = view.(*QueueAuxData)
+	}
+	// apply log to view
+	if queueLog.QueueName != q.name {
+		panic("unreachable")
+	}
+	if queueLog.IsPush {
+		queueAuxData.Tail = queueLog.seqNum + 1
+	} else {
+		nextLog, err := q.findNext(queueAuxData.Consumed, queueAuxData.Tail)
+		if err != nil {
+			panic(errors.Wrapf(err, "view: %+v", queueAuxData))
+		}
+		if nextLog != nil {
+			queueAuxData.Consumed = nextLog.seqNum + 1
+		} else {
+			queueAuxData.Consumed = queueLog.seqNum
+		}
+	}
+	return []uint64{q.GetTag()}, queueAuxData
+}
+
+func (q *Queue) EncodeView(view interface{}) ([]byte, error) {
+	encoded, err := json.Marshal(view.(*QueueAuxData))
+	if err != nil {
+		return nil, errors.Wrapf(err, "auxdata json marshal error: %v", view)
+	}
+	return encoded, nil
+}
+
+func (q *Queue) DecodeView(rawViewData []byte) (interface{}, error) {
+	view := QueueAuxData{Consumed: 0, Tail: 0}
+	err := json.Unmarshal(rawViewData, &view)
+	if err != nil {
+		return nil, errors.Wrapf(err, "auxdata json unmarshal error: %v:%+v", string(rawViewData), rawViewData)
+	}
+	return &view, nil
+}
+
+func (q *Queue) appendPopLogAndSync() error {
+	logEntry := &QueueLogEntry{
+		QueueName: q.name,
+		IsPush:    false,
+	}
+	encoded, err := json.Marshal(logEntry)
+	if err != nil {
+		panic(err)
+	}
+	tags := []types.Tag{
+		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
+	}
+	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, encoded); err != nil {
+		return errors.Wrap(err, "AsyncSharedLogAppend")
+	} else {
+		localId := future.GetLocalId()
+		return q.syncTo(types.LogEntryIndex{
+			LocalId: localId,
+			SeqNum:  protocol.InvalidLogSeqNum,
+		})
+	}
+}
+
+func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
+	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, q.GetTag(), logIndex)
+	doneCh := make(chan struct{})
+	errCh := make(chan error)
+	go func(ctx context.Context) {
+		var view interface{}
+		for {
+			var logEntry *types.LogEntryWithMeta
+			select {
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			default:
+				logStreamEntry, err := logStream.DequeueOrWaitForNextElement()
+				if err != nil {
+					errCh <- ctx.Err()
+					return
+				}
+				logEntry = logStreamEntry.(types.LogStreamEntry[types.LogEntryWithMeta]).LogEntry
+				err = logStreamEntry.(types.LogStreamEntry[types.LogEntryWithMeta]).Err
+				if err != nil {
+					errCh <- ctx.Err()
+					return
+				}
+			}
+			if logEntry == nil {
+				if view != nil {
+					q.view = view.(*QueueAuxData)
+				}
+				doneCh <- struct{}{}
+				break
+			}
+			// log.Printf("[DEBUG] got logEntry=%+v", logEntry)
+			if len(logEntry.AuxData) != 0 {
+				decoded, err := q.DecodeView(logEntry.AuxData)
+				if err != nil {
+					errCh <- ctx.Err()
+					return
+				}
+				view = decoded
+			} else {
+				var auxTags []uint64
+				auxTags, view = q.UpdateView(view, logEntry)
+				// log.Printf("[DEBUG] applying logEntry=%+v, got view=%+v", logEntry, view)
+				// some times we only need to grab log entries with out view
+				// so output view can be nil
+				if view != nil {
+					encoded, err := q.EncodeView(view)
+					if err != nil {
+						errCh <- ctx.Err()
+						return
+					}
+					if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxTags, logEntry.SeqNum, encoded); err != nil {
+						errCh <- ctx.Err()
+						return
+					}
+				}
+			}
+		}
+	}(q.ctx)
+	select {
+	case <-doneCh:
+		return nil
+	case err := <-errCh:
+		return err
+	}
+}
+
+// -----------------------------------------------------------------------------
+
 func (q *Queue) Clone() *Queue {
 	return &Queue{
-		ctx:        q.ctx,
-		env:        q.env,
-		name:       q.name,
-		nameHash:   q.nameHash,
-		consumed:   q.consumed,
-		tail:       q.tail,
-		nextSeqNum: q.nextSeqNum,
+		ctx:      q.ctx,
+		env:      q.env,
+		name:     q.name,
+		nameHash: q.nameHash,
 	}
 }
 
@@ -142,7 +282,7 @@ func (q *Queue) doPush(payload string) (types.Future[uint64], error) {
 }
 
 func (q *Queue) isEmpty() bool {
-	return q.consumed >= q.tail
+	return q.view == nil || q.view.Consumed >= q.view.Tail
 }
 
 func (q *Queue) findNext(minSeqNum, maxSeqNum uint64) (*QueueLogEntry, error) {
@@ -165,366 +305,39 @@ func (q *Queue) findNext(minSeqNum, maxSeqNum uint64) (*QueueLogEntry, error) {
 	return nil, nil
 }
 
-func (q *Queue) applyLog(queueLog *QueueLogEntry) error {
-	if queueLog.seqNum < q.nextSeqNum {
-		// DEBUG
-		debug.PrintStack()
-		log.Fatalf("[FATAL] LogSeqNum=%#016x, NextSeqNum=%#016x", queueLog.seqNum, q.nextSeqNum)
-	}
-	if queueLog.IsPush {
-		q.tail = queueLog.seqNum + 1
-	} else {
-		nextLog, err := q.findNext(q.consumed, q.tail)
-		if err != nil {
-			return err
-		}
-		if nextLog != nil {
-			q.consumed = nextLog.seqNum + 1
-		} else {
-			q.consumed = queueLog.seqNum
-		}
-	}
-	q.nextSeqNum = queueLog.seqNum + 1
-	return nil
-}
-
-func (q *Queue) setAuxData(seqNum uint64, auxData *QueueAuxData) error {
-	tag := queueLogTag(q.nameHash)
-	encoded, err := json.Marshal(auxData)
-	if err != nil {
-		panic(err)
-	}
-	// DEBUG
-	// log.Printf("[DEBUG] setting auxdata %v:%v", string(encoded), encoded)
-	return q.env.SharedLogSetAuxDataWithShards(q.ctx, []uint64{tag}, seqNum, encoded)
-}
-
-// func (q *Queue) syncToBackward(tailSeqNum uint64) error {
-// 	if tailSeqNum < q.nextSeqNum {
-// 		log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", q.nextSeqNum, tailSeqNum)
+// func (q *Queue) applyLog(queueLog *QueueLogEntry) error {
+// 	if queueLog.seqNum < q.nextSeqNum {
+// 		// DEBUG
+// 		debug.PrintStack()
+// 		log.Fatalf("[FATAL] LogSeqNum=%#016x, NextSeqNum=%#016x", queueLog.seqNum, q.nextSeqNum)
 // 	}
-// 	if tailSeqNum == q.nextSeqNum {
-// 		return nil
-// 	}
-
-// 	tag := queueLogTag(q.nameHash)
-// 	queueLogs := make([]*QueueLogEntry, 0, 4)
-
-// 	seqNum := tailSeqNum
-// 	for seqNum > q.nextSeqNum {
-// 		if seqNum != protocol.MaxLogSeqnum {
-// 			seqNum -= 1
-// 		}
-// 		logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
+// 	if queueLog.IsPush {
+// 		q.tail = queueLog.seqNum + 1
+// 	} else {
+// 		nextLog, err := q.findNext(q.consumed, q.tail)
 // 		if err != nil {
 // 			return err
 // 		}
-// 		if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
-// 			break
-// 		}
-// 		seqNum = logEntry.SeqNum
-// 		queueLog := decodeQueueLogEntry(logEntry)
-// 		if queueLog.QueueName != q.name {
-// 			continue
-// 		}
-// 		if queueLog.auxData != nil {
-// 			q.nextSeqNum = queueLog.seqNum + 1
-// 			q.consumed = queueLog.auxData.Consumed
-// 			q.tail = queueLog.auxData.Tail
-// 			break
+// 		if nextLog != nil {
+// 			q.consumed = nextLog.seqNum + 1
 // 		} else {
-// 			queueLogs = append(queueLogs, queueLog)
+// 			q.consumed = queueLog.seqNum
 // 		}
 // 	}
+// 	q.nextSeqNum = queueLog.seqNum + 1
+// 	return nil
+// }
 
-//		for i := len(queueLogs) - 1; i >= 0; i-- {
-//			queueLog := queueLogs[i]
-//			q.applyLog(queueLog)
-//			auxData := &QueueAuxData{
-//				Consumed: q.consumed,
-//				Tail:     q.tail,
-//			}
-//			if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
-//				return err
-//			}
-//		}
-//		return nil
-//	}
-func (q *Queue) syncToBackward(tailSeqNum uint64) error {
-	// DEBUG
-	// log.SetPrefix(fmt.Sprintf("[%p] ", q))
-	// defer log.SetPrefix("")
-
-	if tailSeqNum < q.nextSeqNum {
-		log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", q.nextSeqNum, tailSeqNum)
-	}
-	if tailSeqNum == q.nextSeqNum {
-		return nil
-	}
-
-	tag := queueLogTag(q.nameHash)
-	// try to sync last view
-	lastViewLogEntry, err := q.env.AsyncSharedLogReadPrevWithAux(q.ctx, tag, tailSeqNum-1)
-	if err != nil {
-		return err
-	}
-	if lastViewLogEntry != nil && lastViewLogEntry.SeqNum >= q.nextSeqNum {
-		queueLog := decodeQueueLogEntry(lastViewLogEntry)
-		if queueLog.QueueName != q.name {
-			panic(fmt.Sprintf("last view queue name: %v not match self name: %v",
-				queueLog.QueueName, q.name))
-		}
-		if queueLog.auxData == nil {
-			panic(fmt.Sprintf("cached log %+v should have view", queueLog))
-		}
-		q.nextSeqNum = queueLog.seqNum + 1
-		q.consumed = queueLog.auxData.Consumed
-		q.tail = queueLog.auxData.Tail
-	}
-	// DEBUG
-	// log.Printf("[DEBUG] lastView=%+v nextSeqNum=%016X", lastViewLogEntry, q.nextSeqNum)
-	// start seqNum
-	seqNum := q.nextSeqNum
-	logEntryFutures := make([]types.Future[*types.LogEntryWithMeta], 0, 10)
-	for seqNum < tailSeqNum {
-		logEntryFuture, err := q.env.AsyncSharedLogReadNext2(q.ctx, tag, seqNum)
-		if err != nil {
-			return err
-		}
-		if logEntryFuture == nil || logEntryFuture.GetSeqNum() >= tailSeqNum {
-			break
-		}
-		logEntryFutures = append(logEntryFutures, logEntryFuture)
-		// DEBUG
-		// log.Printf("[DEBUG] read next seqnum=%016X got seqnum=%016X", seqNum, logEntryFuture.GetSeqNum())
-		seqNum = logEntryFuture.GetSeqNum() + 1
-	}
-	for _, logEntryFuture := range logEntryFutures {
-		logEntry, err := logEntryFuture.GetResult(60 * time.Second)
-		if err != nil {
-			return errors.Wrapf(err, "log entry future await failed: %+v", logEntryFuture)
-		}
-		queueLog := decodeQueueLogEntry(logEntry)
-		if queueLog.QueueName != q.name {
-			// DEBUG
-			panic("unreachable")
-		}
-		q.applyLog(queueLog)
-		if queueLog.auxData == nil {
-			auxData := &QueueAuxData{
-				Consumed: q.consumed,
-				Tail:     q.tail,
-			}
-			if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (q *Queue) syncToForward(tailSeqNum uint64) error {
-	if tailSeqNum < q.nextSeqNum {
-		log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", q.nextSeqNum, tailSeqNum)
-	}
-	tag := queueLogTag(q.nameHash)
-	seqNum := q.nextSeqNum
-	for seqNum < tailSeqNum {
-		condLogEntry, err := q.env.AsyncSharedLogReadNext(q.ctx, tag, seqNum)
-		if err != nil {
-			return err
-		}
-		if condLogEntry == nil || condLogEntry.SeqNum >= tailSeqNum {
-			break
-		}
-		seqNum = condLogEntry.SeqNum + 1
-		queueLog := decodeQueueLogEntry(condLogEntry)
-		if queueLog.QueueName == q.name {
-			q.applyLog(queueLog)
-			if queueLog.auxData == nil {
-				auxData := &QueueAuxData{
-					Consumed: q.consumed,
-					Tail:     q.tail,
-				}
-				if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (q *Queue) syncTo(tailSeqNum uint64) error {
-	return q.syncToBackward(tailSeqNum)
-}
-
-func (q *Queue) appendPopLogAndSync() error {
-	logEntry := &QueueLogEntry{
-		QueueName: q.name,
-		IsPush:    false,
-	}
-	encoded, err := json.Marshal(logEntry)
-	if err != nil {
-		panic(err)
-	}
-	tags := []types.Tag{
-		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
-	}
-	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, encoded); err != nil {
-		return errors.Wrap(err, "AsyncSharedLogAppend")
-	} else {
-		if seqNum, err := future.GetResult(60 * time.Second); err != nil {
-			return err
-		} else {
-			return q.syncTo(seqNum)
-		}
-	}
-}
-
-func (q *Queue) fastAppendPopLogAndSync() error {
-	logEntry := &QueueLogEntry{
-		QueueName: q.name,
-		IsPush:    false,
-	}
-	encoded, err := json.Marshal(logEntry)
-	if err != nil {
-		panic(err)
-	}
-	tags := []types.Tag{
-		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
-	}
-	if future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, encoded); err != nil {
-		return err
-	} else {
-		return q.syncToFuture(future)
-	}
-}
-
-func (q *Queue) syncToFuture(future types.Future[uint64]) error {
-	// DEBUG
-	// log.SetPrefix(fmt.Sprintf("[%p] ", q))
-	// defer log.SetPrefix("")
-
-	tag := queueLogTag(q.nameHash)
-	// try to sync last view
-	lastViewSeqNum := protocol.MaxLogSeqnum
-	if future.IsResolved() {
-		lastViewSeqNum, _ = future.GetResult(time.Second)
-		lastViewSeqNum--
-	}
-	lastViewLogEntry, err := q.env.AsyncSharedLogReadPrevWithAux(q.ctx, tag, lastViewSeqNum)
-	if err != nil {
-		return err
-	}
-	if lastViewLogEntry != nil && lastViewLogEntry.SeqNum >= q.nextSeqNum {
-		queueLog := decodeQueueLogEntry(lastViewLogEntry)
-		if queueLog.QueueName != q.name {
-			panic(fmt.Sprintf("last view queue name: %v not match self name: %v",
-				queueLog.QueueName, q.name))
-		}
-		if queueLog.auxData == nil {
-			panic(fmt.Sprintf("cached log %+v should have view", queueLog))
-		}
-		q.nextSeqNum = queueLog.seqNum + 1
-		q.consumed = queueLog.auxData.Consumed
-		q.tail = queueLog.auxData.Tail
-	}
-	// start seqNum
-	seqNum := q.nextSeqNum
-	logEntryFutures := make([]types.Future[*types.LogEntryWithMeta], 0, 10)
-	for {
-		logEntryFuture, err := q.env.AsyncSharedLogReadNextBlock2(q.ctx, tag, seqNum)
-		if err != nil {
-			return err
-		}
-		if logEntryFuture == nil {
-			panic("unreachable")
-		}
-		// log.Printf("[DEBUG] read nextB seqnum=%016X got %+v, until target=%016X", seqNum, logEntry, targetSeqNum)
-		if logEntryFuture.GetLocalId() == future.GetLocalId() {
-			break
-		} else if future.IsResolved() {
-			targetSeqNum, _ := future.GetResult(time.Second)
-			if logEntryFuture.GetSeqNum() >= targetSeqNum {
-				break
-			}
-		}
-		logEntryFutures = append(logEntryFutures, logEntryFuture)
-		seqNum = logEntryFuture.GetSeqNum() + 1
-	}
-	targetSeqNum, err := future.GetResult(time.Second)
-	if err != nil {
-		return err
-	}
-	// DEBUG
-	viewSeqNum := protocol.MaxLogSeqnum
-	if lastViewLogEntry != nil {
-		viewSeqNum = lastViewLogEntry.SeqNum
-	}
-	// applyFrom, applyTo := protocol.MaxLogSeqnum, protocol.MaxLogSeqnum
-	// if len(logEntryFutures) > 0 {
-	// 	applyFrom = logEntryFutures[0].GetSeqNum()
-	// 	applyTo = logEntryFutures[len(logEntryFutures)-1].GetSeqNum()
-	// }
-	// log.Printf("[DEBUG] viewSeqNum=%016X, q.nextSeqNum=%016X, targetSeqNum=%016X, apply=[%016X, %016X]",
-	// 	viewSeqNum, q.nextSeqNum, targetSeqNum, applyFrom, applyTo)
-
-	if viewSeqNum >= targetSeqNum {
-		// Exceeds the target, needs fallback
-		// This may happen because the last ReadPrevWithAux did not use the future as reference, it got the newest view
-		targetViewLogEntry, err := q.env.AsyncSharedLogReadPrevWithAux(q.ctx, tag, targetSeqNum-1)
-		if err != nil {
-			return err
-		}
-		if targetViewLogEntry == nil {
-			panic("unreachable")
-		}
-		queueLog := decodeQueueLogEntry(targetViewLogEntry)
-		if queueLog.QueueName != q.name {
-			panic(fmt.Sprintf("last view queue name: %v not match self name: %v",
-				queueLog.QueueName, q.name))
-		}
-		if queueLog.auxData == nil {
-			panic(fmt.Sprintf("cached log %+v should have view", queueLog))
-		}
-		q.nextSeqNum = queueLog.seqNum + 1
-		q.consumed = queueLog.auxData.Consumed
-		q.tail = queueLog.auxData.Tail
-	} else {
-		for _, logEntryFuture := range logEntryFutures {
-			if logEntryFuture.GetSeqNum() >= targetSeqNum {
-				break
-			}
-			logEntry, err := logEntryFuture.GetResult(60 * time.Second)
-			if err != nil {
-				return errors.Wrapf(err, "log entry future await failed: %+v", logEntryFuture)
-			}
-			queueLog := decodeQueueLogEntry(logEntry)
-			// log.Printf("[DEBUG] applying seqnum=%016X", queueLog.seqNum)
-			q.applyLog(queueLog)
-			auxData := &QueueAuxData{
-				Consumed: q.consumed,
-				Tail:     q.tail,
-			}
-			if err := q.setAuxData(queueLog.seqNum, auxData); err != nil {
-				return err
-			}
-		}
-	}
-
-	// DEBUG: assert syncTo the target correctly, i.e. continuous reading on tag
-	// logEntry, err := q.env.AsyncSharedLogReadNext(q.ctx, tag, q.nextSeqNum)
-	// if err != nil {
-	// 	return err
-	// }
-	// if logEntry == nil || logEntry.SeqNum != targetSeqNum {
-	// 	log.Printf("[FATAL] next log: %+v, targetSeqNum=%016X", logEntry, targetSeqNum)
-	// 	panic("[FATAL] hole found. syncToFuture failed.")
-	// }
-
-	return nil
-}
+// func (q *Queue) setAuxData(seqNum uint64, auxData *QueueAuxData) error {
+// 	tag := queueLogTag(q.nameHash)
+// 	encoded, err := json.Marshal(auxData)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	// DEBUG
+// 	// log.Printf("[DEBUG] setting auxdata %v:%v", string(encoded), encoded)
+// 	return q.env.SharedLogSetAuxDataWithShards(q.ctx, []uint64{tag}, seqNum, encoded)
+// }
 
 var kQueueEmptyError = errors.New("Queue empty")
 var kQueueTimeoutError = errors.New("Blocking pop timeout")
@@ -539,18 +352,23 @@ func IsQueueTimeoutError(err error) bool {
 
 func (q *Queue) Pop() (string /* payload */, error) {
 	if q.isEmpty() {
-		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
+		if err := q.syncTo(types.LogEntryIndex{
+			LocalId: protocol.InvalidLogLocalId,
+			SeqNum:  protocol.MaxLogSeqnum,
+		}); err != nil {
 			return "", errors.Wrap(err, "syncTo")
 		}
 		if q.isEmpty() {
 			return "", kQueueEmptyError
 		}
 	}
-	// if err := q.appendPopLogAndSync(); err != nil {
-	if err := q.fastAppendPopLogAndSync(); err != nil {
+	if err := q.appendPopLogAndSync(); err != nil {
 		return "", errors.Wrap(err, "appendPopLogAndSync")
 	}
-	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
+	if q.isEmpty() {
+		return "", kQueueEmptyError
+	}
+	if nextLog, err := q.findNext(q.view.Consumed, q.view.Tail); err != nil {
 		return "", errors.Wrap(err, "findNext")
 	} else if nextLog != nil {
 		return nextLog.Payload, nil
@@ -575,84 +393,86 @@ func (q *Queue) asyncAppendPopLog() (types.Future[uint64], error) {
 }
 
 func (q *Queue) BatchPop(n int) ([]string /* payloads */, error) {
-	if q.isEmpty() {
-		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
-			return nil, err
-		}
-		if q.isEmpty() {
-			return nil, kQueueEmptyError
-		}
-	}
-	// append pop log and sync
-	future, err := q.asyncAppendPopLog()
-	if err != nil {
-		return nil, err
-	}
+	panic("not implemented")
+	// if q.isEmpty() {
+	// 	if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
+	// 		return nil, err
+	// 	}
+	// 	if q.isEmpty() {
+	// 		return nil, kQueueEmptyError
+	// 	}
+	// }
+	// // append pop log and sync
+	// future, err := q.asyncAppendPopLog()
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	synced := false
-	payloads := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-	continueWithoutIter:
-		if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
-			return nil, err
-		} else if nextLog != nil {
-			payloads = append(payloads, nextLog.Payload)
-		} else {
-			if !synced {
-				if seqNum, err := future.GetResult(60 * time.Second); err != nil {
-					return nil, err
-				} else if err := q.syncTo(seqNum); err != nil {
-					return nil, err
-				}
-				synced = true
-				goto continueWithoutIter
-			} else {
-				return payloads, kQueueEmptyError
-			}
-		}
-	}
-	return payloads, nil
+	// synced := false
+	// payloads := make([]string, 0, n)
+	// for i := 0; i < n; i++ {
+	// continueWithoutIter:
+	// 	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
+	// 		return nil, err
+	// 	} else if nextLog != nil {
+	// 		payloads = append(payloads, nextLog.Payload)
+	// 	} else {
+	// 		if !synced {
+	// 			if seqNum, err := future.GetResult(60 * time.Second); err != nil {
+	// 				return nil, err
+	// 			} else if err := q.syncTo(seqNum); err != nil {
+	// 				return nil, err
+	// 			}
+	// 			synced = true
+	// 			goto continueWithoutIter
+	// 		} else {
+	// 			return payloads, kQueueEmptyError
+	// 		}
+	// 	}
+	// }
+	// return payloads, nil
 }
 
 const kBlockingPopTimeout = 1 * time.Second
 
 func (q *Queue) PopBlocking() (string /* payload */, error) {
-	tag := queuePushLogTag(q.nameHash)
-	startTime := time.Now()
-	for time.Since(startTime) < kBlockingPopTimeout {
-		if q.isEmpty() {
-			if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
-				return "", err
-			}
-		}
-		if q.isEmpty() {
-			seqNum := q.nextSeqNum
-			for {
-				// log.Printf("[DEBUG] BlockingRead: NextSeqNum=%#016x", seqNum)
-				newCtx, _ := context.WithTimeout(q.ctx, kBlockingPopTimeout)
-				condLogEntry, err := q.env.AsyncSharedLogReadNextBlock(newCtx, tag, seqNum)
-				if err != nil {
-					return "", err
-				}
-				if condLogEntry != nil {
-					queueLog := decodeQueueLogEntry(condLogEntry)
-					if queueLog.IsPush && queueLog.QueueName == q.name {
-						break
-					}
-					seqNum = condLogEntry.SeqNum + 1
-				} else if time.Since(startTime) >= kBlockingPopTimeout {
-					return "", kQueueTimeoutError
-				}
-			}
-		}
-		if err := q.appendPopLogAndSync(); err != nil {
-			return "", err
-		}
-		if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
-			return "", err
-		} else if nextLog != nil {
-			return nextLog.Payload, nil
-		}
-	}
-	return "", kQueueTimeoutError
+	panic("not implemented")
+	// tag := queuePushLogTag(q.nameHash)
+	// startTime := time.Now()
+	// for time.Since(startTime) < kBlockingPopTimeout {
+	// 	if q.isEmpty() {
+	// 		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
+	// 			return "", err
+	// 		}
+	// 	}
+	// 	if q.isEmpty() {
+	// 		seqNum := q.nextSeqNum
+	// 		for {
+	// 			// log.Printf("[DEBUG] BlockingRead: NextSeqNum=%#016x", seqNum)
+	// 			newCtx, _ := context.WithTimeout(q.ctx, kBlockingPopTimeout)
+	// 			condLogEntry, err := q.env.AsyncSharedLogReadNextBlock(newCtx, tag, seqNum)
+	// 			if err != nil {
+	// 				return "", err
+	// 			}
+	// 			if condLogEntry != nil {
+	// 				queueLog := decodeQueueLogEntry(condLogEntry)
+	// 				if queueLog.IsPush && queueLog.QueueName == q.name {
+	// 					break
+	// 				}
+	// 				seqNum = condLogEntry.SeqNum + 1
+	// 			} else if time.Since(startTime) >= kBlockingPopTimeout {
+	// 				return "", kQueueTimeoutError
+	// 			}
+	// 		}
+	// 	}
+	// 	if err := q.appendPopLogAndSync(); err != nil {
+	// 		return "", err
+	// 	}
+	// 	if nextLog, err := q.findNext(q.consumed, q.tail); err != nil {
+	// 		return "", err
+	// 	} else if nextLog != nil {
+	// 		return nextLog.Payload, nil
+	// 	}
+	// }
+	// return "", kQueueTimeoutError
 }

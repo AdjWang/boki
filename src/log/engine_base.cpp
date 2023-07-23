@@ -114,6 +114,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::READ_SYNCTO:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
     case SharedLogOpType::ASYNC_READ_PREV_AUX:
@@ -138,6 +139,7 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::READ_SYNCTO:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
     case SharedLogOpType::ASYNC_READ_PREV_AUX:
@@ -201,6 +203,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         //            << DebugListExistingFnCall(fn_call_ctx_);
         ctx = fn_call_ctx_.at(func_call.full_call_id);
     }
+    DCHECK(!(message.log_seqnum != protocol::kInvalidLogSeqNum &&
+             message.log_localid != protocol::kInvalidLogLocalId));
 
     LocalOp* op = log_op_pool_.Get();
     op->id = next_local_op_id_.fetch_add(1, std::memory_order_acq_rel);
@@ -216,6 +220,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->user_tags.clear();
     op->data.Reset();
     op->response_count = 0;
+    op->flags = 0;
+    op->ongoing_responses.reset(nullptr);
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -232,8 +238,18 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         break;
+    case SharedLogOpType::READ_SYNCTO:
+        op->query_tag = message.log_tag;
+        if (message.log_seqnum != protocol::kInvalidLogSeqNum) {
+            op->seqnum = message.log_seqnum;
+        } else {
+            op->flags |= LocalOp::kReadLocalIdFlag;
+            op->localid = message.log_localid;
+        }
+        break;
     case SharedLogOpType::ASYNC_READ_LOCALID:
-        op->seqnum = message.log_localid;
+        op->flags |= LocalOp::kReadLocalIdFlag;
+        op->localid = message.log_localid;
         break;
     case SharedLogOpType::TRIM:
         op->seqnum = message.log_seqnum;
@@ -258,6 +274,7 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_SYNCTO)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_LOCALID)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT_B)
@@ -332,7 +349,7 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
 
 void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType result,
                                           uint64_t metalog_progress) {
-    Message response = MessageHelper::NewSharedLogOpFailed(result);
+    Message response = MessageHelper::NewSharedLogOpWithoutData(result);
     FinishLocalOpWithResponse(op, &response, metalog_progress);
 }
 
@@ -399,9 +416,9 @@ void EngineBase::SendReadResponse(const IndexQuery& query,
     }
 }
 
-void EngineBase::SendReadFailureResponse(const IndexQuery& query,
-                                         protocol::SharedLogResultType result_type,
-                                         uint64_t metalog_progress) {
+void EngineBase::SendReadResponseWithoutData(const IndexQuery& query,
+                                             protocol::SharedLogResultType result_type,
+                                             uint64_t metalog_progress) {
     SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
     response.user_metalog_progress = metalog_progress;
     SendReadResponse(query, &response);

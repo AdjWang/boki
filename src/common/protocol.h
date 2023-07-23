@@ -94,6 +94,7 @@ enum class SharedLogOpType : uint16_t {
     TRIM               = 0x04,  // FuncWorker to Engine, Engine to Sequencer
     SET_AUXDATA        = 0x05,  // FuncWorker to Engine, Engine to Storage
     READ_NEXT_B        = 0x06,  // FuncWorker to Engine, Engine to Index
+    READ_SYNCTO        = 0x07,  // FuncWorker to Engine, Engine to Index
 
     READ_AT            = 0x11,  // Index to Storage
     REPLICATE          = 0x12,  // Engine to Storage
@@ -128,6 +129,7 @@ public:
         return op_type == SharedLogOpType::READ_NEXT
             || op_type == SharedLogOpType::READ_PREV
             || op_type == SharedLogOpType::READ_NEXT_B
+            || op_type == SharedLogOpType::READ_SYNCTO
             || op_type == SharedLogOpType::ASYNC_READ_PREV_AUX
             || op_type == SharedLogOpType::ASYNC_READ_NEXT
             || op_type == SharedLogOpType::ASYNC_READ_NEXT_B
@@ -272,7 +274,8 @@ struct GatewayMessage {
 
 static_assert(sizeof(GatewayMessage) == 16, "Unexpected GatewayMessage size");
 
-constexpr uint16_t kReadInitialFlag = (1 << 0);
+constexpr uint16_t kReadInitialFlag  = (1 << 0);
+constexpr uint16_t kReadLocalIdFlag  = (1 << 1);    // Indicates the data of [40:48]
 
 struct SharedLogMessage {
     uint16_t op_type;         // [0:2]
@@ -524,7 +527,7 @@ public:
         return message;
     }
 
-    static Message NewSharedLogOpFailed(SharedLogResultType result) {
+    static Message NewSharedLogOpWithoutData(SharedLogResultType result) {
         NEW_EMPTY_MESSAGE(message);
         message.message_type = static_cast<uint16_t>(MessageType::SHARED_LOG_OP);
         message.log_op = static_cast<uint16_t>(SharedLogOpType::RESPONSE);

@@ -2,6 +2,7 @@
 #include "base/init.h"
 #include "base/logging.h"
 #include "base/thread.h"
+#include "utils/debug.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -43,6 +44,7 @@ static void RaiseToDefaultHandler(int signo) {
 
 static void SignalHandler(int signo) {
     if (signo == SIGTERM || signo == SIGABRT) {
+        fprintf(stderr, "%s\n", utils::DumpStackTrace().c_str());
         size_t n = next_cleanup_fn.load();
         fprintf(stderr, "Invoke %d clean-up functions\n", (int) n);
         for (size_t i = 0; i < n; i++) {

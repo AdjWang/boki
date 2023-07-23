@@ -37,15 +37,15 @@ template<class T>
 class ThreadedMap {
 public:
     ThreadedMap();
-    ~ThreadedMap();
+    virtual ~ThreadedMap();
 
     // All these APIs are thread safe
     void Put(uint64_t key, T* value);         // Override if the given key exists
     bool Poll(uint64_t key, T** value);       // Remove the given key if it is found
-    bool Peak(uint64_t key, T** value);       // Remove the given key if it is found
+    bool Peek(uint64_t key, T** value);       // Remove the given key if it is found
     void PutChecked(uint64_t key, T* value);  // Panic if key exists
     T*   PollChecked(uint64_t key);           // Panic if key does not exist
-    T*   PeakChecked(uint64_t key);           // Panic if key does not exist
+    T*   PeekChecked(uint64_t key);           // Panic if key does not exist
     void RemoveChecked(uint64_t key);         // Panic if key does not exist
     void PollAll(std::vector<std::pair<uint64_t, T*>>* values);
     void PollAllSorted(std::vector<std::pair<uint64_t, T*>>* values);
@@ -55,6 +55,30 @@ private:
     absl::flat_hash_map<uint64_t, T*> rep_ ABSL_GUARDED_BY(mu_);
 
     DISALLOW_COPY_AND_ASSIGN(ThreadedMap);
+};
+
+template<class T>
+class DebugThreadedMap : public ThreadedMap<T> {
+public:
+    DebugThreadedMap();
+    virtual ~DebugThreadedMap();
+
+    // All these APIs are thread safe
+    void Put(uint64_t key, T* value);         // Override if the given key exists
+    bool Poll(uint64_t key, T** value);       // Remove the given key if it is found
+    bool Peek(uint64_t key, T** value);       // Remove the given key if it is found
+    void PutChecked(uint64_t key, T* value);  // Panic if key exists
+    T*   PollChecked(uint64_t key);           // Panic if key does not exist
+    T*   PeekChecked(uint64_t key);           // Panic if key does not exist
+    void RemoveChecked(uint64_t key);         // Panic if key does not exist
+    void PollAll(std::vector<std::pair<uint64_t, T*>>* values);
+    void PollAllSorted(std::vector<std::pair<uint64_t, T*>>* values);
+
+private:
+    absl::Mutex mu_;
+    absl::flat_hash_map<std::string, std::string> debug_stack_trace_ ABSL_GUARDED_BY(mu_);
+
+    DISALLOW_COPY_AND_ASSIGN(DebugThreadedMap);
 };
 
 log::MetaLogsProto MetaLogsFromPayload(std::span<const char> payload);
@@ -150,7 +174,7 @@ bool ThreadedMap<T>::Poll(uint64_t key, T** value) {
 }
 
 template<class T>
-bool ThreadedMap<T>::Peak(uint64_t key, T** value) {
+bool ThreadedMap<T>::Peek(uint64_t key, T** value) {
     absl::MutexLock lk(&mu_);
     if (rep_.contains(key)) {
         *value = rep_.at(key);
@@ -163,23 +187,23 @@ bool ThreadedMap<T>::Peak(uint64_t key, T** value) {
 template<class T>
 void ThreadedMap<T>::PutChecked(uint64_t key, T* value) {
     absl::MutexLock lk(&mu_);
-    DCHECK(!rep_.contains(key));
+    DCHECK(!rep_.contains(key)) << fmt::format("key={}", key);
     rep_[key] = value;
 }
 
 template<class T>
 T* ThreadedMap<T>::PollChecked(uint64_t key) {
     absl::MutexLock lk(&mu_);
-    DCHECK(rep_.contains(key));
+    DCHECK(rep_.contains(key)) << fmt::format("key={}", key);
     T* value = rep_.at(key);
     rep_.erase(key);
     return value;
 }
 
 template<class T>
-T* ThreadedMap<T>::PeakChecked(uint64_t key) {
+T* ThreadedMap<T>::PeekChecked(uint64_t key) {
     absl::MutexLock lk(&mu_);
-    DCHECK(rep_.contains(key));
+    DCHECK(rep_.contains(key)) << fmt::format("key={}", key);
     T* value = rep_.at(key);
     return value;
 }
@@ -187,7 +211,7 @@ T* ThreadedMap<T>::PeakChecked(uint64_t key) {
 template<class T>
 void ThreadedMap<T>::RemoveChecked(uint64_t key) {
     absl::MutexLock lk(&mu_);
-    DCHECK(rep_.contains(key));
+    DCHECK(rep_.contains(key)) << fmt::format("key={}", key);
     rep_.erase(key);
 }
 
@@ -221,6 +245,123 @@ void ThreadedMap<T>::PollAllSorted(std::vector<std::pair<uint64_t, T*>>* values)
 }
 
 template<class T>
+DebugThreadedMap<T>::DebugThreadedMap() {}
+
+template<class T>
+DebugThreadedMap<T>::~DebugThreadedMap() {}
+
+template<class T>
+void DebugThreadedMap<T>::Put(uint64_t key, T* value) {
+    {
+        absl::MutexLock lk(&mu_);
+        std::string debug_key(fmt::format("Put-{}", key));
+        if (debug_stack_trace_.contains(debug_key)) {
+            LOG_F(FATAL, "key: {}, stacktrace:\ncurrent: {}\nprevious:{}",
+                          debug_key, utils::DumpStackTrace(), debug_stack_trace_.at(debug_key));
+        } else {
+            debug_stack_trace_.emplace(debug_key, utils::DumpStackTrace());
+        }
+    }
+    ThreadedMap<T>::Put(key, value);
+}
+
+template<class T>
+bool DebugThreadedMap<T>::Poll(uint64_t key, T** value) {
+    {
+        absl::MutexLock lk(&mu_);
+        std::string debug_key(fmt::format("Remove-{}", key));
+        if (debug_stack_trace_.contains(debug_key)) {
+            LOG_F(FATAL, "key: {}, stacktrace:\ncurrent: {}\nprevious:{}",
+                          debug_key, utils::DumpStackTrace(), debug_stack_trace_.at(debug_key));
+        } else {
+            debug_stack_trace_.emplace(debug_key, utils::DumpStackTrace());
+        }
+    }
+    return ThreadedMap<T>::Poll(key, value);
+}
+
+template<class T>
+bool DebugThreadedMap<T>::Peek(uint64_t key, T** value) {
+    {
+        absl::MutexLock lk(&mu_);
+        std::string debug_key(fmt::format("Remove-{}", key));
+        if (debug_stack_trace_.contains(debug_key)) {
+            LOG_F(FATAL, "key: {}, stacktrace:\ncurrent: {}\nprevious:{}",
+                          debug_key, utils::DumpStackTrace(), debug_stack_trace_.at(debug_key));
+        }
+    }
+    return ThreadedMap<T>::Peek(key, value);
+}
+
+template<class T>
+void DebugThreadedMap<T>::PutChecked(uint64_t key, T* value) {
+    {
+        absl::MutexLock lk(&mu_);
+        std::string debug_key(fmt::format("Put-{}", key));
+        if (debug_stack_trace_.contains(debug_key)) {
+            LOG_F(FATAL, "key: {}, stacktrace:\ncurrent: {}\nprevious:{}",
+                          debug_key, utils::DumpStackTrace(), debug_stack_trace_.at(debug_key));
+        } else {
+            debug_stack_trace_.emplace(debug_key, utils::DumpStackTrace());
+        }
+    }
+    ThreadedMap<T>::PutChecked(key, value);
+}
+
+template<class T>
+T* DebugThreadedMap<T>::PollChecked(uint64_t key) {
+    {
+        absl::MutexLock lk(&mu_);
+        std::string debug_key(fmt::format("Remove-{}", key));
+        if (debug_stack_trace_.contains(debug_key)) {
+            LOG_F(FATAL, "key: {}, stacktrace:\ncurrent: {}\nprevious:{}",
+                          debug_key, utils::DumpStackTrace(), debug_stack_trace_.at(debug_key));
+        } else {
+            debug_stack_trace_.emplace(debug_key, utils::DumpStackTrace());
+        }
+    }
+    return ThreadedMap<T>::PollChecked(key);
+}
+
+template<class T>
+T* DebugThreadedMap<T>::PeekChecked(uint64_t key) {
+    {
+        absl::MutexLock lk(&mu_);
+        std::string debug_key(fmt::format("Remove-{}", key));
+        if (debug_stack_trace_.contains(debug_key)) {
+            LOG_F(FATAL, "key: {}, stacktrace:\ncurrent: {}\nprevious:{}",
+                          debug_key, utils::DumpStackTrace(), debug_stack_trace_.at(debug_key));
+        }
+    }
+    return ThreadedMap<T>::PeekChecked(key);
+}
+
+template<class T>
+void DebugThreadedMap<T>::RemoveChecked(uint64_t key) {
+    {
+        absl::MutexLock lk(&mu_);
+        std::string debug_key(fmt::format("Remove-{}", key));
+        if (debug_stack_trace_.contains(debug_key)) {
+            LOG_F(FATAL, "key: {}, stacktrace:\ncurrent: {}\nprevious:{}",
+                          debug_key, utils::DumpStackTrace(), debug_stack_trace_.at(debug_key));
+        } else {
+            debug_stack_trace_.emplace(debug_key, utils::DumpStackTrace());
+        }
+    }
+    ThreadedMap<T>::RemoveChecked(key);
+}
+
+template<class T>
+void DebugThreadedMap<T>::PollAll(std::vector<std::pair<uint64_t, T*>>* values) {
+    ThreadedMap<T>::PollAll(values);
+}
+
+template<class T>
+void DebugThreadedMap<T>::PollAllSorted(std::vector<std::pair<uint64_t, T*>>* values) {
+    ThreadedMap<T>::PollAllSorted(values);
+}
+
+template<class T>
 void FinalizedLogSpace(LockablePtr<T> logspace_ptr,
                        const log::FinalizedView* finalized_view) {
     auto locked_logspace = logspace_ptr.Lock();
@@ -231,6 +372,115 @@ void FinalizedLogSpace(LockablePtr<T> logspace_ptr,
     if (!success) {
         LOG_F(FATAL, "Failed to finalize log space {}", bits::HexStr0x(logspace_id));
     }
+}
+
+template<class T>
+class SlidingWindow {
+public:
+ SlidingWindow(
+     std::function<void(T* /*value*/)> on_sliding);
+ virtual ~SlidingWindow() {}
+
+ // id must be continuous and start from 0, while key is only required to be unique
+ void TakeOff(uint64_t id, uint64_t key);
+ void Landing(uint64_t key, T* value);
+ void Direct(uint64_t id, uint64_t key, T* value);
+private:
+    std::function<void(T*)> on_sliding_;
+
+    absl::Mutex mu_;
+    absl::flat_hash_map<uint64_t /*id*/, uint64_t /*key*/> sliding_window_ ABSL_GUARDED_BY(mu_);
+    absl::flat_hash_map<uint64_t /*key*/, std::pair<uint64_t /*id*/, T* /*value*/>> values_ ABSL_GUARDED_BY(mu_);
+    size_t head_id_ ABSL_GUARDED_BY(mu_);
+
+    #if defined(DEBUG)
+    void Inspect() ABSL_NO_THREAD_SAFETY_ANALYSIS;
+    #endif
+
+    DISALLOW_COPY_AND_ASSIGN(SlidingWindow);
+};
+
+template<class T>
+SlidingWindow<T>::SlidingWindow(std::function<void(T*)> on_sliding)
+    : on_sliding_(on_sliding) {
+        absl::MutexLock lk(&mu_);
+        head_id_ = 0;
+    }
+
+template<class T>
+void SlidingWindow<T>::TakeOff(uint64_t id, uint64_t key) {
+    absl::MutexLock lk(&mu_);
+    VLOG_F(1, "SlidingWindow[{}] TakeOff id={}, seqnum={:016X}", (void*)this, id, key);
+    DCHECK(!sliding_window_.contains(id));
+    sliding_window_.emplace(id, key);
+    DCHECK(!values_.contains(id));
+    values_.emplace(key, std::make_pair(id, nullptr));
+}
+
+// Landing without takeoff may happen when cache hit.
+template<class T>
+void SlidingWindow<T>::Landing(uint64_t key, T* value) {
+    absl::MutexLock lk(&mu_);
+    VLOG_F(1, "SlidingWindow[{}] Landing seqnum={:016X}", (void*)this, key);
+    // buffer
+    DCHECK(values_.contains(key));
+    DCHECK(values_[key].second == nullptr);
+    values_[key].second = value;
+    // update
+    while (sliding_window_.contains(head_id_)) {
+        uint64_t buffered_key = sliding_window_[head_id_];
+        DCHECK(values_.contains(buffered_key));
+        T* value = values_[buffered_key].second;
+        if (value != nullptr) {
+            #if defined(DEBUG)
+            Inspect();
+            #endif
+            on_sliding_(value);
+            ++head_id_;
+        } else {
+            break;
+        }
+    }
+}
+
+template<class T>
+void SlidingWindow<T>::Direct(uint64_t id, uint64_t key, T* value) {
+    absl::MutexLock lk(&mu_);
+    VLOG_F(1, "SlidingWindow[{}] Direct id={}, seqnum={:016X}", (void*)this, id, key);
+    // TakeOff
+    DCHECK(!sliding_window_.contains(id));
+    sliding_window_.emplace(id, key);
+    DCHECK(!values_.contains(id));
+    values_.emplace(key, std::make_pair(id, nullptr));
+    // Landing
+    // buffer
+    DCHECK(values_.contains(key));
+    DCHECK(values_[key].second == nullptr);
+    values_[key].second = value;
+    // update
+    while (sliding_window_.contains(head_id_)) {
+        uint64_t buffered_key = sliding_window_[head_id_];
+        DCHECK(values_.contains(buffered_key));
+        T* value = values_[buffered_key].second;
+        if (value != nullptr) {
+            #if defined(DEBUG)
+            Inspect();
+            #endif
+            on_sliding_(value);
+            ++head_id_;
+        } else {
+            break;
+        }
+    }
+}
+
+template<class T>
+void SlidingWindow<T>::Inspect() {
+    std::string str_sliding_window;
+    for (auto [id, seqnum] : sliding_window_) {
+        str_sliding_window.append(fmt::format("{}:{:016X} ", id, seqnum));
+    }
+    LOG_F(INFO, "SlidingWindow: head_id={}, sliding_window=[{}]", head_id_, str_sliding_window);
 }
 
 }  // namespace log_utils

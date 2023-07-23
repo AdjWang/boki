@@ -20,6 +20,8 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
+	"github.com/enriquebris/goconcurrentqueue"
+	"github.com/pkg/errors"
 )
 
 // region debug pipe
@@ -926,6 +928,152 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
+}
+
+func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) goconcurrentqueue.Queue {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+
+	var message []byte
+	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
+		panic("unreachable")
+	} else if target.SeqNum != protocol.InvalidLogSeqNum {
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.SeqNum, false /* useLogIndex */, id)
+	} else {
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.LocalId, true /* useLogIndex */, id)
+	}
+
+	queue := NewLogOpsQueue()
+	w.mux.Lock()
+	w.outgoingLogOps[id] = queue
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	results := goconcurrentqueue.NewFIFO()
+	if err != nil {
+		results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: err})
+		return results
+	}
+
+	go func() {
+		for {
+			var response []byte
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				response = queue.Dequeue()
+			}
+			result := protocol.GetSharedLogResultTypeFromMessage(response)
+			if result == protocol.SharedLogResultType_READ_OK {
+				flags := protocol.GetFlagsFromMessage(response)
+				if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
+					if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
+						panic("assertion error, should always end with EOF without data")
+					}
+					if err := results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil}); err != nil {
+						panic(err)
+					}
+					return
+				}
+				logEntry := buildLogEntryFromReadResponse(response)
+				if err := results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: logEntry, Err: nil}); err != nil {
+					panic(err)
+				}
+			} else if result == protocol.SharedLogResultType_EMPTY {
+				if err := results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil}); err != nil {
+					panic(err)
+				}
+				return
+			} else {
+				if err := results.Enqueue(
+					types.LogStreamEntry[types.LogEntry]{
+						LogEntry: nil,
+						Err:      fmt.Errorf("failed to read log: 0x%02X", result)}); err != nil {
+					panic(err)
+				}
+				return
+			}
+		}
+	}()
+	return results
+}
+
+func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) goconcurrentqueue.Queue {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+
+	var message []byte
+	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
+		panic("unreachable")
+	} else if target.SeqNum != protocol.InvalidLogSeqNum {
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.SeqNum, false /* useLogIndex */, id)
+	} else {
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.LocalId, true /* useLogIndex */, id)
+	}
+
+	queue := NewLogOpsQueue()
+	w.mux.Lock()
+	w.outgoingLogOps[id] = queue
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	results := goconcurrentqueue.NewFIFO()
+	if err != nil {
+		results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: err})
+		return results
+	}
+
+	go func() {
+		for {
+			var response []byte
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				response = queue.Dequeue()
+			}
+			result := protocol.GetSharedLogResultTypeFromMessage(response)
+			if result == protocol.SharedLogResultType_READ_OK {
+				flags := protocol.GetFlagsFromMessage(response)
+				if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
+					if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
+						panic("assertion error, should always end with EOF without data")
+					}
+					if err := results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil}); err != nil {
+						panic(err)
+					}
+					return
+				}
+				logEntry := buildLogEntryFromReadResponse(response)
+				metadata, originalData, err := types.UnwrapData(logEntry.Data)
+				if err != nil {
+					panic(errors.Wrapf(err, "unwarp async log data: %v:v", string(logEntry.Data), logEntry.Data))
+				}
+				logEntry.Data = originalData
+				logEntryWithMeta := &types.LogEntryWithMeta{
+					LogEntry:    *logEntry,
+					Deps:        metadata.Deps,
+					Identifiers: types.CombineTags(metadata.StreamTypes, logEntry.Tags),
+				}
+				if err := results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: logEntryWithMeta, Err: nil}); err != nil {
+					panic(err)
+				}
+			} else if result == protocol.SharedLogResultType_EMPTY {
+				if err := results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil}); err != nil {
+					panic(err)
+				}
+				return
+			} else {
+				if err := results.Enqueue(
+					types.LogStreamEntry[types.LogEntryWithMeta]{
+						LogEntry: nil,
+						Err:      fmt.Errorf("failed to read log: 0x%02X", result)}); err != nil {
+					panic(err)
+				}
+				return
+			}
+		}
+	}()
+	return results
 }
 
 // Implement types.Environment
