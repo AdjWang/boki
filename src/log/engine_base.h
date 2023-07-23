@@ -6,6 +6,7 @@
 #include "log/view_watcher.h"
 #include "log/index.h"
 #include "log/cache.h"
+#include "log/utils.h"
 #include "server/io_worker.h"
 #include "utils/object_pool.h"
 #include "utils/appendable_buffer.h"
@@ -54,6 +55,14 @@ protected:
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
 
+    struct LocalOp;
+    struct PendingResponse {
+        LocalOp* op;
+        protocol::Message message;
+        uint64_t metalog_progress;
+    };
+    utils::ThreadSafeObjectPool<PendingResponse> pending_resp_pool_;
+
     struct LocalOp {
         protocol::SharedLogOpType type;
         uint16_t client_id;
@@ -62,12 +71,19 @@ protected:
         uint64_t client_data;
         uint64_t metalog_progress;
         uint64_t query_tag;
-        uint64_t seqnum;
+        union {
+            uint64_t localid;
+            uint64_t seqnum;
+        };
         uint64_t func_call_id;
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
         uint16_t response_count;
+        uint16_t flags;
+        std::unique_ptr<log_utils::SlidingWindow<PendingResponse>>
+            ongoing_responses;  // only used by READ_SYNCTO now
+        static constexpr uint16_t kReadLocalIdFlag = (1 << 1);     // Indicates localid/seqnum
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;
@@ -99,9 +115,9 @@ protected:
                           std::span<const char> user_tags_payload = EMPTY_CHAR_SPAN,
                           std::span<const char> data_payload = EMPTY_CHAR_SPAN,
                           std::span<const char> aux_data_payload = EMPTY_CHAR_SPAN);
-    void SendReadFailureResponse(const IndexQuery& query,
-                                 protocol::SharedLogResultType result_type,
-                                 uint64_t metalog_progress = 0);
+    void SendReadResponseWithoutData(const IndexQuery& query,
+                                     protocol::SharedLogResultType result_type,
+                                     uint64_t metalog_progress = 0);
     bool SendSequencerMessage(uint16_t sequencer_id,
                               protocol::SharedLogMessage* message,
                               std::span<const char> payload = EMPTY_CHAR_SPAN);
@@ -140,3 +156,76 @@ private:
 
 }  // namespace log
 }  // namespace faas
+
+template <>
+struct fmt::formatter<faas::protocol::SharedLogOpType>: formatter<std::string_view> {
+    auto format(faas::protocol::SharedLogOpType dir, format_context& ctx) const {
+        std::string_view result = "unknown";
+        switch (dir) {
+            case faas::protocol::SharedLogOpType::INVALID:
+                result = "INVALID";
+                break;
+            case faas::protocol::SharedLogOpType::APPEND:
+                result = "APPEND";
+                break;
+            case faas::protocol::SharedLogOpType::READ_NEXT:
+                result = "READ_NEXT";
+                break;
+            case faas::protocol::SharedLogOpType::READ_PREV:
+                result = "READ_PREV";
+                break;
+            case faas::protocol::SharedLogOpType::TRIM:
+                result = "TRIM";
+                break;
+            case faas::protocol::SharedLogOpType::SET_AUXDATA:
+                result = "SET_AUXDATA";
+                break;
+            case faas::protocol::SharedLogOpType::READ_NEXT_B:
+                result = "READ_NEXT_B";
+                break;
+            case faas::protocol::SharedLogOpType::READ_SYNCTO:
+                result = "READ_SYNCTO";
+                break;
+            case faas::protocol::SharedLogOpType::READ_AT:
+                result = "READ_AT";
+                break;
+            case faas::protocol::SharedLogOpType::REPLICATE:
+                result = "REPLICATE";
+                break;
+            case faas::protocol::SharedLogOpType::INDEX_DATA:
+                result = "INDEX_DATA";
+                break;
+            case faas::protocol::SharedLogOpType::SHARD_PROG:
+                result = "SHARD_PROG";
+                break;
+            case faas::protocol::SharedLogOpType::METALOGS:
+                result = "METALOGS";
+                break;
+            case faas::protocol::SharedLogOpType::META_PROG:
+                result = "META_PROG";
+                break;
+            case faas::protocol::SharedLogOpType::ASYNC_APPEND:
+                result = "ASYNC_APPEND";
+                break;
+            case faas::protocol::SharedLogOpType::ASYNC_READ_NEXT:
+                result = "ASYNC_READ_NEXT";
+                break;
+            case faas::protocol::SharedLogOpType::ASYNC_READ_NEXT_B:
+                result = "ASYNC_READ_NEXT_B";
+                break;
+            case faas::protocol::SharedLogOpType::ASYNC_READ_PREV:
+                result = "ASYNC_READ_PREV";
+                break;
+            case faas::protocol::SharedLogOpType::ASYNC_READ_PREV_AUX:
+                result = "ASYNC_READ_PREV_AUX";
+                break;
+            case faas::protocol::SharedLogOpType::ASYNC_READ_LOCALID:
+                result = "ASYNC_READ_LOCALID";
+                break;
+            case faas::protocol::SharedLogOpType::RESPONSE:
+                result = "RESPONSE";
+                break;
+        }
+        return formatter<string_view>::format(result, ctx);
+    }
+};

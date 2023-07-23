@@ -30,10 +30,12 @@ private:
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
     bool log_cache_enabled_;
-    std::unique_ptr<ShardedLRUCache> log_cache_;
+    std::shared_ptr<ShardedLRUCache> log_cache_;
 
     log_utils::FutureRequests       future_requests_;
-    log_utils::ThreadedMap<LocalOp> onging_local_reads_;
+    // DEBUG
+    // log_utils::ThreadedMap<LocalOp> ongoing_local_reads_;
+    log_utils::DebugThreadedMap<LocalOp> ongoing_local_reads_;
 
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
@@ -59,6 +61,7 @@ private:
     void ProcessIndexFoundResult(const IndexQueryResult& query_result);
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                     Index::QueryResultVec* more_results);
+    void ProcessSyncToResponse(PendingResponse* response);
 
     void LogCachePut(const LogMetaData& log_metadata,
                      std::span<const uint64_t> user_tags,

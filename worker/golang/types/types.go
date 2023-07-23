@@ -3,6 +3,8 @@ package types
 import (
 	"context"
 	"time"
+
+	"github.com/enriquebris/goconcurrentqueue"
 )
 
 type LogEntry struct {
@@ -11,6 +13,11 @@ type LogEntry struct {
 	Tags    []uint64
 	Data    []byte
 	AuxData []byte
+}
+
+type LogStreamEntry[T LogEntry | LogEntryWithMeta] struct {
+	LogEntry *T
+	Err      error
 }
 
 // Deps: User defined dependencies to check if a log is able to apply.
@@ -81,6 +88,10 @@ type Environment interface {
 	// Set auxiliary data for log entry of given `seqNum`
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
 	SharedLogSetAuxDataWithShards(ctx context.Context, tags []uint64, seqNum uint64, auxData []byte) error
+	// Batch async read for range [seqNum, target)
+	// return Queue[Future[*LogEntryWithMeta]]
+	SharedLogReadNextUntil(ctx context.Context, tag uint64, target LogEntryIndex) goconcurrentqueue.Queue
+	AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, target LogEntryIndex) goconcurrentqueue.Queue
 
 	AsyncSharedLogAppend(ctx context.Context, tags []Tag, data []byte) (Future[uint64], error)
 	AsyncSharedLogAppendWithDeps(ctx context.Context, tags []Tag, data []byte, deps []uint64) (Future[uint64], error)
@@ -89,9 +100,6 @@ type Environment interface {
 	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadPrevWithAux(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
-	// Batch async read for range [seqNum, target)
-	// return Queue[Future[*LogEntryWithMeta]]
-	// AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex) (goconcurrentqueue.Queue, error)
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, localId uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)

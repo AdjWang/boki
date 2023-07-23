@@ -51,7 +51,7 @@ void Engine::OnViewCreated(const View* view) {
                     my_node_id(), view, sequencer_id));
                 if (engine_node->HasIndexFor(sequencer_id)) {
                     index_collection_.InstallLogSpace(std::make_unique<Index>(
-                        view, sequencer_id));
+                        view, sequencer_id, log_cache_));
                 }
             }
         }
@@ -134,33 +134,35 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
 namespace {
 static Message BuildLocalReadOKResponse(uint64_t localid, uint64_t seqnum,
                                         std::span<const uint64_t> user_tags,
-                                        std::span<const char> log_data) {
+                                        std::span<const char> log_data,
+                                        uint16_t flags = protocol::kLogResponseEOFDataFlag) {
     Message response = MessageHelper::NewSharedLogOpSucceeded(
-        SharedLogResultType::READ_OK, localid, seqnum);
+        SharedLogResultType::READ_OK, localid, seqnum, flags);
     if (user_tags.size() * sizeof(uint64_t) + log_data.size() > MESSAGE_INLINE_DATA_SIZE) {
         LOG_F(FATAL, "Log data too large: num_tags={}, size={}",
               user_tags.size(), log_data.size());
     }
     response.log_num_tags = gsl::narrow_cast<uint16_t>(user_tags.size());
-    SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
     MessageHelper::AppendInlineData(&response, user_tags);
     MessageHelper::AppendInlineData(&response, log_data);
     return response;
 }
 
-static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
+static Message BuildLocalReadOKResponse(const LogEntry& log_entry,
+                                        uint16_t flags = protocol::kLogResponseEOFDataFlag) {
     return BuildLocalReadOKResponse(
         log_entry.metadata.localid,
         log_entry.metadata.seqnum,
         VECTOR_AS_SPAN(log_entry.user_tags),
-        STRING_AS_SPAN(log_entry.data));
+        STRING_AS_SPAN(log_entry.data),
+        flags);
 }
 
-// unused for now
-// static Message BuildLocalReadOKResponse(uint64_t localid, uint64_t seqnum) {
-//     return MessageHelper::NewSharedLogOpSucceeded(
-//         SharedLogResultType::READ_OK, localid, seqnum);
-// }
+static Message BuildLocalReadOKResponse() {
+    Message response = MessageHelper::NewSharedLogOpWithoutData(SharedLogResultType::READ_OK);
+    SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFFlag);
+    return response;
+}
 
 static Message BuildLocalAsyncReadOKResponse(uint64_t localid, uint64_t seqnum) {
     Message response = MessageHelper::NewSharedLogOpSucceeded(
@@ -256,8 +258,13 @@ void Engine::HandleLocalTrim(LocalOp* op) {
 
 void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
-    HVLOG_F(1, "Handle local read: op_type=0x{:02X}, op_id={}, logspace={}, tag={}, seqnum={}",
-            uint16_t(op->type), op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
+    if ((op->flags & LocalOp::kReadLocalIdFlag) == 0) {
+        HVLOG_F(1, "Handle local read: op_type={}, op_id={}, logspace={}, tag={}, seqnum={}",
+                op->type, op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
+    } else {
+        HVLOG_F(1, "Handle local read: op_type={}, op_id={}, logspace={}, tag={}, localid={}",
+                op->type, op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->localid));
+    }
     const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
     {
@@ -269,7 +276,12 @@ void Engine::HandleLocalRead(LocalOp* op) {
             index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
         }
     }
-    onging_local_reads_.PutChecked(op->id, op);
+    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+        op->ongoing_responses.reset(
+            new log_utils::SlidingWindow<PendingResponse>(
+                absl::bind_front(&Engine::ProcessSyncToResponse, this)));
+    }
+    ongoing_local_reads_.PutChecked(op->id, op);
 
     bool use_local_index = true;
     if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
@@ -298,7 +310,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
         SharedLogMessage request = BuildReadRequestMessage(op);
         bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
         if (!send_success) {
-            onging_local_reads_.RemoveChecked(op->id);
+            ongoing_local_reads_.RemoveChecked(op->id);
             FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         }
     }
@@ -455,65 +467,81 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
     auto ResponseAndCache = [this, result, localid, seqnum](
                                 LocalOp* op, const SharedLogMessage& message,
                                 std::span<const char> payload) {
-        std::span<const uint64_t> user_tags;
-        std::span<const char> log_data;
-        std::span<const char> aux_entry_data;
-        // decode log entry
-        log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_entry_data);
-        // decode aux entry
-        AuxEntry aux_entry;
-        if (aux_entry_data.size() > 0) {
-            std::string str_aux_entry_data(aux_entry_data.begin(), aux_entry_data.end());
-            log_utils::DecodeEntry<AuxMetaData, AuxEntry>(str_aux_entry_data, &aux_entry);
-        }
-        // make response message
         Message response;
-        if (result == SharedLogResultType::ASYNC_READ_OK) {
-            response = BuildLocalAsyncReadCachedOKResponse(localid, seqnum, user_tags, log_data);
-        } else if (result == SharedLogResultType::READ_OK) {
-            response = BuildLocalReadOKResponse(localid, seqnum, user_tags, log_data);
+        if (message.payload_size > 0) {
+            HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
+            std::span<const uint64_t> user_tags;
+            std::span<const char> log_data;
+            std::span<const char> aux_entry_data;
+            // decode log entry
+            log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_entry_data);
+            // decode aux entry
+            AuxEntry aux_entry;
+            if (aux_entry_data.size() > 0) {
+                std::string str_aux_entry_data(aux_entry_data.begin(), aux_entry_data.end());
+                log_utils::DecodeEntry<AuxMetaData, AuxEntry>(str_aux_entry_data, &aux_entry);
+            }
+            // make response message
+            if (result == SharedLogResultType::ASYNC_READ_OK) {
+                response = BuildLocalAsyncReadCachedOKResponse(localid, seqnum, user_tags, log_data);
+            } else if (result == SharedLogResultType::READ_OK) {
+                if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                    response = BuildLocalReadOKResponse(localid, seqnum, user_tags, log_data,
+                                                        protocol::kLogResponseContinueFlag);
+                } else {
+                    response = BuildLocalReadOKResponse(localid, seqnum, user_tags, log_data);
+                }
+            } else {
+                UNREACHABLE();
+            }
+            if (aux_entry_data.size() > 0) {
+                auto aux_data = STRING_AS_SPAN(aux_entry.data);
+                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                MessageHelper::AppendInlineData(&response, aux_data);
+            }
+            if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                PendingResponse* pr = pending_resp_pool_.Get();
+                pr->op = op;
+                pr->message = response;
+                pr->metalog_progress = message.user_metalog_progress;
+                op->ongoing_responses->Landing(seqnum, pr);
+            } else {
+                ongoing_local_reads_.RemoveChecked(op->id);
+                FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
+            }
+            // Put the received log entry into log cache
+            LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
+            LogCachePut(log_metadata, user_tags, log_data);
+            if (aux_entry_data.size() > 0) {
+                LogCachePutAuxData(aux_entry);
+            }
         } else {
-            UNREACHABLE();
-        }
-        if (aux_entry_data.size() > 0) {
-            auto aux_data = STRING_AS_SPAN(aux_entry.data);
-            response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-            MessageHelper::AppendInlineData(&response, aux_data);
-        }
-        FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
-        // Put the received log entry into log cache
-        LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
-        LogCachePut(log_metadata, user_tags, log_data);
-        if (aux_entry_data.size() > 0) {
-            LogCachePutAuxData(aux_entry);
+            DCHECK(op->type == protocol::SharedLogOpType::READ_SYNCTO);
+            PendingResponse* pr = pending_resp_pool_.Get();
+            pr->op = op;
+            pr->message = BuildLocalReadOKResponse();    // EOF
+            pr->metalog_progress = message.user_metalog_progress;
+            op->ongoing_responses->Landing(seqnum, pr);
         }
     };
 
     uint64_t op_id = message.client_data;
     LocalOp* op;
+    if (!ongoing_local_reads_.Peek(op_id, &op)) {
+        HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
+        return;
+    }
     if (result == SharedLogResultType::ASYNC_READ_OK || 
         result == SharedLogResultType::ASYNC_EMPTY) {
         if (result == SharedLogResultType::ASYNC_READ_OK) {
             if (message.payload_size == 0) {
-                if (!onging_local_reads_.Peak(op_id, &op)) {
-                    HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
-                    return;
-                }
                 Message response = BuildLocalAsyncReadOKResponse(localid, seqnum);
                 IntermediateLocalOpWithResponse(op, &response, message.user_metalog_progress);
             } else {
-                if (!onging_local_reads_.Poll(op_id, &op)) {
-                    HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
-                    return;
-                }
-                HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
                 ResponseAndCache(op, message, payload);
             }
         } else if (result == SharedLogResultType::ASYNC_EMPTY) {
-            if (!onging_local_reads_.Poll(op_id, &op)) {
-                HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
-                return;
-            }
+            ongoing_local_reads_.RemoveChecked(op->id);
             FinishLocalOpWithFailure(
                 op, SharedLogResultType::ASYNC_EMPTY, message.user_metalog_progress);
         } else {
@@ -522,20 +550,37 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
     } else if (    result == SharedLogResultType::READ_OK
                 || result == SharedLogResultType::EMPTY
                 || result == SharedLogResultType::DATA_LOST) {
-        if (!onging_local_reads_.Poll(op_id, &op)) {
-            HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
-            return;
-        }
         if (result == SharedLogResultType::READ_OK) {
-            HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
             ResponseAndCache(op, message, payload);
         } else if (result == SharedLogResultType::EMPTY) {
-            FinishLocalOpWithFailure(
-                op, SharedLogResultType::EMPTY, message.user_metalog_progress);
+            // TODO: simplify
+            if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                PendingResponse* pr = pending_resp_pool_.Get();
+                pr->op = op;
+                pr->message = MessageHelper::NewSharedLogOpWithoutData(
+                    SharedLogResultType::EMPTY);
+                pr->metalog_progress = message.user_metalog_progress;
+                op->ongoing_responses->Landing(seqnum, pr);
+            } else {
+                ongoing_local_reads_.RemoveChecked(op->id);
+                FinishLocalOpWithFailure(
+                    op, SharedLogResultType::EMPTY, message.user_metalog_progress);
+            }
         } else if (result == SharedLogResultType::DATA_LOST) {
             HLOG_F(WARNING, "Receive DATA_LOST response for read request: seqnum={}, tag={}",
                    bits::HexStr0x(op->seqnum), op->query_tag);
-            FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+            // TODO: simplify
+            if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                PendingResponse* pr = pending_resp_pool_.Get();
+                pr->op = op;
+                pr->message = MessageHelper::NewSharedLogOpWithoutData(
+                    SharedLogResultType::DATA_LOST);
+                pr->metalog_progress = message.user_metalog_progress;
+                op->ongoing_responses->Landing(seqnum, pr);
+            } else {
+                ongoing_local_reads_.RemoveChecked(op->id);
+                FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+            }
         } else {
             UNREACHABLE();
         }
@@ -602,17 +647,32 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
         if (local_request) {
             Message response;
-            if (query.type == IndexQuery::kAsync) {
-                HVLOG_F(1, "Send local async read cached response for log (seqnum {})", bits::HexStr0x(seqnum));
-                response = BuildLocalAsyncReadCachedOKResponse(log_entry);
+            if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
+                // kReadNextU READ_OK with data must be continue, the EOF is handled outside here.
+                HVLOG_F(1, "Send local sync to response for log (seqnum {})", bits::HexStr0x(seqnum));
+                response = BuildLocalReadOKResponse(log_entry, protocol::kLogResponseContinueFlag);
+                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                MessageHelper::AppendInlineData(&response, aux_data);
+
+                PendingResponse* pr = pending_resp_pool_.Get();
+                LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
+                pr->op = op;
+                pr->message = response;
+                pr->metalog_progress = query_result.metalog_progress;
+                op->ongoing_responses->Direct(query_result.id, seqnum, pr);
             } else {
-                HVLOG_F(1, "Send local read response for log (seqnum {})", bits::HexStr0x(seqnum));
-                response = BuildLocalReadOKResponse(log_entry);
+                if (query.type == IndexQuery::kAsync) {
+                    HVLOG_F(1, "Send local async read cached response for log (seqnum {})", bits::HexStr0x(seqnum));
+                    response = BuildLocalAsyncReadCachedOKResponse(log_entry);
+                } else {
+                    HVLOG_F(1, "Send local read response for log (seqnum {})", bits::HexStr0x(seqnum));
+                    response = BuildLocalReadOKResponse(log_entry);
+                }
+                LocalOp* op = ongoing_local_reads_.PollChecked(query.client_data);
+                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                MessageHelper::AppendInlineData(&response, aux_data);
+                FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
             }
-            LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
-            response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-            MessageHelper::AppendInlineData(&response, aux_data);
-            FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
         } else {
             SharedLogMessage response;
             if (query.type == IndexQuery::kAsync) {
@@ -628,8 +688,8 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             response.user_metalog_progress = query_result.metalog_progress;
             response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             SendReadResponse(query, &response,
-                                VECTOR_AS_CHAR_SPAN(log_entry.user_tags),
-                                STRING_AS_SPAN(log_entry.data), aux_data);
+                             VECTOR_AS_CHAR_SPAN(log_entry.user_tags),
+                             STRING_AS_SPAN(log_entry.data), aux_data);
         }
     } else {
         // Cache miss
@@ -637,7 +697,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         if (query.type == IndexQuery::kAsync) {
             if(local_request) {
                 HVLOG_F(1, "Send local async read response for log (seqnum {})", bits::HexStr0x(seqnum));
-                LocalOp* op = onging_local_reads_.PeakChecked(query.client_data);
+                LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
                 Message response = BuildLocalAsyncReadOKResponse(localid, seqnum);
                 IntermediateLocalOpWithResponse(op, &response, query_result.metalog_progress);
             } else {
@@ -661,14 +721,28 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                 HLOG_F(FATAL, "Cannot find view {}", view_id);
             }
         }
+        if (local_request && query.direction == IndexQuery::ReadDirection::kReadNextU) {
+            LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
+            op->ongoing_responses->TakeOff(query_result.id, seqnum);
+        }
         bool success = SendStorageReadRequest(query_result, engine_node);
         if (!success) {
             HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
             if (local_request) {
-                LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
-                FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+                if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
+                    PendingResponse* pr = pending_resp_pool_.Get();
+                    LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
+                    pr->op = op;
+                    pr->message = MessageHelper::NewSharedLogOpWithoutData(
+                        SharedLogResultType::DATA_LOST);
+                    pr->metalog_progress = 0;
+                    op->ongoing_responses->Landing(seqnum, pr);
+                } else {
+                    LocalOp* op = ongoing_local_reads_.PollChecked(query.client_data);
+                    FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+                }
             } else {
-                SendReadFailureResponse(query, SharedLogResultType::DATA_LOST);
+                SendReadResponseWithoutData(query, SharedLogResultType::DATA_LOST);
             }
         }
     }
@@ -725,12 +799,12 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
             break;
         case IndexQueryResult::kEmpty:
             if (query.origin_node_id == my_node_id()) {
-                LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
+                LocalOp* op = ongoing_local_reads_.PollChecked(query.client_data);
                 Message failure_resp;
                 if (query.type == IndexQuery::kSync) {
-                    failure_resp = MessageHelper::NewSharedLogOpFailed(SharedLogResultType::EMPTY);
+                    failure_resp = MessageHelper::NewSharedLogOpWithoutData(SharedLogResultType::EMPTY);
                 } else if (query.type == IndexQuery::kAsync) {
-                    failure_resp = MessageHelper::NewSharedLogOpFailed(SharedLogResultType::ASYNC_EMPTY);
+                    failure_resp = MessageHelper::NewSharedLogOpWithoutData(SharedLogResultType::ASYNC_EMPTY);
                 } else {
                     UNREACHABLE();
                 }
@@ -745,11 +819,26 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
                 } else {
                     UNREACHABLE();
                 }
-                SendReadFailureResponse(query, result_type, result.metalog_progress);
+                SendReadResponseWithoutData(query, result_type, result.metalog_progress);
             }
             break;
         case IndexQueryResult::kContinue:
             ProcessIndexContinueResult(result, &more_results);
+            break;
+        case IndexQueryResult::kEOF:
+            if (query.origin_node_id == my_node_id()) {
+                LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
+                PendingResponse* pr = pending_resp_pool_.Get();
+                pr->op = op;
+                pr->message = MessageHelper::NewSharedLogOpWithoutData(
+                    SharedLogResultType::READ_OK);
+                pr->metalog_progress = result.metalog_progress;
+                uint64_t seqnum = result.found_result.seqnum;
+                op->ongoing_responses->Direct(result.id, seqnum, pr);
+            } else {
+                // perceive empty read ok as EOF
+                SendReadResponseWithoutData(query, SharedLogResultType::READ_OK, result.metalog_progress);
+            }
             break;
         default:
             UNREACHABLE();
@@ -768,6 +857,37 @@ void Engine::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
             LocalOpHandler(reinterpret_cast<LocalOp*>(request.local_op));
         }
     }
+}
+
+void Engine::ProcessSyncToResponse(PendingResponse* pr) {
+    LocalOp* op = pr->op;
+    Message response = pr->message;
+    uint64_t metalog_progress = pr->metalog_progress;
+    if (static_cast<protocol::SharedLogResultType>(response.log_result) ==
+        protocol::SharedLogResultType::READ_OK) {
+        if (response.payload_size > 0) {
+            // Continue
+            IntermediateLocalOpWithResponse(op, &response, metalog_progress);
+        } else {
+            // EOF
+            HVLOG_F(1, "ProcessSyncToResponse remove op_id={} due to EOF", op->id);
+            ongoing_local_reads_.RemoveChecked(op->id);
+            FinishLocalOpWithResponse(op, &response, metalog_progress);
+        }
+    } else if (static_cast<protocol::SharedLogResultType>(response.log_result) ==
+               protocol::SharedLogResultType::EMPTY) {
+        HVLOG_F(1, "ProcessSyncToResponse remove op_id={} due to EMPTY", op->id);
+        ongoing_local_reads_.RemoveChecked(op->id);
+        FinishLocalOpWithResponse(op, &response, metalog_progress);
+    } else if (static_cast<protocol::SharedLogResultType>(response.log_result) ==
+               protocol::SharedLogResultType::DATA_LOST) {
+        HVLOG_F(1, "ProcessSyncToResponse remove op_id={} due to DATA_LOST", op->id);
+        ongoing_local_reads_.RemoveChecked(op->id);
+        FinishLocalOpWithResponse(op, &response, metalog_progress);
+    } else {
+        UNREACHABLE();
+    }
+    pending_resp_pool_.Return(pr);
 }
 
 void Engine::LogCachePut(const LogMetaData& log_metadata,
@@ -835,6 +955,9 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
     request.query_seqnum = op->seqnum;
     request.user_metalog_progress = op->metalog_progress;
     request.flags |= protocol::kReadInitialFlag;
+    if ((op->flags & LocalOp::kReadLocalIdFlag) != 0) {
+        request.flags |= protocol::kReadLocalIdFlag;
+    }
     request.prev_view_id = 0;
     request.prev_engine_id = 0;
     request.prev_found_seqnum = kInvalidLogSeqNum;
@@ -854,12 +977,16 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
     request.query_tag = query.user_tag;
     request.query_seqnum = query.query_seqnum;
     request.user_metalog_progress = result.metalog_progress;
+    if ((query.flags & IndexQuery::kReadLocalIdFlag) != 0) {
+        request.flags |= protocol::kReadLocalIdFlag;
+    }
     request.prev_view_id = result.found_result.view_id;
     request.prev_engine_id = result.found_result.engine_id;
     request.prev_found_seqnum = result.found_result.seqnum;
     return request;
 }
 
+// TODO: remove this since log_cache getter had been integrated into index
 IndexQuery Engine::UpdateQueryWithAux(IndexQuery& query) {
     if (query.direction == IndexQuery::ReadDirection::kReadPrevAux) {
         std::optional<AuxEntry> aux_entry =
@@ -887,12 +1014,17 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
         .user_tag = op->query_tag,
         .query_seqnum = op->seqnum,
         .metalog_progress = op->metalog_progress,
+        .flags = 0,
         .prev_found_result = {
             .view_id = 0,
             .engine_id = 0,
             .seqnum = kInvalidLogSeqNum
-        }
+        },
+        .next_result_id = 0
     };
+    if ((op->flags & LocalOp::kReadLocalIdFlag) != 0) {
+        query.flags |= IndexQuery::kReadLocalIdFlag;
+    }
     return UpdateQueryWithAux(query);
 }
 
@@ -911,12 +1043,17 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
         .user_tag = message.query_tag,
         .query_seqnum = message.query_seqnum,
         .metalog_progress = message.user_metalog_progress,
+        .flags = 0,
         .prev_found_result = IndexFoundResult {
             .view_id = message.prev_view_id,
             .engine_id = message.prev_engine_id,
             .seqnum = message.prev_found_seqnum
-        }
+        },
+        .next_result_id = 0
     };
+    if ((message.flags & protocol::kReadLocalIdFlag) != 0) {
+        query.flags |= IndexQuery::kReadLocalIdFlag;
+    }
     return UpdateQueryWithAux(query);
 }
 
