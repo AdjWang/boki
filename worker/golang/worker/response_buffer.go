@@ -1,14 +1,20 @@
 package worker
 
-import "cs.utexas.edu/zjia/faas/protocol"
+import (
+	"log"
+
+	"cs.utexas.edu/zjia/faas/protocol"
+)
 
 // Reorder response by response count
 type ResponseBuffer struct {
 	ingress  chan []byte
 	outgress chan []byte
 
-	responseCount  uint16
-	responseBuffer map[uint16][]byte
+	responseId     uint64
+	responseBuffer map[uint64][]byte
+
+	SignalResolved chan struct{}
 }
 
 func NewResponseBuffer(capacity int) *ResponseBuffer {
@@ -16,8 +22,10 @@ func NewResponseBuffer(capacity int) *ResponseBuffer {
 		ingress:  make(chan []byte, capacity),
 		outgress: make(chan []byte, capacity),
 
-		responseCount:  0,
-		responseBuffer: make(map[uint16][]byte),
+		responseId:     0,
+		responseBuffer: make(map[uint64][]byte),
+
+		SignalResolved: make(chan struct{}, 1),
 	}
 	go rb.worker()
 	return &rb
@@ -29,22 +37,37 @@ func (rb *ResponseBuffer) worker() {
 		if !ok {
 			break
 		}
-		responseCount := protocol.GetResponseCountFromMessage(message)
-		if responseCount == rb.responseCount {
+		responseId := protocol.GetResponseIdFromMessage(message)
+		log.Printf("[DEBUG] ResponseBuffer received %v", protocol.InspectMessage(message))
+		if responseId == rb.responseId {
+			log.Printf("[DEBUG] ResponseBuffer given %v", protocol.InspectMessage(message))
+			rb.checkResolved(message)
 			rb.outgress <- message
-			rb.responseCount++
+			rb.responseId++
 			for {
-				if bufferedMessage, found := rb.responseBuffer[rb.responseCount]; found {
+				if bufferedMessage, found := rb.responseBuffer[rb.responseId]; found {
+					log.Printf("[DEBUG] ResponseBuffer given %v", protocol.InspectMessage(bufferedMessage))
+					rb.checkResolved(message)
 					rb.outgress <- bufferedMessage
-					delete(rb.responseBuffer, rb.responseCount)
-					rb.responseCount++
+					delete(rb.responseBuffer, rb.responseId)
+					rb.responseId++
 				} else {
 					break
 				}
 			}
 		} else {
-			rb.responseBuffer[responseCount] = message
+			log.Printf("[DEBUG] ResponseBuffer buffer %v", protocol.InspectMessage(message))
+			rb.responseBuffer[responseId] = message
 		}
+	}
+}
+
+func (rb *ResponseBuffer) checkResolved(message []byte) {
+	flags := protocol.GetSharedLogOpFlagsFromMessage(message)
+	if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
+		log.Printf("[DEBUG] ResponseBuffer resolved id=%v", rb.responseId)
+		rb.SignalResolved <- struct{}{}
+		close(rb.SignalResolved) // ensure only do once
 	}
 }
 

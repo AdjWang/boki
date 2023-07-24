@@ -164,19 +164,19 @@ constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogLocalId = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 
-constexpr uint16_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
-constexpr uint16_t kUseFifoForNestedCallFlag      = (1 << 1);
-constexpr uint16_t kAsyncInvokeFuncFlag           = (1 << 2);
+constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
+constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
+constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
 // Async response hint flag
 // Continue: median response with data, next one is on the way
 // EOFData: last response with data
 // EOF: last response without data
-constexpr uint16_t kLogResponseContinueFlag       = (1 << 3);
-constexpr uint16_t kLogResponseEOFDataFlag        = (1 << 4);
-constexpr uint16_t kLogResponseEOFFlag            = (1 << 5);
+constexpr uint32_t kLogResponseContinueFlag       = (1 << 3);
+constexpr uint32_t kLogResponseEOFDataFlag        = (1 << 4);
+constexpr uint32_t kLogResponseEOFFlag            = (1 << 5);
 #define SET_LOG_RESP_FLAG(target, flag)                        \
     do {                                                       \
-        target &= ~(uint16_t)((1 << 3) | (1 << 4) | (1 << 5)); \
+        target &= ~(uint32_t)((1 << 3) | (1 << 4) | (1 << 5)); \
         target |= flag;                                        \
     } while (0)
 
@@ -199,8 +199,7 @@ struct Message {
     int64_t send_timestamp;       // [16:24]
     int32_t payload_size;         // [24:28] Used in HANDSHAKE_RESPONSE, INVOKE_FUNC,
                                   //                 FUNC_CALL_COMPLETE, SHARED_LOG_OP
-    uint16_t response_count;      // [28:30] Used in SHARED_LOG_OP
-    uint16_t flags;               // [30:32]
+    uint32_t flags;               // [28:32]
 
     struct {
         uint16_t log_op;          // [32:34]
@@ -214,7 +213,10 @@ struct Message {
     uint16_t log_num_tags;        // [36:38]
     uint16_t log_aux_data_size;   // [38:40]
 
-    uint64_t log_tag;             // [40:48]
+    union {
+        uint64_t log_tag;         // [40:48] Used in SHARED_LOG_OP, as query_tag in log reading
+        uint64_t response_id;     // [40:48] Used in SHARED_LOG_OP
+    };
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
     uint64_t log_localid;         // [56:64] Used in SHARED_LOG_OP carry localid simultaneous with log_seqnum

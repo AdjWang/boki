@@ -55,13 +55,14 @@ protected:
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
 
-    struct LocalOp;
-    struct PendingResponse {
-        LocalOp* op;
-        protocol::Message message;
-        uint64_t metalog_progress;
-    };
-    utils::ThreadSafeObjectPool<PendingResponse> pending_resp_pool_;
+    // TODO: deprecated
+    // struct LocalOp;
+    // struct PendingResponse {
+    //     LocalOp* op;
+    //     protocol::Message message;
+    //     uint64_t metalog_progress;
+    // };
+    // utils::ThreadSafeObjectPool<PendingResponse> pending_resp_pool_;
 
     struct LocalOp {
         protocol::SharedLogOpType type;
@@ -79,11 +80,19 @@ protected:
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
-        uint16_t response_count;
         uint16_t flags;
-        std::unique_ptr<log_utils::SlidingWindow<PendingResponse>>
-            ongoing_responses;  // only used by READ_SYNCTO now
+        std::atomic<uint64_t> response_count;
+        log_utils::ThreadSafeCounter response_counter;
+
         static constexpr uint16_t kReadLocalIdFlag = (1 << 1);     // Indicates localid/seqnum
+        std::string InspectRead() {
+            DCHECK(type == protocol::SharedLogOpType::READ_SYNCTO);
+            if ((flags & kReadLocalIdFlag) != 0) {
+                return fmt::format("op_id={} localid={:016X}", id, localid);
+            } else {
+                return fmt::format("op_id={} seqnum={:016X}", id, seqnum);
+            }
+        }
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;
@@ -100,11 +109,11 @@ protected:
                           std::span<const char> aux_data);
 
     void IntermediateLocalOpWithResponse(LocalOp* op, protocol::Message* response, 
-                                         uint64_t metalog_progress);
+                                         uint64_t metalog_progress, uint64_t response_id);
     void FinishLocalOpWithResponse(LocalOp* op, protocol::Message* response,
-                                   uint64_t metalog_progress);
+                                   uint64_t metalog_progress, uint64_t response_id);
     void FinishLocalOpWithFailure(LocalOp* op, protocol::SharedLogResultType result,
-                                  uint64_t metalog_progress = 0);
+                                  uint64_t metalog_progress, uint64_t response_id);
 
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);

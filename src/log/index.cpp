@@ -579,14 +579,14 @@ void Index::ProcessReadNext(const IndexQuery& query) {
         if (found) {
             pending_query_results_.push_back(
                 BuildFoundResult(query, view_->id(), seqnum, engine_id, localid));
-            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum={}", seqnum);
+            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum={:016X}", seqnum);
         } else {
             if (query.prev_found_result.seqnum != kInvalidLogSeqNum) {
                 const IndexFoundResult& found_result = query.prev_found_result;
                 pending_query_results_.push_back(BuildFoundResult(
                     query, found_result.view_id, found_result.seqnum,
                     found_result.engine_id, found_result.localid));
-                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum={}",
+                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum={:016X}",
                         found_result.seqnum);
             } else {
                 pending_query_results_.push_back(BuildNotFoundResult(query));
@@ -697,10 +697,10 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     if (sync_continue) {
         pending_syncto_queries_.push_back(BuildContinueQuery(
             query, index_found, end_seqnum, engine_id, localid, result_id));
-        HVLOG(1) << "ProcessReadNextU: ContinueQuery";
+        HVLOG_F(1, "ProcessReadNextU: ContinueQuery localid={:016X}, id={}", localid, result_id);
     } else {
         pending_query_results_.push_back(BuildResolvedResult(query, result_id));
-        HVLOG(1) << "ProcessReadNextU: ResolvedResult all preceding logs are synced";
+        HVLOG_F(1, "ProcessReadNextU: ResolvedResult all preceding logs are synced id={}", result_id);
     }
 }
 

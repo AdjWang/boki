@@ -66,7 +66,7 @@ public:
     // All these APIs are thread safe
     void Put(uint64_t key, T* value);         // Override if the given key exists
     bool Poll(uint64_t key, T** value);       // Remove the given key if it is found
-    bool Peek(uint64_t key, T** value);       // Remove the given key if it is found
+    bool Peek(uint64_t key, T** value);       // Get the given key without removing if it is found
     void PutChecked(uint64_t key, T* value);  // Panic if key exists
     T*   PollChecked(uint64_t key);           // Panic if key does not exist
     T*   PeekChecked(uint64_t key);           // Panic if key does not exist
@@ -374,114 +374,176 @@ void FinalizedLogSpace(LockablePtr<T> logspace_ptr,
     }
 }
 
-template<class T>
-class SlidingWindow {
+class ThreadSafeCounter {
 public:
- SlidingWindow(
-     std::function<void(T* /*value*/)> on_sliding);
- virtual ~SlidingWindow() {}
+    ThreadSafeCounter() 
+        : counter_(0), target_(std::numeric_limits<uint64_t>::max()) {}
 
- // id must be continuous and start from 0, while key is only required to be unique
- void TakeOff(uint64_t id, uint64_t key);
- void Landing(uint64_t key, T* value);
- void Direct(uint64_t id, uint64_t key, T* value);
+    void Reset() {
+        {
+            absl::MutexLock lk(&mu_);
+            counter_ = 0;
+            target_ = std::numeric_limits<uint64_t>::max();
+        }
+        {
+            absl::MutexLock lk(&buffer_mu_);
+            seqnum_id_map_.clear();
+        }
+    }
+
+    bool AddCountAndCheck(uint64_t n) {
+        absl::MutexLock lk(&mu_);
+        counter_ += n;
+        // VLOG_F(1, "AddCountAndCheck n={}, check={}, bt={}", 
+        //              n, counter_==target_, utils::DumpStackTrace());
+        return counter_ == target_;
+    }
+    bool SetTargetAndCheck(uint64_t target) {
+        absl::MutexLock lk(&mu_);
+        DCHECK(target >= 0);
+        DCHECK(target_ == std::numeric_limits<uint64_t>::max())
+            << fmt::format("[{}] target_={}", (void*)this, target_);    // should set only once
+        target_ = target;
+        // VLOG_F(1, "SetTargetAndCheck[{}] target={}, check={}, bt={}", 
+        //           (void*)this, target, counter_==target_, utils::DumpStackTrace());
+        return counter_ == target_;
+    }
+    void BufferRequestId(uint64_t seqnum, uint64_t id) {
+        absl::MutexLock lk(&buffer_mu_);
+        DCHECK(!seqnum_id_map_.contains(seqnum));
+        seqnum_id_map_.emplace(seqnum, id);
+    }
+    uint64_t GetBufferedRequestId(uint64_t seqnum) {
+        absl::ReaderMutexLock lk(&buffer_mu_);
+        DCHECK(seqnum_id_map_.contains(seqnum));
+        return seqnum_id_map_.at(seqnum);
+    }
 private:
-    std::function<void(T*)> on_sliding_;
-
     absl::Mutex mu_;
-    absl::flat_hash_map<uint64_t /*id*/, uint64_t /*key*/> sliding_window_ ABSL_GUARDED_BY(mu_);
-    absl::flat_hash_map<uint64_t /*key*/, std::pair<uint64_t /*id*/, T* /*value*/>> values_ ABSL_GUARDED_BY(mu_);
-    size_t head_id_ ABSL_GUARDED_BY(mu_);
+    uint64_t counter_ ABSL_GUARDED_BY(mu_);
+    uint64_t target_ ABSL_GUARDED_BY(mu_);
 
-    #if defined(DEBUG)
-    void Inspect() ABSL_NO_THREAD_SAFETY_ANALYSIS;
-    #endif
+    absl::Mutex buffer_mu_;
+    absl::flat_hash_map<uint64_t, uint64_t> seqnum_id_map_ ABSL_GUARDED_BY(buffer_mu_);
 
-    DISALLOW_COPY_AND_ASSIGN(SlidingWindow);
+    DISALLOW_COPY_AND_ASSIGN(ThreadSafeCounter);
 };
 
-template<class T>
-SlidingWindow<T>::SlidingWindow(std::function<void(T*)> on_sliding)
-    : on_sliding_(on_sliding) {
-        absl::MutexLock lk(&mu_);
-        head_id_ = 0;
-    }
 
-template<class T>
-void SlidingWindow<T>::TakeOff(uint64_t id, uint64_t key) {
-    absl::MutexLock lk(&mu_);
-    VLOG_F(1, "SlidingWindow[{}] TakeOff id={}, seqnum={:016X}", (void*)this, id, key);
-    DCHECK(!sliding_window_.contains(id));
-    sliding_window_.emplace(id, key);
-    DCHECK(!values_.contains(id));
-    values_.emplace(key, std::make_pair(id, nullptr));
-}
-
-// Landing without takeoff may happen when cache hit.
-template<class T>
-void SlidingWindow<T>::Landing(uint64_t key, T* value) {
-    absl::MutexLock lk(&mu_);
-    VLOG_F(1, "SlidingWindow[{}] Landing seqnum={:016X}", (void*)this, key);
-    // buffer
-    DCHECK(values_.contains(key));
-    DCHECK(values_[key].second == nullptr);
-    values_[key].second = value;
-    // update
-    while (sliding_window_.contains(head_id_)) {
-        uint64_t buffered_key = sliding_window_[head_id_];
-        DCHECK(values_.contains(buffered_key));
-        T* value = values_[buffered_key].second;
-        if (value != nullptr) {
-            #if defined(DEBUG)
-            Inspect();
-            #endif
-            on_sliding_(value);
-            ++head_id_;
-        } else {
-            break;
-        }
-    }
-}
-
-template<class T>
-void SlidingWindow<T>::Direct(uint64_t id, uint64_t key, T* value) {
-    absl::MutexLock lk(&mu_);
-    VLOG_F(1, "SlidingWindow[{}] Direct id={}, seqnum={:016X}", (void*)this, id, key);
-    // TakeOff
-    DCHECK(!sliding_window_.contains(id));
-    sliding_window_.emplace(id, key);
-    DCHECK(!values_.contains(id));
-    values_.emplace(key, std::make_pair(id, nullptr));
-    // Landing
-    // buffer
-    DCHECK(values_.contains(key));
-    DCHECK(values_[key].second == nullptr);
-    values_[key].second = value;
-    // update
-    while (sliding_window_.contains(head_id_)) {
-        uint64_t buffered_key = sliding_window_[head_id_];
-        DCHECK(values_.contains(buffered_key));
-        T* value = values_[buffered_key].second;
-        if (value != nullptr) {
-            #if defined(DEBUG)
-            Inspect();
-            #endif
-            on_sliding_(value);
-            ++head_id_;
-        } else {
-            break;
-        }
-    }
-}
-
-template<class T>
-void SlidingWindow<T>::Inspect() {
-    std::string str_sliding_window;
-    for (auto [id, seqnum] : sliding_window_) {
-        str_sliding_window.append(fmt::format("{}:{:016X} ", id, seqnum));
-    }
-    LOG_F(INFO, "SlidingWindow: head_id={}, sliding_window=[{}]", head_id_, str_sliding_window);
-}
+// template<class T>
+// class SlidingWindow {
+// public:
+//  SlidingWindow(
+//      std::function<void(uint64_t /*id*/, T* /*value*/)> on_sliding);
+//  virtual ~SlidingWindow() {}
+// 
+//  // id must be continuous and start from 0, while key is only required to be unique
+//  void TakeOff(uint64_t id, uint64_t key);
+//  void Landing(uint64_t key, T* value);
+//  void Direct(uint64_t id, uint64_t key, T* value);
+// private:
+//     std::function<void(uint64_t /*id*/, T*)> on_sliding_;
+// 
+//     absl::Mutex mu_;
+//     absl::flat_hash_map<uint64_t /*id*/, uint64_t /*key*/> sliding_window_ ABSL_GUARDED_BY(mu_);
+//     absl::flat_hash_map<uint64_t /*key*/, std::pair<uint64_t /*id*/, T* /*value*/>> values_ ABSL_GUARDED_BY(mu_);
+//     size_t head_id_ ABSL_GUARDED_BY(mu_);
+// 
+//     #if defined(DEBUG)
+//     void Inspect() ABSL_NO_THREAD_SAFETY_ANALYSIS;
+//     #endif
+// 
+//     DISALLOW_COPY_AND_ASSIGN(SlidingWindow);
+// };
+// 
+// template<class T>
+// SlidingWindow<T>::SlidingWindow(std::function<void(uint64_t /*id*/, T*)> on_sliding)
+//     : on_sliding_(on_sliding) {
+//         absl::MutexLock lk(&mu_);
+//         head_id_ = 0;
+//     }
+// 
+// template<class T>
+// void SlidingWindow<T>::TakeOff(uint64_t id, uint64_t key) {
+//     absl::MutexLock lk(&mu_);
+//     VLOG_F(1, "SlidingWindow[{}] TakeOff id={}, seqnum={:016X}", (void*)this, id, key);
+//     DCHECK(!sliding_window_.contains(id));
+//     sliding_window_.emplace(id, key);
+//     DCHECK(!values_.contains(id));
+//     values_.emplace(key, std::make_pair(id, nullptr));
+// }
+// 
+// // Landing without takeoff may happen when cache hit.
+// template<class T>
+// void SlidingWindow<T>::Landing(uint64_t key, T* value) {
+//     absl::MutexLock lk(&mu_);
+//     VLOG_F(1, "SlidingWindow[{}] Landing seqnum={:016X}", (void*)this, key);
+//     // buffer
+//     DCHECK(values_.contains(key));
+//     DCHECK(values_[key].second == nullptr);
+//     values_[key].second = value;
+//     // update
+//     while (sliding_window_.contains(head_id_)) {
+//         uint64_t buffered_key = sliding_window_[head_id_];
+//         DCHECK(values_.contains(buffered_key));
+//         T* value = values_[buffered_key].second;
+//         if (value != nullptr) {
+//             #if defined(DEBUG)
+//             Inspect();
+//             #endif
+//             sliding_window_.erase(head_id_);
+//             values_.erase(buffered_key);
+//             on_sliding_(head_id_, value);
+//             ++head_id_;
+//         } else {
+//             break;
+//         }
+//     }
+// }
+// 
+// template<class T>
+// void SlidingWindow<T>::Direct(uint64_t id, uint64_t key, T* value) {
+//     absl::MutexLock lk(&mu_);
+//     VLOG_F(1, "SlidingWindow[{}] Direct id={}, seqnum={:016X}", (void*)this, id, key);
+//     // TakeOff
+//     DCHECK(!sliding_window_.contains(id));
+//     sliding_window_.emplace(id, key);
+//     DCHECK(!values_.contains(id));
+//     values_.emplace(key, std::make_pair(id, nullptr));
+//     // Landing
+//     // buffer
+//     DCHECK(values_.contains(key));
+//     DCHECK(values_[key].second == nullptr);
+//     values_[key].second = value;
+//     // update
+//     while (sliding_window_.contains(head_id_)) {
+//         uint64_t buffered_key = sliding_window_[head_id_];
+//         DCHECK(values_.contains(buffered_key));
+//         T* value = values_[buffered_key].second;
+//         if (value != nullptr) {
+//             #if defined(DEBUG)
+//             Inspect();
+//             #endif
+//             sliding_window_.erase(head_id_);
+//             values_.erase(buffered_key);
+//             on_sliding_(head_id_, value);
+//             ++head_id_;
+//         } else {
+//             break;
+//         }
+//     }
+// }
+// 
+// #if defined(DEBUG)
+// template<class T>
+// void SlidingWindow<T>::Inspect() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+//     // std::string str_sliding_window;
+//     // for (auto [id, seqnum] : sliding_window_) {
+//     //     str_sliding_window.append(fmt::format("{}:{:016X} ", id, seqnum));
+//     // }
+//     // LOG_F(INFO, "SlidingWindow: head_id={}, sliding_window=[{}]", head_id_, str_sliding_window);
+// }
+// #endif
 
 }  // namespace log_utils
 }  // namespace faas

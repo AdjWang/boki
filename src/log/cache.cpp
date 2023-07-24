@@ -304,7 +304,7 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataNext(uint64_t tag, uint64_t s
 }
 
 // NOTE: MUST be protected by cache_mu_ because modifies aux_index_
-void ShardedLRUCache::UpdateCacheIndex() {
+void ShardedLRUCache::UpdateCacheIndex() ABSL_NO_THREAD_SAFETY_ANALYSIS {
     const tkrzw::CacheDBMUpdateLogger::UpdatesVec& updates =
         ulogger_->PopUpdates();
     if (updates.size() == 0) {

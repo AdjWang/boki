@@ -61,7 +61,6 @@ private:
     void ProcessIndexFoundResult(const IndexQueryResult& query_result);
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                     Index::QueryResultVec* more_results);
-    void ProcessSyncToResponse(PendingResponse* response);
 
     void LogCachePut(const LogMetaData& log_metadata,
                      std::span<const uint64_t> user_tags,

@@ -219,9 +219,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->query_tag = kInvalidLogTag;
     op->user_tags.clear();
     op->data.Reset();
-    op->response_count = 0;
     op->flags = 0;
-    op->ongoing_responses.reset(nullptr);
+    op->response_count.store(0);
+    op->response_counter.Reset();
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -321,7 +321,7 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
 
 // Used to send the first response to async operations.
 void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response, 
-                                                 uint64_t metalog_progress) {
+                                                 uint64_t metalog_progress, uint64_t response_id) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
         if (fn_call_ctx_.contains(op->func_call_id)) {
@@ -331,26 +331,21 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
             }
         }
     }
+    response->response_id = response_id;
     response->log_client_data = op->client_data;
-    response->response_count = op->response_count;
-    if (op->response_count ==
-        std::numeric_limits<decltype(op->response_count)>::max()) {
-        HLOG(FATAL) << "Response count reaches max limit";
-    }
-    ++op->response_count;
     engine_->SendFuncWorkerMessage(op->client_id, response);
 }
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
-                                           uint64_t metalog_progress) {
-    IntermediateLocalOpWithResponse(op, response, metalog_progress);
+                                           uint64_t metalog_progress, uint64_t response_id) {
+    IntermediateLocalOpWithResponse(op, response, metalog_progress, response_id);
     log_op_pool_.Return(op);
 }
 
 void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType result,
-                                          uint64_t metalog_progress) {
+                                          uint64_t metalog_progress, uint64_t response_id) {
     Message response = MessageHelper::NewSharedLogOpWithoutData(result);
-    FinishLocalOpWithResponse(op, &response, metalog_progress);
+    FinishLocalOpWithResponse(op, &response, metalog_progress, response_id);
 }
 
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,

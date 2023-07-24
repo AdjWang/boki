@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 type FuncCall struct {
@@ -90,8 +91,8 @@ const (
 )
 
 const MaxLogSeqnum = uint64(0xffff000000000000)
-const InvalidLogLocalId = uint64(0xffffffffffffffff)
-const InvalidLogSeqNum = uint64(0xffffffffffffffff)
+const InvalidLogLocalId = math.MaxUint64
+const InvalidLogSeqNum = math.MaxUint64
 
 const MessageTypeBits = 4
 
@@ -105,12 +106,12 @@ const MessageInlineDataSize = MessageFullByteSize - MessageHeaderByteSize
 const SharedLogTagByteSize = 8
 
 const (
-	FLAG_FuncWorkerUseEngineSocket uint16 = (1 << 0)
-	FLAG_UseFifoForNestedCall      uint16 = (1 << 1)
-	FLAG_kAsyncInvokeFuncFlag      uint16 = (1 << 2)
-	FLAG_kLogResponseContinueFlag  uint16 = (1 << 3)
-	FLAG_kLogResponseEOFDataFlag   uint16 = (1 << 4)
-	FLAG_kLogResponseEOFFlag       uint16 = (1 << 5)
+	FLAG_FuncWorkerUseEngineSocket uint32 = (1 << 0)
+	FLAG_UseFifoForNestedCall      uint32 = (1 << 1)
+	FLAG_kAsyncInvokeFuncFlag      uint32 = (1 << 2)
+	FLAG_kLogResponseContinueFlag  uint32 = (1 << 3)
+	FLAG_kLogResponseEOFDataFlag   uint32 = (1 << 4)
+	FLAG_kLogResponseEOFFlag       uint32 = (1 << 5)
 )
 
 // DEBUG
@@ -119,20 +120,20 @@ func InspectMessage(buffer []byte) string {
 	seqNum := GetLogSeqNumFromMessage(buffer)
 	result := GetSharedLogResultTypeFromMessage(buffer)
 	flags := GetFlagsFromMessage(buffer)
-	respCount := GetResponseCountFromMessage(buffer)
-	return fmt.Sprintf("localId=%016X, seqNum=%016X, resultType=%v, flags=%v, respCount=%v",
-		localId, seqNum, result, flags, respCount)
+	respId := GetResponseIdFromMessage(buffer)
+	return fmt.Sprintf("localId=%016X, seqNum=%016X, resultType=%v, flags=%v, respId=%v",
+		localId, seqNum, result, flags, respId)
 }
 
-func GetResponseCountFromMessage(buffer []byte) uint16 {
-	return binary.LittleEndian.Uint16(buffer[28:30])
+func GetResponseIdFromMessage(buffer []byte) uint64 {
+	return binary.LittleEndian.Uint64(buffer[40:48])
 }
 
-func GetFlagsFromMessage(buffer []byte) uint16 {
-	return binary.LittleEndian.Uint16(buffer[30:32])
+func GetFlagsFromMessage(buffer []byte) uint32 {
+	return binary.LittleEndian.Uint32(buffer[28:32])
 }
 
-func GetSharedLogOpFlagsFromMessage(buffer []byte) uint16 {
+func GetSharedLogOpFlagsFromMessage(buffer []byte) uint32 {
 	flags := GetFlagsFromMessage(buffer)
 
 	// DEBUG: can only set one log response hint flag
@@ -249,7 +250,7 @@ func NewInvokeFuncCallMessage(funcCall FuncCall, parentCallId uint64, async bool
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
 	binary.LittleEndian.PutUint64(buffer[8:16], parentCallId)
 	if async {
-		binary.LittleEndian.PutUint16(buffer[30:32], FLAG_kAsyncInvokeFuncFlag)
+		binary.LittleEndian.PutUint32(buffer[28:32], FLAG_kAsyncInvokeFuncFlag)
 	}
 	return buffer
 }
