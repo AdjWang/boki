@@ -98,8 +98,9 @@ public:
     bool FindNext(uint64_t query_seqnum, uint64_t aux_tag,
                   uint64_t* seqnum) const;
 
-    // DEBUG
+    #if defined(DEBUG)
     std::string Inspect() const;
+    #endif
 
    private:
     absl::flat_hash_map</* tag */ uint64_t, absl::btree_set<uint64_t>> seqnums_by_tag_;
@@ -156,7 +157,7 @@ private:
     std::unique_ptr<tkrzw::CacheDBMUpdateLogger> ulogger_;
 
     // this function had been placed into the guarded scope.
-    void UpdateCacheIndex() ABSL_NO_THREAD_SAFETY_ANALYSIS;
+    void UpdateCacheIndex() EXCLUSIVE_LOCKS_REQUIRED(cache_mu_);
 
     DISALLOW_COPY_AND_ASSIGN(ShardedLRUCache);
 };

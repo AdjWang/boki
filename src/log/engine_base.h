@@ -55,15 +55,6 @@ protected:
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
 
-    // TODO: deprecated
-    // struct LocalOp;
-    // struct PendingResponse {
-    //     LocalOp* op;
-    //     protocol::Message message;
-    //     uint64_t metalog_progress;
-    // };
-    // utils::ThreadSafeObjectPool<PendingResponse> pending_resp_pool_;
-
     struct LocalOp {
         protocol::SharedLogOpType type;
         uint16_t client_id;
@@ -81,6 +72,7 @@ protected:
         UserTagVec user_tags;
         utils::AppendableBuffer data;
         uint16_t flags;
+        // TODO: unify
         std::atomic<uint64_t> response_count;
         log_utils::ThreadSafeCounter response_counter;
 

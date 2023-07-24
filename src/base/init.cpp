@@ -132,6 +132,7 @@ void InitMain(int argc, char* argv[],
     Thread::RegisterMainThread();
     #if defined(DEBUG)
     LOG(INFO) << "Running DEBUG built version";
+    absl::SetMutexDeadlockDetectionMode(absl::OnDeadlockCycle::kAbort);
     #endif
     #if defined(NDEBUG)
     LOG(INFO) << "Running RELEASE built version";

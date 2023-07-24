@@ -363,27 +363,6 @@ void Index::PollQueryResults(QueryResultVec* results) {
                         pending_query_results_.end());
     }
     pending_query_results_.clear();
-
-    // DEBUG
-    // std::string inspect("\n");
-    // for (const IndexQueryResult& result : *results) {
-    //     const IndexQuery& query = result.original_query;
-    //     switch (result.state) {
-    //     case IndexQueryResult::kFound:
-    //         inspect.append(fmt::format("found localid={:016X}, seqnum={:016X}\n",
-    //             result.found_result.localid, result.found_result.seqnum));
-    //         break;
-    //     case IndexQueryResult::kEOF:
-    //         inspect.append(fmt::format("EOF query_seqnum={:016X}\n",
-    //             query.query_seqnum));
-    //         break;
-    //     case IndexQueryResult::kEmpty:
-    //     case IndexQueryResult::kContinue:
-    //         inspect.append("unexpected result type\n");
-    //         break;
-    //     }
-    // }
-    // HVLOG_F(1, "PollQueryResults got: {}{}", inspect, utils::DumpStackTrace());
 }
 
 void Index::OnMetaLogApplied(const MetaLogProto& meta_log_proto) {

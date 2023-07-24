@@ -34,8 +34,8 @@ private:
 
     log_utils::FutureRequests       future_requests_;
     // DEBUG
-    // log_utils::ThreadedMap<LocalOp> ongoing_local_reads_;
-    log_utils::DebugThreadedMap<LocalOp> ongoing_local_reads_;
+    // log_utils::DebugThreadedMap<LocalOp> ongoing_local_reads_;
+    log_utils::ThreadedMap<LocalOp> ongoing_local_reads_;
 
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;

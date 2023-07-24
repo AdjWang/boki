@@ -165,6 +165,7 @@ bool AuxIndex::FindNext(const absl::btree_set<uint64_t>& seqnums,
     }
 }
 
+#if defined(DEBUG)
 std::string AuxIndex::Inspect() const {
     std::string output("AuxIndex::Inspact:\n");
     for (const auto& [tag, seqnums] : seqnums_by_tag_) {
@@ -193,6 +194,7 @@ std::string AuxIndex::Inspect() const {
     }
     return output;
 }
+#endif
 
 ShardedLRUCache::ShardedLRUCache(int mem_cap_mb)
     : log_header_("ShardedLogCache[]: ") {
@@ -224,8 +226,6 @@ std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) ABSL_NO_THR
     std::string key_str = fmt::format("0_{:016x}", seqnum);
     std::string data;
     // not touching index, so no lock here
-    // DEBUG
-    // absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()) {
         LogEntry log_entry;
@@ -261,8 +261,6 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) ABSL_NO_THR
     std::string key_str = fmt::format("1_{:016x}", seqnum);
     std::string data;
     // not touching index, so no lock here
-    // DEBUG
-    // absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     auto status = dbm_->Get(key_str, &data);
     HVLOG_F(1, "ShardedLRUCache::GetAuxData seqnum=0x{:016X}, found={}", seqnum, status.IsOK());
     if (status.IsOK()) {
@@ -304,7 +302,7 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataNext(uint64_t tag, uint64_t s
 }
 
 // NOTE: MUST be protected by cache_mu_ because modifies aux_index_
-void ShardedLRUCache::UpdateCacheIndex() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+void ShardedLRUCache::UpdateCacheIndex() {
     const tkrzw::CacheDBMUpdateLogger::UpdatesVec& updates =
         ulogger_->PopUpdates();
     if (updates.size() == 0) {

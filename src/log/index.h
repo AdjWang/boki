@@ -92,9 +92,10 @@ public:
 
     void MakeQuery(const IndexQuery& query);
 
-    using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
     // DEBUG
     // using QueryResultVec = DebugQueryResultVec;
+    using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
+
     void PollQueryResults(QueryResultVec* results);
 
 private:
