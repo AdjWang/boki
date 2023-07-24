@@ -135,13 +135,13 @@ public:
     void PutLogData(const LogMetaData& log_metadata,
                     std::span<const uint64_t> user_tags,
                     std::span<const char> log_data);
-    std::optional<LogEntry> GetLogData(uint64_t seqnum);
+    std::optional<LogEntry> GetLogData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
     void PutAuxData(const AuxEntry& aux_entry) final;
     void PutAuxData(const AuxMetaData& aux_metadata,
                     std::span<const uint64_t> user_tags,
                     std::span<const char> aux_data) final;
-    std::optional<AuxEntry> GetAuxData(uint64_t seqnum) final;
+    std::optional<AuxEntry> GetAuxData(uint64_t seqnum) final ABSL_NO_THREAD_SAFETY_ANALYSIS;
     std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum) final;
     std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum) final;
 

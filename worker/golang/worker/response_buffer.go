@@ -1,30 +1,31 @@
 package worker
 
 import (
-	"log"
-
 	"cs.utexas.edu/zjia/faas/protocol"
+	"github.com/enriquebris/goconcurrentqueue"
 )
 
 // Reorder response by response count
 type ResponseBuffer struct {
 	ingress  chan []byte
-	outgress chan []byte
+	outgress goconcurrentqueue.Queue
 
 	responseId     uint64
 	responseBuffer map[uint64][]byte
 
+	resolved       bool
 	SignalResolved chan struct{}
 }
 
 func NewResponseBuffer(capacity int) *ResponseBuffer {
 	rb := ResponseBuffer{
 		ingress:  make(chan []byte, capacity),
-		outgress: make(chan []byte, capacity),
+		outgress: goconcurrentqueue.NewFIFO(),
 
 		responseId:     0,
 		responseBuffer: make(map[uint64][]byte),
 
+		resolved:       false,
 		SignalResolved: make(chan struct{}, 1),
 	}
 	go rb.worker()
@@ -38,17 +39,13 @@ func (rb *ResponseBuffer) worker() {
 			break
 		}
 		responseId := protocol.GetResponseIdFromMessage(message)
-		log.Printf("[DEBUG] ResponseBuffer received %v", protocol.InspectMessage(message))
+		// log.Printf("[DEBUG] ResponseBuffer received %v", protocol.InspectMessage(message))
 		if responseId == rb.responseId {
-			log.Printf("[DEBUG] ResponseBuffer given %v", protocol.InspectMessage(message))
-			rb.checkResolved(message)
-			rb.outgress <- message
+			rb.outputMessage(message)
 			rb.responseId++
 			for {
 				if bufferedMessage, found := rb.responseBuffer[rb.responseId]; found {
-					log.Printf("[DEBUG] ResponseBuffer given %v", protocol.InspectMessage(bufferedMessage))
-					rb.checkResolved(message)
-					rb.outgress <- bufferedMessage
+					rb.outputMessage(bufferedMessage)
 					delete(rb.responseBuffer, rb.responseId)
 					rb.responseId++
 				} else {
@@ -56,7 +53,7 @@ func (rb *ResponseBuffer) worker() {
 				}
 			}
 		} else {
-			log.Printf("[DEBUG] ResponseBuffer buffer %v", protocol.InspectMessage(message))
+			// log.Printf("[DEBUG] ResponseBuffer buffered %v", protocol.InspectMessage(message))
 			rb.responseBuffer[responseId] = message
 		}
 	}
@@ -65,10 +62,26 @@ func (rb *ResponseBuffer) worker() {
 func (rb *ResponseBuffer) checkResolved(message []byte) {
 	flags := protocol.GetSharedLogOpFlagsFromMessage(message)
 	if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
-		log.Printf("[DEBUG] ResponseBuffer resolved id=%v", rb.responseId)
+		// DEBUG
+		// log.Printf("[DEBUG] ResponseBuffer resolved id=%v %v",
+		// 	rb.responseId, protocol.InspectMessage(message))
+		rb.resolved = true
 		rb.SignalResolved <- struct{}{}
-		close(rb.SignalResolved) // ensure only do once
+		// ensure only do once
+		close(rb.SignalResolved)
+		close(rb.ingress)
 	}
+}
+
+func (rb *ResponseBuffer) outputMessage(message []byte) {
+	if rb.resolved {
+		panic("output message after resolved")
+	}
+	// log.Printf("[DEBUG] ResponseBuffer output %v", protocol.InspectMessage(message))
+	if err := rb.outgress.Enqueue(message); err != nil {
+		panic(err)
+	}
+	rb.checkResolved(message)
 }
 
 func (rb *ResponseBuffer) Enqueue(message []byte) {
@@ -76,5 +89,11 @@ func (rb *ResponseBuffer) Enqueue(message []byte) {
 }
 
 func (rb *ResponseBuffer) Dequeue() []byte {
-	return <-rb.outgress
+	data, err := rb.outgress.DequeueOrWaitForNextElement()
+	if err != nil {
+		panic(err)
+	}
+	message := data.([]byte)
+	// log.Printf("[DEBUG] SharedLogOp output cid=%v %v", rb.cid, protocol.InspectMessage(message))
+	return message
 }

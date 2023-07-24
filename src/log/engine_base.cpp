@@ -333,6 +333,7 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
     }
     response->response_id = response_id;
     response->log_client_data = op->client_data;
+    // HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={}", op->id, response_id, op->client_data);
     engine_->SendFuncWorkerMessage(op->client_id, response);
 }
 

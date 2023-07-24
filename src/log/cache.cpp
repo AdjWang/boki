@@ -220,12 +220,12 @@ void ShardedLRUCache::PutLogData(const LogMetaData& log_metadata,
     }
 }
 
-std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) {
+std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     std::string key_str = fmt::format("0_{:016x}", seqnum);
     std::string data;
     // not touching index, so no lock here
     // DEBUG
-    absl::ReaderMutexLock cache_rlk_(&cache_mu_);
+    // absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()) {
         LogEntry log_entry;
@@ -257,12 +257,12 @@ void ShardedLRUCache::PutAuxData(const AuxMetaData& aux_metadata,
     }
 }
 
-std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) {
+std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     std::string key_str = fmt::format("1_{:016x}", seqnum);
     std::string data;
     // not touching index, so no lock here
     // DEBUG
-    absl::ReaderMutexLock cache_rlk_(&cache_mu_);
+    // absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     auto status = dbm_->Get(key_str, &data);
     HVLOG_F(1, "ShardedLRUCache::GetAuxData seqnum=0x{:016X}, found={}", seqnum, status.IsOK());
     if (status.IsOK()) {

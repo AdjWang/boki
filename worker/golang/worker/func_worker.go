@@ -68,7 +68,7 @@ func hexBytes2String(data []byte) string {
 const PIPE_BUF = 4096
 
 func NewLogOpsQueue(w *FuncWorker, id uint64) *ResponseBuffer {
-	queue := NewResponseBuffer(2)
+	queue := NewResponseBuffer(20)
 	go func() {
 		<-queue.SignalResolved
 		w.mux.Lock()
@@ -157,8 +157,10 @@ func (w *FuncWorker) Run() {
 			w.mux.Unlock()
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
+			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if queue, exists := w.outgoingLogOps[id]; exists {
+				// go func() { queue.Enqueue(message) }()
 				queue.Enqueue(message)
 			} else {
 				log.Printf("[WARN] Unexpected log message id for sync ops: %d, InspectMessage=%v",
@@ -647,8 +649,8 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 			protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, data}, nil /* sep */))
 		}
 
-		queue := NewLogOpsQueue(w, id)
 		w.mux.Lock()
+		queue := NewLogOpsQueue(w, id)
 		w.outgoingLogOps[id] = queue
 		_, err = w.outputPipe.Write(message)
 		w.mux.Unlock()
@@ -725,8 +727,8 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 			protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, data}, nil /* sep */))
 		}
 
-		queue := NewLogOpsQueue(w, id)
 		w.mux.Lock()
+		queue := NewLogOpsQueue(w, id)
 		w.outgoingLogOps[id] = queue
 		_, err = w.outputPipe.Write(message)
 		w.mux.Unlock()
@@ -798,8 +800,8 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
 	// }
 
-	queue := NewLogOpsQueue(w, opId)
 	w.mux.Lock()
+	queue := NewLogOpsQueue(w, opId)
 	w.outgoingLogOps[opId] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
@@ -842,8 +844,8 @@ func (w *FuncWorker) asyncSharedLogReadCommon2(ctx context.Context, message []by
 	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
 	// }
 
-	queue := NewLogOpsQueue(w, opId)
 	w.mux.Lock()
+	queue := NewLogOpsQueue(w, opId)
 	w.outgoingLogOps[opId] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
@@ -946,8 +948,8 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, tar
 		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.LocalId, true /* useLogIndex */, id)
 	}
 
-	queue := NewLogOpsQueue(w, id)
 	w.mux.Lock()
+	queue := NewLogOpsQueue(w, id)
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
@@ -1014,8 +1016,8 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.LocalId, true /* useLogIndex */, id)
 	}
 
-	queue := NewLogOpsQueue(w, id)
 	w.mux.Lock()
+	queue := NewLogOpsQueue(w, id)
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
@@ -1189,8 +1191,8 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	message := protocol.NewSharedLogSetAuxDataMessage(currentCallId, w.clientId, seqNum, id)
 	protocol.FillInlineDataInMessage(message, auxData)
 
-	queue := NewLogOpsQueue(w, id)
 	w.mux.Lock()
+	queue := NewLogOpsQueue(w, id)
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
@@ -1231,8 +1233,8 @@ func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, tags []u
 		protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, auxData}, nil /* sep */))
 	}
 
-	queue := NewLogOpsQueue(w, id)
 	w.mux.Lock()
+	queue := NewLogOpsQueue(w, id)
 	w.outgoingLogOps[id] = queue
 	_, err = w.outputPipe.Write(message)
 	w.mux.Unlock()

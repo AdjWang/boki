@@ -324,7 +324,9 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
         SharedLogResultType::AUXDATA_OK, protocol::kInvalidLogLocalId, seqnum);
     SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
     uint64_t response_id = op->response_count.fetch_add(1, std::memory_order_acq_rel);
+    HVLOG_F(1, "HandleLocalSetAuxData op_id={}, seqnum={:016X}, response_id={}", op->id, seqnum, response_id);
     FinishLocalOpWithResponse(op, &response, /*metalog_progress*/0, response_id);
+    return;
     if (!absl::GetFlag(FLAGS_slog_engine_propagate_auxdata)) {
         return;
     }

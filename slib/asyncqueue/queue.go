@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -158,9 +159,14 @@ func (q *Queue) appendPopLogAndSync() error {
 }
 
 func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
+	// DEBUG
+	log.SetPrefix(q.name + " ")
+	defer log.SetPrefix("")
+
 	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, q.GetTag(), logIndex)
 	doneCh := make(chan struct{})
 	errCh := make(chan error)
+	log.Printf("[DEBUG] syncToFuture start %+v", logIndex)
 	go func(ctx context.Context) {
 		var view interface{}
 		for {
@@ -184,12 +190,14 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 			}
 			if logEntry == nil {
 				if view != nil {
+					log.Printf("[DEBUG] load last view=%+v", view)
 					q.view = view.(*QueueAuxData)
 				}
+				log.Printf("[DEBUG] syncToFuture finished %+v", logIndex)
 				doneCh <- struct{}{}
 				break
 			}
-			// log.Printf("[DEBUG] got logEntry=%+v", logEntry)
+			log.Printf("[DEBUG] got logEntry seqnum=%v", logEntry.SeqNum)
 			if len(logEntry.AuxData) != 0 {
 				decoded, err := q.DecodeView(logEntry.AuxData)
 				if err != nil {
@@ -199,6 +207,7 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 				view = decoded
 			} else {
 				var auxTags []uint64
+				log.Printf("[DEBUG] UpdateView seqnum=%016X", logEntry.SeqNum)
 				auxTags, view = q.UpdateView(view, logEntry)
 				// log.Printf("[DEBUG] applying logEntry=%+v, got view=%+v", logEntry, view)
 				// some times we only need to grab log entries with out view
@@ -209,10 +218,13 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 						errCh <- ctx.Err()
 						return
 					}
+					// log.Printf("[DEBUG] set view start seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
+					log.Printf("[DEBUG] SetAuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
 					if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxTags, logEntry.SeqNum, encoded); err != nil {
 						errCh <- ctx.Err()
 						return
 					}
+					// log.Printf("[DEBUG] set view end seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
 				}
 			}
 		}
