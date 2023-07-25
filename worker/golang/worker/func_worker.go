@@ -68,7 +68,7 @@ func hexBytes2String(data []byte) string {
 const PIPE_BUF = 4096
 
 func NewLogOpsQueue(w *FuncWorker, id uint64) *ResponseBuffer {
-	queue := NewResponseBuffer(20)
+	queue := NewResponseBuffer(20, id)
 	go func() {
 		<-queue.SignalResolved
 		w.mux.Lock()
@@ -157,11 +157,11 @@ func (w *FuncWorker) Run() {
 			w.mux.Unlock()
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
-			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
+			log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			if queue, exists := w.outgoingLogOps[id]; exists {
 				// go func() { queue.Enqueue(message) }()
-				queue.Enqueue(message)
+				queue.Enqueue(message, id)
 			} else {
 				log.Printf("[WARN] Unexpected log message id for sync ops: %d, InspectMessage=%v",
 					id, protocol.InspectMessage(message))
@@ -950,6 +950,10 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, tar
 
 	w.mux.Lock()
 	queue := NewLogOpsQueue(w, id)
+	// DEBUG
+	if _, ok := w.outgoingLogOps[id]; ok {
+		panic(fmt.Sprintf("unreachable id=%v exists", id))
+	}
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()

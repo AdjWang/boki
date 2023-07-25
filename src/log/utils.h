@@ -418,6 +418,12 @@ public:
         DCHECK(seqnum_id_map_.contains(seqnum));
         return seqnum_id_map_.at(seqnum);
     }
+
+    // DEBUG
+    bool IsResolved() {
+        absl::ReaderMutexLock lk(&mu_);
+        return counter_ == target_;
+    }
 private:
     absl::Mutex mu_;
     uint64_t counter_ ABSL_GUARDED_BY(mu_);

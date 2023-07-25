@@ -203,10 +203,11 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         //            << DebugListExistingFnCall(fn_call_ctx_);
         ctx = fn_call_ctx_.at(func_call.full_call_id);
     }
-    DCHECK(!(message.log_seqnum != protocol::kInvalidLogSeqNum &&
-             message.log_localid != protocol::kInvalidLogLocalId));
 
     LocalOp* op = log_op_pool_.Get();
+    HVLOG_F(1, "EngineBase Load old op: type={} op_id={} client={} cid={}",
+        op->type, op->id, op->client_id, op->client_data);
+
     op->id = next_local_op_id_.fetch_add(1, std::memory_order_acq_rel);
     op->start_timestamp = GetMonotonicMicroTimestamp();
     op->client_id = message.log_client_id;
@@ -222,6 +223,14 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->flags = 0;
     op->response_count.store(0);
     op->response_counter.Reset();
+
+    HVLOG_F(1, "EngineBase Load new op: type={} op_id={} client={} cid={}",
+        op->type, op->id, op->client_id, op->client_data);
+
+    DCHECK(!(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type) &&
+             message.log_seqnum == protocol::kInvalidLogSeqNum &&
+             message.log_localid == protocol::kInvalidLogLocalId))
+        << DebugPrintMessage(message);
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -331,15 +340,33 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
             }
         }
     }
-    response->response_id = response_id;
+    // response->response_id = response_id;
+    // DEBUG
+    response->response_id = (op->id << 48) | response_id;
     response->log_client_data = op->client_data;
-    // HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={}", op->id, response_id, op->client_data);
+    std::string debug_message(fmt::format("EngineBase send response cid={} type={} op_id={} response_id={}",
+        op->client_data, op->type, op->id, response_id));
+    if (protocol::SharedLogOpTypeHelper::IsAsyncSharedLogOp(op->type)) {
+        DCHECK(response_id <= 1) << debug_message << utils::DumpStackTrace()
+            << fmt::format("reclaiming bt: {}", op->bt);
+    } else if (op->type != protocol::SharedLogOpType::READ_SYNCTO) {
+        DCHECK(response_id == 0) << debug_message << utils::DumpStackTrace()
+            << fmt::format("reclaiming bt: {}", op->bt);
+    }
     engine_->SendFuncWorkerMessage(op->client_id, response);
 }
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
                                            uint64_t metalog_progress, uint64_t response_id) {
     IntermediateLocalOpWithResponse(op, response, metalog_progress, response_id);
+
+    // DEBUG
+    std::string debug_message(fmt::format("EngineBase send response cid={} type={} op_id={} response_id={}",
+        op->client_data, op->type, op->id, response_id));
+    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+        DCHECK(op->response_counter.IsResolved()) << debug_message << utils::DumpStackTrace();
+    }
+    op->bt = fmt::format("reclaiming inspection={} bt={}", debug_message, utils::DumpStackTrace());
     log_op_pool_.Return(op);
 }
 

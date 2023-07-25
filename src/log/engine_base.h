@@ -77,13 +77,19 @@ protected:
         log_utils::ThreadSafeCounter response_counter;
 
         static constexpr uint16_t kReadLocalIdFlag = (1 << 1);     // Indicates localid/seqnum
-        std::string InspectRead() {
-            DCHECK(type == protocol::SharedLogOpType::READ_SYNCTO);
-            if ((flags & kReadLocalIdFlag) != 0) {
-                return fmt::format("op_id={} localid={:016X}", id, localid);
+        // DEBUG
+        std::string bt;
+        std::string InspectRead(protocol::SharedLogOpType op_type) const {
+            // DEBUG
+            std::string debug_message;
+            if ((flags & LocalOp::kReadLocalIdFlag) != 0) {
+                debug_message = fmt::format("op_id={} localid={:016X} cid={}", id, localid, client_data);
             } else {
-                return fmt::format("op_id={} seqnum={:016X}", id, seqnum);
+                debug_message = fmt::format("op_id={} qseqnum={:016X} cid={}", id, seqnum, client_data);
             }
+            DCHECK(op_type == protocol::SharedLogOpType::READ_SYNCTO)
+                << fmt::format("op: {}, got={} from {}", debug_message, op_type, utils::DumpStackTrace());
+            return debug_message;
         }
     };
 

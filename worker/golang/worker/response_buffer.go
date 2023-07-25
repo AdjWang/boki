@@ -1,6 +1,9 @@
 package worker
 
 import (
+	"fmt"
+	"log"
+
 	"cs.utexas.edu/zjia/faas/protocol"
 	"github.com/enriquebris/goconcurrentqueue"
 )
@@ -15,9 +18,14 @@ type ResponseBuffer struct {
 
 	resolved       bool
 	SignalResolved chan struct{}
+
+	// DEBUG
+	Debug           bool
+	debugMessageOps [][]byte
+	cid             uint64
 }
 
-func NewResponseBuffer(capacity int) *ResponseBuffer {
+func NewResponseBuffer(capacity int, cid uint64) *ResponseBuffer {
 	rb := ResponseBuffer{
 		ingress:  make(chan []byte, capacity),
 		outgress: goconcurrentqueue.NewFIFO(),
@@ -27,6 +35,11 @@ func NewResponseBuffer(capacity int) *ResponseBuffer {
 
 		resolved:       false,
 		SignalResolved: make(chan struct{}, 1),
+
+		// DEBUG
+		Debug:           true,
+		debugMessageOps: make([][]byte, 0, 20),
+		cid:             cid,
 	}
 	go rb.worker()
 	return &rb
@@ -38,7 +51,13 @@ func (rb *ResponseBuffer) worker() {
 		if !ok {
 			break
 		}
+		// DEBUG
+		rb.debugMessageOps = append(rb.debugMessageOps, message)
+
 		responseId := protocol.GetResponseIdFromMessage(message)
+		// DEBUG
+		responseId &= 0x0000FFFFFFFFFFFF
+
 		// log.Printf("[DEBUG] ResponseBuffer received %v", protocol.InspectMessage(message))
 		if responseId == rb.responseId {
 			rb.outputMessage(message)
@@ -75,6 +94,13 @@ func (rb *ResponseBuffer) checkResolved(message []byte) {
 
 func (rb *ResponseBuffer) outputMessage(message []byte) {
 	if rb.resolved {
+		if rb.Debug {
+			log.Println(rb.debugMessageOps)
+			log.Printf("buffer cid=%v", rb.cid)
+			for _, msg := range rb.debugMessageOps {
+				log.Println(protocol.InspectMessage(msg))
+			}
+		}
 		panic("output message after resolved")
 	}
 	// log.Printf("[DEBUG] ResponseBuffer output %v", protocol.InspectMessage(message))
@@ -84,7 +110,10 @@ func (rb *ResponseBuffer) outputMessage(message []byte) {
 	rb.checkResolved(message)
 }
 
-func (rb *ResponseBuffer) Enqueue(message []byte) {
+func (rb *ResponseBuffer) Enqueue(message []byte, cid uint64) {
+	if rb.cid != cid {
+		panic(fmt.Sprintf("inconsistent cid. initial=%v, current=%v", rb.cid, cid))
+	}
 	rb.ingress <- message
 }
 

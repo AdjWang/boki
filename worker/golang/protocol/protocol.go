@@ -121,8 +121,11 @@ func InspectMessage(buffer []byte) string {
 	result := GetSharedLogResultTypeFromMessage(buffer)
 	flags := GetFlagsFromMessage(buffer)
 	respId := GetResponseIdFromMessage(buffer)
-	return fmt.Sprintf("localId=%016X, seqNum=%016X, resultType=%v, flags=%v, respId=%v",
-		localId, seqNum, result, flags, respId)
+	// DEBUG
+	opId := respId >> 48
+	respId &= 0x0000FFFFFFFFFFFF
+	return fmt.Sprintf("opId=%v, localId=%016X, seqNum=%016X, resultType=%v, flags=%v, respId=%v",
+		opId, localId, seqNum, result, flags, respId)
 }
 
 func GetResponseIdFromMessage(buffer []byte) uint64 {

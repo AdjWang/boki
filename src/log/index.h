@@ -51,6 +51,10 @@ struct IndexQuery {
 
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);
     protocol::SharedLogOpType DirectionToOpType() const;
+    // DEBUG
+    std::string InspectRead() const {
+        return fmt::format("IndexQuery Inspection: type={} dir={} op_id={} hop_times={}", type, direction, client_data, hop_times);
+    }
 };
 
 struct IndexQueryResult {

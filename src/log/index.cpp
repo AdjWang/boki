@@ -516,7 +516,8 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
 }
 
 void Index::ProcessQuery(const IndexQuery& query) {
-    HVLOG_F(1, "ProcessQuery: direction={}, flags={:02X}", query.direction, query.flags);
+    HVLOG_F(1, "ProcessQuery: op_id={} direction={} flags={:02X} hop_times={}",
+        query.client_data, query.direction, query.flags, query.hop_times);
     if (query.direction == IndexQuery::kReadLocalId) {
         bool success = ProcessLocalIdQuery(query);
         if (!success) {
