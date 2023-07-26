@@ -203,8 +203,6 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         //            << DebugListExistingFnCall(fn_call_ctx_);
         ctx = fn_call_ctx_.at(func_call.full_call_id);
     }
-    DCHECK(!(message.log_seqnum != protocol::kInvalidLogSeqNum &&
-             message.log_localid != protocol::kInvalidLogLocalId));
 
     LocalOp* op = log_op_pool_.Get();
     op->id = next_local_op_id_.fetch_add(1, std::memory_order_acq_rel);
@@ -220,8 +218,11 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->user_tags.clear();
     op->data.Reset();
     op->flags = 0;
-    op->response_count.store(0);
     op->response_counter.Reset();
+
+    DCHECK(!(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type) &&
+             message.log_seqnum == protocol::kInvalidLogSeqNum &&
+             message.log_localid == protocol::kInvalidLogLocalId));
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -319,9 +320,9 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
     }
 }
 
-// Used to send the first response to async operations.
-void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response, 
-                                                 uint64_t metalog_progress, uint64_t response_id) {
+void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
+                                         uint64_t metalog_progress,
+                                         std::function<void()> on_finished) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
         if (fn_call_ctx_.contains(op->func_call_id)) {
@@ -331,22 +332,27 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
             }
         }
     }
-    response->response_id = response_id;
     response->log_client_data = op->client_data;
     // HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={}", op->id, response_id, op->client_data);
     engine_->SendFuncWorkerMessage(op->client_id, response);
-}
 
-void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
-                                           uint64_t metalog_progress, uint64_t response_id) {
-    IntermediateLocalOpWithResponse(op, response, metalog_progress, response_id);
-    log_op_pool_.Return(op);
-}
-
-void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType result,
-                                          uint64_t metalog_progress, uint64_t response_id) {
-    Message response = MessageHelper::NewSharedLogOpWithoutData(result);
-    FinishLocalOpWithResponse(op, &response, metalog_progress, response_id);
+    bool finished;
+    if ((response->flags & protocol::kLogResponseContinueFlag) != 0) {
+        // Continue
+        finished = op->response_counter.AddCountAndCheck(1);
+    } else {
+        // EOFData or EOF
+        finished = op->response_counter.SetTargetAndCheck(response->response_id);
+    }
+    if (finished) {
+        if (on_finished != nullptr) {
+            // Resource reclaiming operations from engine must be performed
+            // before returning op
+            on_finished();
+        }
+        DCHECK(op->response_counter.IsResolved()) << op->InspectRead();
+        log_op_pool_.Return(op);
+    }
 }
 
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,

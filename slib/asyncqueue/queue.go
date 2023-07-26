@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -86,7 +85,11 @@ func (q *Queue) GetTag() uint64 {
 	return queueLogTag(q.nameHash)
 }
 
-func (q *Queue) UpdateView(view interface{}, logEntry *types.LogEntryWithMeta) ([]uint64, interface{}) {
+// return
+// auxTags []uint64
+// view interface{}
+// applied bool
+func (q *Queue) UpdateView(view interface{}, logEntry *types.LogEntryWithMeta) ([]uint64, interface{}, bool) {
 	if logEntry == nil {
 		panic("unreachable")
 	}
@@ -100,7 +103,8 @@ func (q *Queue) UpdateView(view interface{}, logEntry *types.LogEntryWithMeta) (
 	}
 	// apply log to view
 	if queueLog.QueueName != q.name {
-		panic("unreachable")
+		// maybe read from different shards
+		return nil, nil, false
 	}
 	if queueLog.IsPush {
 		queueAuxData.Tail = queueLog.seqNum + 1
@@ -115,7 +119,7 @@ func (q *Queue) UpdateView(view interface{}, logEntry *types.LogEntryWithMeta) (
 			queueAuxData.Consumed = queueLog.seqNum
 		}
 	}
-	return []uint64{q.GetTag()}, queueAuxData
+	return []uint64{q.GetTag()}, queueAuxData, true
 }
 
 func (q *Queue) EncodeView(view interface{}) ([]byte, error) {
@@ -158,12 +162,19 @@ func (q *Queue) appendPopLogAndSync() error {
 	}
 }
 
+type AuxView struct {
+	seqNum  uint64
+	auxTags []uint64
+	view    interface{}
+}
+
 func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, q.GetTag(), logIndex)
 	doneCh := make(chan struct{})
 	errCh := make(chan error)
-	log.Printf("[DEBUG] syncToFuture start %+v", logIndex)
+	// log.Printf("[DEBUG] syncToFuture start %+v", logIndex)
 	go func(ctx context.Context) {
+		var auxView *AuxView
 		var view interface{}
 		for {
 			var logEntry *types.LogEntryWithMeta
@@ -172,13 +183,9 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 				errCh <- ctx.Err()
 				return
 			default:
-				logStreamEntry, err := logStream.DequeueOrWaitForNextElement()
-				if err != nil {
-					errCh <- ctx.Err()
-					return
-				}
-				logEntry = logStreamEntry.(types.LogStreamEntry[types.LogEntryWithMeta]).LogEntry
-				err = logStreamEntry.(types.LogStreamEntry[types.LogEntryWithMeta]).Err
+				logStreamEntry := logStream.BlockingDequeue()
+				logEntry = logStreamEntry.LogEntry
+				err := logStreamEntry.Err
 				if err != nil {
 					errCh <- ctx.Err()
 					return
@@ -188,6 +195,18 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 				if view != nil {
 					// log.Printf("[DEBUG] load last view=%+v", view)
 					q.view = view.(*QueueAuxData)
+				}
+				if auxView != nil {
+					encoded, err := q.EncodeView(auxView.view)
+					if err != nil {
+						errCh <- ctx.Err()
+						return
+					}
+					// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
+					if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
+						errCh <- ctx.Err()
+						return
+					}
 				}
 				// log.Printf("[DEBUG] syncToFuture finished %+v", logIndex)
 				doneCh <- struct{}{}
@@ -202,22 +221,17 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 				}
 				view = decoded
 			} else {
-				var auxTags []uint64
 				// log.Printf("[DEBUG] UpdateView seqnum=%016X", logEntry.SeqNum)
-				auxTags, view = q.UpdateView(view, logEntry)
+				auxTags, nextView, applied := q.UpdateView(view, logEntry)
 				// log.Printf("[DEBUG] applying logEntry=%+v, got view=%+v", logEntry, view)
 				// some times we only need to grab log entries with out view
 				// so output view can be nil
-				if view != nil {
-					encoded, err := q.EncodeView(view)
-					if err != nil {
-						errCh <- ctx.Err()
-						return
-					}
-					log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
-					if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxTags, logEntry.SeqNum, encoded); err != nil {
-						errCh <- ctx.Err()
-						return
+				if applied {
+					view = nextView
+					auxView = &AuxView{
+						seqNum:  logEntry.SeqNum,
+						auxTags: auxTags,
+						view:    nextView,
 					}
 				}
 			}

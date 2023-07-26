@@ -98,9 +98,8 @@ public:
     bool FindNext(uint64_t query_seqnum, uint64_t aux_tag,
                   uint64_t* seqnum) const;
 
-    #if defined(DEBUG)
+    // DEBUG
     std::string Inspect() const;
-    #endif
 
    private:
     absl::flat_hash_map</* tag */ uint64_t, absl::btree_set<uint64_t>> seqnums_by_tag_;

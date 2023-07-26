@@ -20,7 +20,6 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
-	"github.com/enriquebris/goconcurrentqueue"
 	"github.com/pkg/errors"
 )
 
@@ -66,9 +65,10 @@ func hexBytes2String(data []byte) string {
 // region end
 
 const PIPE_BUF = 4096
+const QUEUE_RESERVED_CAP = 100
 
 func NewLogOpsQueue(w *FuncWorker, id uint64) *ResponseBuffer {
-	queue := NewResponseBuffer(20)
+	queue := NewResponseBuffer(QUEUE_RESERVED_CAP)
 	go func() {
 		<-queue.SignalResolved
 		w.mux.Lock()
@@ -160,8 +160,8 @@ func (w *FuncWorker) Run() {
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if queue, exists := w.outgoingLogOps[id]; exists {
-				// go func() { queue.Enqueue(message) }()
-				queue.Enqueue(message)
+				go func() { queue.Enqueue(message) }()
+				// queue.Enqueue(message)
 			} else {
 				log.Printf("[WARN] Unexpected log message id for sync ops: %d, InspectMessage=%v",
 					id, protocol.InspectMessage(message))
@@ -765,7 +765,12 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 				return nil, fmt.Errorf("failed to append log, exceeds maximum number of retries")
 			}
 		} else {
-			return nil, fmt.Errorf("failed to append async log, unacceptable result type: 0x%02X", result)
+			// DEBUG
+			err := fmt.Errorf("failed to append async log, unacceptable result type: 0x%02X", result)
+			log.Println(err)
+			queue.Inspect()
+			log.Printf("response: %v", protocol.InspectMessage(response))
+			return nil, err
 		}
 	}
 }
@@ -935,7 +940,7 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
-func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) goconcurrentqueue.Queue {
+func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -953,7 +958,7 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, tar
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
-	results := goconcurrentqueue.NewFIFO()
+	results := types.NewQueue[types.LogStreamEntry[types.LogEntry]](QUEUE_RESERVED_CAP)
 	if err != nil {
 		results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: err})
 		return results
@@ -975,27 +980,19 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, tar
 					if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
 						panic("assertion error, should always end with EOF without data")
 					}
-					if err := results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil}); err != nil {
-						panic(err)
-					}
+					results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil})
 					return
 				}
 				logEntry := buildLogEntryFromReadResponse(response)
-				if err := results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: logEntry, Err: nil}); err != nil {
-					panic(err)
-				}
+				results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: logEntry, Err: nil})
 			} else if result == protocol.SharedLogResultType_EMPTY {
-				if err := results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil}); err != nil {
-					panic(err)
-				}
+				results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil})
 				return
 			} else {
-				if err := results.Enqueue(
+				results.Enqueue(
 					types.LogStreamEntry[types.LogEntry]{
 						LogEntry: nil,
-						Err:      fmt.Errorf("failed to read log: 0x%02X", result)}); err != nil {
-					panic(err)
-				}
+						Err:      fmt.Errorf("failed to read log: 0x%02X", result)})
 				return
 			}
 		}
@@ -1003,7 +1000,7 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, tar
 	return results
 }
 
-func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) goconcurrentqueue.Queue {
+func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -1021,7 +1018,7 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
-	results := goconcurrentqueue.NewFIFO()
+	results := types.NewQueue[types.LogStreamEntry[types.LogEntryWithMeta]](QUEUE_RESERVED_CAP)
 	if err != nil {
 		results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: err})
 		return results
@@ -1043,9 +1040,7 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 					if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
 						panic("assertion error, should always end with EOF without data")
 					}
-					if err := results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil}); err != nil {
-						panic(err)
-					}
+					results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil})
 					return
 				}
 				logEntry := buildLogEntryFromReadResponse(response)
@@ -1059,21 +1054,15 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 					Deps:        metadata.Deps,
 					Identifiers: types.CombineTags(metadata.StreamTypes, logEntry.Tags),
 				}
-				if err := results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: logEntryWithMeta, Err: nil}); err != nil {
-					panic(err)
-				}
+				results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: logEntryWithMeta, Err: nil})
 			} else if result == protocol.SharedLogResultType_EMPTY {
-				if err := results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil}); err != nil {
-					panic(err)
-				}
+				results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil})
 				return
 			} else {
-				if err := results.Enqueue(
+				results.Enqueue(
 					types.LogStreamEntry[types.LogEntryWithMeta]{
 						LogEntry: nil,
-						Err:      fmt.Errorf("failed to read log: 0x%02X", result)}); err != nil {
-					panic(err)
-				}
+						Err:      fmt.Errorf("failed to read log: 0x%02X", result)})
 				return
 			}
 		}

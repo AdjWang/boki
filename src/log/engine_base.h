@@ -72,13 +72,11 @@ protected:
         UserTagVec user_tags;
         utils::AppendableBuffer data;
         uint16_t flags;
-        // TODO: unify
-        std::atomic<uint64_t> response_count;
+        // Used by READ_SYNCTO to reorder results
         log_utils::ThreadSafeCounter response_counter;
 
         static constexpr uint16_t kReadLocalIdFlag = (1 << 1);     // Indicates localid/seqnum
-        std::string InspectRead() {
-            DCHECK(type == protocol::SharedLogOpType::READ_SYNCTO);
+        std::string InspectRead() const {
             if ((flags & kReadLocalIdFlag) != 0) {
                 return fmt::format("op_id={} localid={:016X}", id, localid);
             } else {
@@ -100,12 +98,9 @@ protected:
     void PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
                           std::span<const char> aux_data);
 
-    void IntermediateLocalOpWithResponse(LocalOp* op, protocol::Message* response, 
-                                         uint64_t metalog_progress, uint64_t response_id);
-    void FinishLocalOpWithResponse(LocalOp* op, protocol::Message* response,
-                                   uint64_t metalog_progress, uint64_t response_id);
-    void FinishLocalOpWithFailure(LocalOp* op, protocol::SharedLogResultType result,
-                                  uint64_t metalog_progress, uint64_t response_id);
+    void SendLocalOpWithResponse(LocalOp* op, protocol::Message* response,
+                                 uint64_t metalog_progress,
+                                 std::function<void()> on_finished=nullptr);
 
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);

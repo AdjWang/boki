@@ -165,7 +165,6 @@ bool AuxIndex::FindNext(const absl::btree_set<uint64_t>& seqnums,
     }
 }
 
-#if defined(DEBUG)
 std::string AuxIndex::Inspect() const {
     std::string output("AuxIndex::Inspact:\n");
     for (const auto& [tag, seqnums] : seqnums_by_tag_) {
@@ -194,7 +193,6 @@ std::string AuxIndex::Inspect() const {
     }
     return output;
 }
-#endif
 
 ShardedLRUCache::ShardedLRUCache(int mem_cap_mb)
     : log_header_("ShardedLogCache[]: ") {
