@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -38,6 +39,11 @@ type LogEntryWithMeta struct {
 type LogEntryIndex struct {
 	LocalId uint64
 	SeqNum  uint64
+}
+
+// DEBUG
+func (l LogEntryIndex) String() string {
+	return fmt.Sprintf("LocalId=%016X SeqNum=%016X", l.LocalId, l.SeqNum)
 }
 
 type Future[T uint64 | *LogEntryWithMeta] interface {

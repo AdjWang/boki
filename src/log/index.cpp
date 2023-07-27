@@ -641,6 +641,7 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
             start_seqnum = query.prev_found_result.seqnum + 1;
         }
         if (start_seqnum < end_seqnum) {
+            // proceed multiple steps
             std::vector<uint64_t> seqnums;
             seqnums.reserve(100);
             std::vector<uint16_t> engine_ids;
@@ -655,9 +656,22 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
                     BuildFoundResult(query, view_->id(), seqnums[i], engine_ids[i], localids[i], result_id++));
                 HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", seqnums[i]);
             }
-        } else if (query.initial && start_seqnum > end_seqnum) {
-            HLOG_F(WARNING, "ProcessReadNextU: Got view_seqnum={:016X} > end_seqnum={:016X}",
-                            start_seqnum, end_seqnum);
+        } else if (start_seqnum > end_seqnum) {
+            if (query.initial) {
+                // Got start_seqnum from aux cache, and larger than the log index.
+                // This may happen due to the aux cache is separated from the log index and can be set with
+                // any seqnum, mostly because bugs in user code. If user did this, ignore with a warning.
+                HLOG_F(WARNING, "ProcessReadNextU: Got view_seqnum={:016X} > end_seqnum={:016X}",
+                                start_seqnum, end_seqnum);
+            } else {
+                // if hopped but no new entry in, start_seqnum should be end_seqnum+1
+                DCHECK(start_seqnum == end_seqnum + 1);
+            }
+        } else /* if start_seqnum == end_seqnum */ {
+            // proceed only one step
+            pending_query_results_.push_back(
+                BuildFoundResult(query, view_->id(), end_seqnum, engine_id, localid, result_id++));
+            HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
         }
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, 0, result_id));
@@ -676,7 +690,12 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     if (sync_continue) {
         pending_syncto_queries_.push_back(BuildContinueQuery(
             query, index_found, end_seqnum, engine_id, localid, result_id));
-        HVLOG_F(1, "ProcessReadNextU: ContinueQuery localid={:016X}, id={}", localid, result_id);
+        if (index_found) {
+            HVLOG_F(1, "ProcessReadNextU: ContinueQuery last localid={:016X} seqnum={:016X} id={}",
+                localid, end_seqnum, result_id);
+        } else {
+            HVLOG(1) << "ProcessReadNextU: ContinueQuery nothing found yet";
+        }
     } else {
         pending_query_results_.push_back(BuildResolvedResult(query, result_id));
         HVLOG_F(1, "ProcessReadNextU: ResolvedResult all preceding logs are synced id={}", result_id);
