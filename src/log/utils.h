@@ -435,5 +435,18 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ThreadSafeCounter);
 };
 
+class Profiler {
+public:
+    void TimeStamp(std::string_view tip) {
+        int64_t timestamp = GetMonotonicNanoTimestamp();
+        prof_log_.append(fmt::format("ts={} tip={};", timestamp, tip));
+    }
+    std::string Output() {
+        return prof_log_;
+    }
+private:
+    std::string prof_log_;
+};
+
 }  // namespace log_utils
 }  // namespace faas

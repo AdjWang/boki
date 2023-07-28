@@ -11,6 +11,7 @@ struct IndexFoundResult {
     uint16_t engine_id;
     uint64_t seqnum;
     uint64_t localid;
+    size_t log_index;
 };
 
 struct IndexQuery {
@@ -145,15 +146,18 @@ private:
     bool ProcessLocalIdQuery(const IndexQuery& query);
     void ProcessQuery(const IndexQuery& query);
     void ProcessReadNext(const IndexQuery& query);
-    void ProcessReadNextUntil(const IndexQuery& query);
     void ProcessReadPrev(const IndexQuery& query);
     bool ProcessBlockingQuery(const IndexQuery& query);
+
+    void ProcessReadNextUntil(const IndexQuery& query);
+    void ProcessReadNextUntilInitial(const IndexQuery& query);
+    void ProcessReadNextUntilContinue(const IndexQuery& query);
 
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id, uint64_t* localid);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id, uint64_t* localid);
 
     IndexQuery BuildContinueQuery(const IndexQuery& query, bool found,
-                                  uint64_t seqnum, uint16_t engine_id,
+                                  size_t index, uint64_t seqnum, uint16_t engine_id,
                                   uint64_t localid, uint64_t next_result_id);
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
                                       uint64_t seqnum, uint16_t engine_id, uint64_t localid, uint64_t result_id=0);

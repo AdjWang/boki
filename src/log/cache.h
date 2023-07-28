@@ -124,6 +124,7 @@ class CacheGetter {
 public:
     virtual std::optional<AuxEntry> GetAuxData(uint64_t seqnum) = 0;
     virtual std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum) = 0;
+    virtual bool GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum) = 0;
     virtual std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum) = 0;
 };
 
@@ -143,6 +144,7 @@ public:
                     std::span<const char> aux_data) final;
     std::optional<AuxEntry> GetAuxData(uint64_t seqnum) final ABSL_NO_THREAD_SAFETY_ANALYSIS;
     std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum) final;
+    bool GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum) final;
     std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum) final;
 
 private:

@@ -284,6 +284,10 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t s
     // HVLOG_F(1, "ShardedLRUCache::GetAuxDataPrev tag={}, seqnum=0x{:016X}, found={}",
     //             tag, seqnum, status.IsOK());
 }
+bool ShardedLRUCache::GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum) {
+    absl::ReaderMutexLock cache_rlk_(&cache_mu_);
+    return aux_index_->FindPrev(seqnum, tag, /*out*/ result_seqnum);
+}
 
 std::optional<AuxEntry> ShardedLRUCache::GetAuxDataNext(uint64_t tag, uint64_t seqnum) {
     absl::ReaderMutexLock cache_rlk_(&cache_mu_);

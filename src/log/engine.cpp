@@ -1007,7 +1007,8 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
         .prev_found_result = {
             .view_id = 0,
             .engine_id = 0,
-            .seqnum = kInvalidLogSeqNum
+            .seqnum = kInvalidLogSeqNum,
+            .localid = kInvalidLogId,
         },
         .next_result_id = 0
     };
@@ -1036,7 +1037,8 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
         .prev_found_result = IndexFoundResult {
             .view_id = message.prev_view_id,
             .engine_id = message.prev_engine_id,
-            .seqnum = message.prev_found_seqnum
+            .seqnum = message.prev_found_seqnum,
+            .localid = protocol::kInvalidLogLocalId
         },
         .next_result_id = 0
     };
