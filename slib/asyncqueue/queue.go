@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"time"
 
@@ -205,7 +204,7 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 	doneCh := make(chan struct{})
 	errCh := make(chan error)
 	// log.Printf("[DEBUG] syncToFuture start %+v", logIndex)
-	log.Printf("%v %v pop syncTo start view=%v target=%v", time.Now().UnixMicro(), q.iShard, q.view, logIndex)
+	// log.Printf("%v %v pop syncTo start view=%v target=%v", time.Now().UnixMicro(), q.iShard, q.view, logIndex)
 	inspectors := make([]syncToInspector, 0, 20)
 	go func(ctx context.Context) {
 		var auxView *AuxView
@@ -256,11 +255,11 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 				}
 				view = decoded
 				q.view = view.(*QueueAuxData)
-				log.Printf("%v %v pop syncTo got entry with aux view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
+				// log.Printf("%v %v pop syncTo got entry with aux view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
 			} else {
-				log.Printf("%v %v pop syncTo got entry without aux current view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
+				// log.Printf("%v %v pop syncTo got entry without aux current view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
 				auxTags, nextView, applied := q.UpdateView(view, logEntry)
-				log.Printf("%v %v pop syncTo got entry without aux next view=%v applied=%v auxTags=%v", time.Now().UnixMicro(), q.iShard, nextView, applied, auxTags)
+				// log.Printf("%v %v pop syncTo got entry without aux next view=%v applied=%v auxTags=%v", time.Now().UnixMicro(), q.iShard, nextView, applied, auxTags)
 				// some times we only need to grab log entries with out view
 				// so output view can be nil
 				if applied {
@@ -286,7 +285,7 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 	}(q.ctx)
 	select {
 	case <-doneCh:
-		log.Printf("%v %v pop syncTo end view=%v summary=%v", time.Now().UnixMicro(), q.iShard, q.view, inspectors)
+		// log.Printf("%v %v pop syncTo end view=%v summary=%v", time.Now().UnixMicro(), q.iShard, q.view, inspectors)
 		return nil
 	case err := <-errCh:
 		return err
@@ -326,8 +325,8 @@ func (q *Queue) Push(payload string) error {
 	if err != nil {
 		return errors.Wrap(err, "doPush")
 	}
-	seqNum, err := future.GetResult(60 * time.Second)
-	log.Printf("%v %v push %v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, ParseSeqNum(payload), future.GetLocalId(), seqNum)
+	_, err = future.GetResult(60 * time.Second)
+	// log.Printf("%v %v push %v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, ParseSeqNum(payload), future.GetLocalId(), seqNum)
 	return err
 }
 
@@ -421,38 +420,38 @@ func IsQueueTimeoutError(err error) bool {
 }
 
 func (q *Queue) Pop() (string /* payload */, error) {
-	log.Printf("%v %v pop start", time.Now().UnixMicro(), q.iShard)
+	// log.Printf("%v %v pop start", time.Now().UnixMicro(), q.iShard)
 	if q.isEmpty() {
-		log.Printf("%v %v pop initial syncTo", time.Now().UnixMicro(), q.iShard)
+		// log.Printf("%v %v pop initial syncTo", time.Now().UnixMicro(), q.iShard)
 		if err := q.syncTo(types.LogEntryIndex{
 			LocalId: protocol.InvalidLogLocalId,
 			SeqNum:  protocol.MaxLogSeqnum,
 		}); err != nil {
-			log.Printf("%v %v pop error %v", time.Now().UnixMicro(), q.iShard, err)
+			// log.Printf("%v %v pop error %v", time.Now().UnixMicro(), q.iShard, err)
 			return "", errors.Wrap(err, "syncTo")
 		}
 		if q.isEmpty() {
-			log.Printf("%v %v pop empty", time.Now().UnixMicro(), q.iShard)
+			// log.Printf("%v %v pop empty", time.Now().UnixMicro(), q.iShard)
 			return "", kQueueEmptyError
 		}
 	}
-	log.Printf("%v %v pop AAR syncTo", time.Now().UnixMicro(), q.iShard)
+	// log.Printf("%v %v pop AAR syncTo", time.Now().UnixMicro(), q.iShard)
 	if err := q.appendPopLogAndSync(); err != nil {
-		log.Printf("%v %v pop error %v", time.Now().UnixMicro(), q.iShard, err)
+		// log.Printf("%v %v pop error %v", time.Now().UnixMicro(), q.iShard, err)
 		return "", errors.Wrap(err, "appendPopLogAndSync")
 	}
 	if q.isEmpty() {
-		log.Printf("%v %v pop empty", time.Now().UnixMicro(), q.iShard)
+		// log.Printf("%v %v pop empty", time.Now().UnixMicro(), q.iShard)
 		return "", kQueueEmptyError
 	}
 	if nextLog, err := q.findNext(q.view.Consumed, q.view.Tail); err != nil {
-		log.Printf("%v %v pop error %v", time.Now().UnixMicro(), q.iShard, err)
+		// log.Printf("%v %v pop error %v", time.Now().UnixMicro(), q.iShard, err)
 		return "", errors.Wrap(err, "findNext")
 	} else if nextLog != nil {
-		log.Printf("%v %v pop find next with view=%v got seqnum=%016X output=%v", time.Now().UnixMicro(), q.iShard, q.view, nextLog.seqNum, ParseSeqNum(nextLog.Payload))
+		// log.Printf("%v %v pop find next with view=%v got seqnum=%016X output=%v", time.Now().UnixMicro(), q.iShard, q.view, nextLog.seqNum, ParseSeqNum(nextLog.Payload))
 		return nextLog.Payload, nil
 	} else {
-		log.Printf("%v %v pop empty", time.Now().UnixMicro(), q.iShard)
+		// log.Printf("%v %v pop empty", time.Now().UnixMicro(), q.iShard)
 		return "", kQueueEmptyError
 	}
 }

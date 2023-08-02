@@ -635,26 +635,32 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         }
     }
     uint64_t tag = query.user_tag;
-    uint64_t syncto_seqnum;
+    uint64_t syncto_seqnum; // syncto not including self
     bool sync_continue;
     if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
-        // DCHECK(query.initial) << "sync to seqnum should be finished in one turn";
-        // HVLOG_F(1, "ProcessReadNextUntil: seqnum={}, logspace={}, tag={}",
-        //         bits::HexStr0x(query.query_seqnum), query.user_logspace, tag);
         if (query.query_seqnum == 0) {
             pending_query_results_.push_back(BuildResolvedResult(query, result_id));
             HVLOG(1) << "ProcessReadNextU: ResolvedResult no preceding logs need to be synced";
             return;
         }
-        syncto_seqnum = query.query_seqnum - 1;
+        syncto_seqnum = query.query_seqnum;
+        if (query.promised_auxdata.has_value() && query.promised_auxdata->metadata.seqnum >= syncto_seqnum) {
+            // when log append finished before starting to query
+            DCHECK(result_id == 0);
+            pending_query_results_.push_back(BuildAuxContinueResult(query, syncto_seqnum));
+            HVLOG(1) << "ProcessReadNextU: AuxContinueResult";
+            return;
+        }
         sync_continue = false;
+        HVLOG_F(1, "ProcessReadNextUntil: hop_times={} seqnum={:016X} logspace={} tag={} syncto_seqnum={:016X} continue={}",
+                query.hop_times, query.query_seqnum, query.user_logspace, tag, syncto_seqnum, sync_continue);
     } else {
-        // HVLOG_F(1, "ProcessReadNextUntil: hop_times={}, localid={}, logspace={}, tag={}",
-        //         query.hop_times, bits::HexStr0x(query.query_localid), query.user_logspace, tag);
         if (log_index_map_.contains(query.query_localid)) {
             // syncto future
-            syncto_seqnum = log_index_map_.at(query.query_localid).seqnum - 1;
-            if (!query.promised_auxdata.has_value() || query.promised_auxdata->metadata.seqnum > syncto_seqnum) {
+            syncto_seqnum = log_index_map_.at(query.query_localid).seqnum;
+            // Disable auxdata would not causing loop here: the IndexQuery::kReadLocalIdFlag
+            // would be clear in Engine::BuildIndexQuery, so the next query would never reach to here again.
+            if (!query.promised_auxdata.has_value() || query.promised_auxdata->metadata.seqnum >= syncto_seqnum) {
                 // when log append finished before starting to query
                 DCHECK(result_id == 0);
                 pending_query_results_.push_back(BuildAuxContinueResult(query, syncto_seqnum));
@@ -663,9 +669,13 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
             }
             sync_continue = false;
         } else {
+            // No need to check promised_auxdata here since querying a future seqnum,
+            // any auxdata(if got) must be previous than the future.
             syncto_seqnum = kMaxLogSeqNum;
             sync_continue = true;
         }
+        HVLOG_F(1, "ProcessReadNextUntil: hop_times={} localid={:016X} logspace={} tag={} syncto_seqnum={:016X} continue={}",
+                query.hop_times, query.query_localid, query.user_logspace, tag, syncto_seqnum, sync_continue);
     }
     // get index before target
     size_t end_index;
@@ -678,8 +688,12 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         end_index_found = false;
     } else {
         perspace_index = GetOrCreateIndex(query.user_logspace);
-        end_index_found = perspace_index->FindPrev(syncto_seqnum, query.user_tag,
+        uint64_t query_end_seqnum =
+            syncto_seqnum == kMaxLogSeqNum ? syncto_seqnum : syncto_seqnum - 1;
+        end_index_found = perspace_index->FindPrev(query_end_seqnum, query.user_tag,
             &end_seqnum, &end_engine_id, &end_localid, &end_index);
+        HVLOG_F(1, "ProcessReadNextUntil find end: query_end_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
+                query_end_seqnum, end_seqnum, query.user_logspace, query.user_tag);
     }
     if (end_index_found) {
         size_t start_index = 0;
@@ -692,8 +706,11 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         if (start_seqnum != 0) {
             uint16_t start_engine_id;
             uint64_t start_localid;
+            uint64_t temp = start_seqnum;   // DEBUG
             perspace_index->FindNext(start_seqnum, query.user_tag,
                 &start_seqnum, &start_engine_id, &start_localid, &start_index);
+            HVLOG_F(1, "ProcessReadNextUntil find start: query_start_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
+                    temp, start_seqnum, query.user_logspace, query.user_tag);
         }
         if (start_seqnum < end_seqnum) {
             // proceed multiple steps
@@ -711,20 +728,25 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
             // any seqnum, mostly because bugs in user code. If user did this, ignore with a warning.
             HLOG_F(WARNING, "ProcessReadNextU: Got view_seqnum={:016X} > end_seqnum={:016X}",
                             start_seqnum, end_seqnum);
+            // DEBUG
+            UNREACHABLE();
+            // pending_query_results_.push_back(BuildNotFoundResult(query, result_id));
+            // HVLOG(1) << "ProcessReadNextU: NotFoundResult Bad query";
+            // return;
         } else /* if start_seqnum == end_seqnum */ {
             // proceed only one step
             pending_query_results_.push_back(
                 BuildFoundResult(query, view_->id(), end_seqnum, end_engine_id, end_localid, result_id++));
-            // HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
+            HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
         }
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
-        // HVLOG(1) << "ProcessReadNextU: ContinueResult";
+        HVLOG(1) << "ProcessReadNextU: ContinueResult";
         return;
     } else {
         if (!sync_continue) {
             pending_query_results_.push_back(BuildNotFoundResult(query, result_id));
-            // HVLOG(1) << "ProcessReadNextU: NotFoundResult";
+            HVLOG(1) << "ProcessReadNextU: NotFoundResult";
             return;
         }
         // For sync_continue, searching MaxLogSeqNum may get empty due to the
@@ -743,7 +765,7 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         }
     } else {
         pending_query_results_.push_back(BuildResolvedResult(query, result_id));
-        // HVLOG_F(1, "ProcessReadNextU: ResolvedResult all preceding logs are synced id={}", result_id);
+        HVLOG_F(1, "ProcessReadNextU: ResolvedResult all preceding logs are synced id={}", result_id);
     }
 }
 void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
@@ -1074,7 +1096,6 @@ IndexQueryResult Index::BuildAuxContinueResult(const IndexQuery& query,
                                                uint64_t target_seqnum) {
     DCHECK(query.direction == IndexQuery::kReadNextU);
     DCHECK(query.initial);
-    DCHECK((query.flags & IndexQuery::kReadLocalIdFlag) != 0);
     IndexQueryResult result = {
         .state = IndexQueryResult::kAuxContinue,
         .metalog_progress = query.initial ? index_metalog_progress()

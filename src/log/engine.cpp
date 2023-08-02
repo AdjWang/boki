@@ -1003,11 +1003,20 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
 IndexQuery Engine::UpdateQueryWithAux(IndexQuery& query) {
     if (query.direction == IndexQuery::ReadDirection::kReadPrevAux ||
         query.direction == IndexQuery::ReadDirection::kReadNextU) {
-        std::optional<AuxEntry> aux_entry =
-            LogCacheGetAuxDataPrev(query.user_tag, query.query_seqnum);
-        query.promised_auxdata = aux_entry;
-        if (aux_entry.has_value()) {
-            query.query_seqnum = aux_entry->metadata.seqnum;
+        if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
+            DCHECK(query.initial);
+            // syncto not including target seqnum
+            std::optional<AuxEntry> aux_entry =
+                LogCacheGetAuxDataPrev(query.user_tag, query.query_seqnum - 1);
+            query.promised_auxdata = aux_entry;
+        } else {
+            std::optional<AuxEntry> aux_entry =
+                LogCacheGetAuxDataPrev(query.user_tag, query.query_seqnum);
+            query.promised_auxdata = aux_entry;
+            if (aux_entry.has_value()) {
+                // adjust query seqnum to the cached position for aux reading
+                query.query_seqnum = aux_entry->metadata.seqnum;
+            }
         }
     }
     // FUTURE: kReadNextAux
