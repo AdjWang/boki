@@ -59,12 +59,11 @@ protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
     }
 }
 
-Index::Index(const View* view, uint16_t sequencer_id, std::shared_ptr<CacheGetter> log_cache)
+Index::Index(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       indexed_metalog_position_(0),
       data_received_seqnum_position_(0),
-      indexed_seqnum_position_(0),
-      log_cache_(log_cache) {
+      indexed_seqnum_position_(0) {
     log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
 }
@@ -617,7 +616,7 @@ void Index::ProcessReadNext(const IndexQuery& query) {
         }
     } else {
         pending_query_results_.push_back(
-            BuildContinueResult(query, found, seqnum, engine_id, localid));
+            BuildViewContinueResult(query, found, seqnum, engine_id, localid));
         HVLOG(1) << "ProcessReadNext: ContinueResult";
     }
 }
@@ -630,8 +629,8 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
     if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
         uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
         if (query_view_id < view_->id()) {
-            pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, 0, result_id));
-            HVLOG(1) << "ProcessReadNextU: ContinueResult";
+            pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
+            HVLOG(1) << "ProcessReadNextU: ViewContinueResult";
             return;
         }
     }
@@ -653,7 +652,15 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         // HVLOG_F(1, "ProcessReadNextUntil: hop_times={}, localid={}, logspace={}, tag={}",
         //         query.hop_times, bits::HexStr0x(query.query_localid), query.user_logspace, tag);
         if (log_index_map_.contains(query.query_localid)) {
+            // syncto future
             syncto_seqnum = log_index_map_.at(query.query_localid).seqnum - 1;
+            if (!query.promised_auxdata.has_value() || query.promised_auxdata->metadata.seqnum > syncto_seqnum) {
+                // when log append finished before starting to query
+                DCHECK(result_id == 0);
+                pending_query_results_.push_back(BuildAuxContinueResult(query, syncto_seqnum));
+                HVLOG(1) << "ProcessReadNextU: AuxContinueResult";
+                return;
+            }
             sync_continue = false;
         } else {
             syncto_seqnum = kMaxLogSeqNum;
@@ -679,9 +686,8 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         uint64_t start_seqnum = 0;
         DCHECK(result_id == 0);
         // get view before target
-        uint64_t aux_seqnum;
-        if (log_cache_->GetAuxIndexPrev(tag, syncto_seqnum, &aux_seqnum)) {
-            start_seqnum = aux_seqnum;
+        if (query.promised_auxdata.has_value()) {
+            start_seqnum = query.promised_auxdata->metadata.seqnum;
         }
         if (start_seqnum != 0) {
             uint16_t start_engine_id;
@@ -712,7 +718,7 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
             // HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
         }
     } else if (view_->id() > 0) {
-        pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, 0, result_id));
+        pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
         // HVLOG(1) << "ProcessReadNextU: ContinueResult";
         return;
     } else {
@@ -794,7 +800,7 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     // if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
     //     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     //     if (query_view_id < view_->id()) {
-    //         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, 0, result_id));
+    //         pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
     //         HVLOG(1) << "ProcessReadNextU: ContinueResult";
     //         return;
     //     }
@@ -879,7 +885,7 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     //         // HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
     //     }
     // } else if (view_->id() > 0) {
-    //     pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, 0, result_id));
+    //     pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
     //     // HVLOG(1) << "ProcessReadNextU: ContinueResult";
     //     return;
     // } else {
@@ -920,7 +926,7 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
     }
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id < view_->id()) {
-        pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, 0));
+        pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0));
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
         return;
     }
@@ -933,7 +939,7 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
             BuildFoundResult(query, view_->id(), seqnum, engine_id, localid));
         HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum=0x{:016X}", seqnum);
     } else if (view_->id() > 0) {
-        pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0, 0));
+        pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0));
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
     } else {
         pending_query_results_.push_back(BuildNotFoundResult(query));
@@ -964,7 +970,7 @@ bool Index::ProcessBlockingQuery(const IndexQuery& query) {
         return found;
     } else {
         pending_query_results_.push_back(
-            BuildContinueResult(query, found, seqnum, engine_id, localid));
+            BuildViewContinueResult(query, found, seqnum, engine_id, localid));
         return true;
     }
 }
@@ -1064,12 +1070,34 @@ IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query, uint64_t re
     };
 }
 
-IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
-                                            uint64_t seqnum, uint16_t engine_id, uint64_t localid,
-                                            uint64_t result_id) {
+IndexQueryResult Index::BuildAuxContinueResult(const IndexQuery& query,
+                                               uint64_t target_seqnum) {
+    DCHECK(query.direction == IndexQuery::kReadNextU);
+    DCHECK(query.initial);
+    DCHECK((query.flags & IndexQuery::kReadLocalIdFlag) != 0);
+    IndexQueryResult result = {
+        .state = IndexQueryResult::kAuxContinue,
+        .metalog_progress = query.initial ? index_metalog_progress()
+                                          : query.metalog_progress,
+        .next_view_id = gsl::narrow_cast<uint16_t>(view_->id()),
+        .id = 0,
+        .original_query = query,
+        .found_result = IndexFoundResult {
+            .view_id = 0,
+            .engine_id = 0,
+            .seqnum = target_seqnum,
+            .localid = kInvalidLogId
+        },
+    };
+    return result;
+}
+
+IndexQueryResult Index::BuildViewContinueResult(const IndexQuery& query, bool found,
+                                                uint64_t seqnum, uint16_t engine_id, uint64_t localid,
+                                                uint64_t result_id) {
     DCHECK(view_->id() > 0);
     IndexQueryResult result = {
-        .state = IndexQueryResult::kContinue,
+        .state = IndexQueryResult::kViewContinue,
         .metalog_progress = query.initial ? index_metalog_progress()
                                           : query.metalog_progress,
         .next_view_id = gsl::narrow_cast<uint16_t>(view_->id() - 1),

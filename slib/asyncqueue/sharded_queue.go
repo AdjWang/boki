@@ -24,7 +24,7 @@ func NewShardedQueue(ctx context.Context, env types.Environment, name string, sh
 	}
 	queues := make([]*Queue, 0, 16)
 	for i := 0; i < shards; i++ {
-		q, err := NewQueue(ctx, env, fmt.Sprintf("%s-%d", name, i))
+		q, err := NewQueue(ctx, env, fmt.Sprintf("%s-%d", name, i), i)
 		if err != nil {
 			return nil, err
 		}

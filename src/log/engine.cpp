@@ -51,7 +51,7 @@ void Engine::OnViewCreated(const View* view) {
                     my_node_id(), view, sequencer_id));
                 if (engine_node->HasIndexFor(sequencer_id)) {
                     index_collection_.InstallLogSpace(std::make_unique<Index>(
-                        view, sequencer_id, log_cache_));
+                        view, sequencer_id));
                 }
             }
         }
@@ -647,8 +647,10 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
         const LogEntry& log_entry = cached_log_entry.value();
         DCHECK_EQ(log_entry.metadata.localid, localid);
-        std::optional<AuxEntry> cached_aux_entry = query.promised_auxdata;
-        if (!cached_aux_entry.has_value()) {
+        std::optional<AuxEntry> cached_aux_entry;
+        if (query.promised_auxdata.has_value() && seqnum == query.promised_auxdata->metadata.seqnum) {
+            cached_aux_entry = query.promised_auxdata;
+        } else {
             cached_aux_entry = LogCacheGetAuxData(seqnum);
         }
         std::span<const char> aux_data;
@@ -766,7 +768,8 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
 
 void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                         Index::QueryResultVec* more_results) {
-    DCHECK(query_result.state == IndexQueryResult::kContinue);
+    DCHECK(query_result.state == IndexQueryResult::kViewContinue ||
+           query_result.state == IndexQueryResult::kAuxContinue );
     HVLOG_F(1, "Process IndexContinueResult: next_view_id={}",
             query_result.next_view_id);
     const IndexQuery& query = query_result.original_query;
@@ -842,7 +845,8 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
                 SendReadResponseWithoutData(query, result_type, result.metalog_progress);
             }
             break;
-        case IndexQueryResult::kContinue:
+        case IndexQueryResult::kViewContinue:
+        case IndexQueryResult::kAuxContinue:
             ProcessIndexContinueResult(result, &more_results);
             break;
         case IndexQueryResult::kEOF:
@@ -954,30 +958,51 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
 }
 
 SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result) {
-    DCHECK(result.state == IndexQueryResult::kContinue);
-    IndexQuery query = result.original_query;
-    SharedLogMessage request = SharedLogMessageHelper::NewReadMessage(
-        query.DirectionToOpType());
-    request.origin_node_id = query.origin_node_id;
-    request.hop_times = query.hop_times + 1;
-    request.client_data = query.client_data;
-    // drop readed query.promised_auxdata here, use remote node's aux data
-    request.user_logspace = query.user_logspace;
-    request.query_tag = query.user_tag;
-    request.query_seqnum = query.query_seqnum;
-    request.user_metalog_progress = result.metalog_progress;
-    if ((query.flags & IndexQuery::kReadLocalIdFlag) != 0) {
-        request.flags |= protocol::kReadLocalIdFlag;
+    DCHECK(result.state == IndexQueryResult::kViewContinue ||
+           result.state == IndexQueryResult::kAuxContinue );
+    if (result.state == IndexQueryResult::kViewContinue) {
+        IndexQuery query = result.original_query;
+        SharedLogMessage request =
+            SharedLogMessageHelper::NewReadMessage(query.DirectionToOpType());
+        request.origin_node_id = query.origin_node_id;
+        request.hop_times = query.hop_times + 1;
+        request.client_data = query.client_data;
+        // drop readed query.promised_auxdata here, use remote node's aux data
+        request.user_logspace = query.user_logspace;
+        request.query_tag = query.user_tag;
+        request.query_seqnum = query.query_seqnum;
+        request.user_metalog_progress = result.metalog_progress;
+        if ((query.flags & IndexQuery::kReadLocalIdFlag) != 0) {
+            request.flags |= protocol::kReadLocalIdFlag;
+        }
+        request.prev_view_id = result.found_result.view_id;
+        request.prev_engine_id = result.found_result.engine_id;
+        request.prev_found_seqnum = result.found_result.seqnum;
+        return request;
+    } else {
+        IndexQuery query = result.original_query;
+        SharedLogMessage request =
+            SharedLogMessageHelper::NewReadMessage(query.DirectionToOpType());
+        request.origin_node_id = query.origin_node_id;
+        request.hop_times = query.hop_times;
+        request.client_data = query.client_data;
+        // drop readed query.promised_auxdata here, use remote node's aux data
+        request.user_logspace = query.user_logspace;
+        request.query_tag = query.user_tag;
+        request.query_seqnum = result.found_result.seqnum;
+        request.user_metalog_progress = result.metalog_progress;
+        DCHECK((query.flags & IndexQuery::kReadLocalIdFlag) != 0);
+        request.flags &= ~protocol::kReadLocalIdFlag;
+        request.prev_view_id = 0;
+        request.prev_engine_id = 0;
+        request.prev_found_seqnum = kInvalidLogSeqNum;
+        return request;
     }
-    request.prev_view_id = result.found_result.view_id;
-    request.prev_engine_id = result.found_result.engine_id;
-    request.prev_found_seqnum = result.found_result.seqnum;
-    return request;
 }
 
-// TODO: remove this since log_cache getter had been integrated into index
 IndexQuery Engine::UpdateQueryWithAux(IndexQuery& query) {
-    if (query.direction == IndexQuery::ReadDirection::kReadPrevAux) {
+    if (query.direction == IndexQuery::ReadDirection::kReadPrevAux ||
+        query.direction == IndexQuery::ReadDirection::kReadNextU) {
         std::optional<AuxEntry> aux_entry =
             LogCacheGetAuxDataPrev(query.user_tag, query.query_seqnum);
         query.promised_auxdata = aux_entry;
@@ -1049,12 +1074,21 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
 }
 
 IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
-    DCHECK(result.state == IndexQueryResult::kContinue);
-    IndexQuery query = result.original_query;
-    query.initial = false;
-    query.metalog_progress = result.metalog_progress;
-    query.prev_found_result = result.found_result;
-    return UpdateQueryWithAux(query);
+    DCHECK(result.state == IndexQueryResult::kViewContinue ||
+           result.state == IndexQueryResult::kAuxContinue );
+    if (result.state == IndexQueryResult::kViewContinue) {
+        IndexQuery query = result.original_query;
+        query.initial = false;
+        query.metalog_progress = result.metalog_progress;
+        query.prev_found_result = result.found_result;
+        return UpdateQueryWithAux(query);
+    } else {
+        IndexQuery query = result.original_query;
+        query.metalog_progress = result.metalog_progress;
+        query.flags &= ~IndexQuery::kReadLocalIdFlag;
+        query.query_seqnum = result.found_result.seqnum;
+        return UpdateQueryWithAux(query);
+    }
 }
 
 }  // namespace log

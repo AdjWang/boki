@@ -55,7 +55,7 @@ struct IndexQuery {
 };
 
 struct IndexQueryResult {
-    enum State { kFound, kEmpty, kContinue, kEOF };
+    enum State { kFound, kEmpty, kViewContinue, kAuxContinue, kEOF };
     State state;
     uint64_t metalog_progress;
     uint16_t next_view_id;
@@ -86,7 +86,7 @@ class Index final : public LogSpaceBase {
 public:
     static constexpr absl::Duration kBlockingQueryTimeout = absl::Seconds(1);
 
-    Index(const View* view, uint16_t sequencer_id, std::shared_ptr<CacheGetter> log_cache);
+    Index(const View* view, uint16_t sequencer_id);
     ~Index();
 
     void ProvideIndexData(const IndexDataProto& index_data);
@@ -125,7 +125,6 @@ private:
     uint32_t data_received_seqnum_position_;
     uint32_t indexed_seqnum_position_;
 
-    std::shared_ptr<CacheGetter> log_cache_;
     std::vector<IndexQuery> pending_syncto_queries_;
     // updated when receiving an index, used to serve async log query
     struct AsyncIndexData {
@@ -163,8 +162,9 @@ private:
                                       uint64_t seqnum, uint16_t engine_id, uint64_t localid, uint64_t result_id=0);
     IndexQueryResult BuildResolvedResult(const IndexQuery& query, uint64_t result_id=0);
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query, uint64_t result_id=0);
-    IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
-                                         uint64_t seqnum, uint16_t engine_id, uint64_t localid, uint64_t result_id=0);
+    IndexQueryResult BuildAuxContinueResult(const IndexQuery& query, uint64_t query_seqnum);
+    IndexQueryResult BuildViewContinueResult(const IndexQuery& query, bool found,
+                                             uint64_t seqnum, uint16_t engine_id, uint64_t localid, uint64_t result_id=0);
 
     DISALLOW_COPY_AND_ASSIGN(Index);
 };

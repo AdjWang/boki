@@ -113,22 +113,7 @@ public:
     DISALLOW_COPY_AND_ASSIGN(AuxIndex);
 };
 
-class CacheSetter {
-public:
-    virtual void PutAuxData(const AuxEntry& aux_entry) = 0;
-    virtual void PutAuxData(const AuxMetaData& aux_metadata,
-                            std::span<const uint64_t> user_tags,
-                            std::span<const char> aux_data) = 0;
-};
-class CacheGetter {
-public:
-    virtual std::optional<AuxEntry> GetAuxData(uint64_t seqnum) = 0;
-    virtual std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum) = 0;
-    virtual bool GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum) = 0;
-    virtual std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum) = 0;
-};
-
-class ShardedLRUCache final : public CacheSetter, public CacheGetter {
+class ShardedLRUCache {
 public:
     explicit ShardedLRUCache(int mem_cap_mb);
     virtual ~ShardedLRUCache();
@@ -138,14 +123,14 @@ public:
                     std::span<const char> log_data);
     std::optional<LogEntry> GetLogData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
-    void PutAuxData(const AuxEntry& aux_entry) final;
+    void PutAuxData(const AuxEntry& aux_entry);
     void PutAuxData(const AuxMetaData& aux_metadata,
                     std::span<const uint64_t> user_tags,
-                    std::span<const char> aux_data) final;
-    std::optional<AuxEntry> GetAuxData(uint64_t seqnum) final ABSL_NO_THREAD_SAFETY_ANALYSIS;
-    std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum) final;
-    bool GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum) final;
-    std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum) final;
+                    std::span<const char> aux_data);
+    std::optional<AuxEntry> GetAuxData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+    std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum);
+    bool GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum);
+    std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum);
 
 private:
     std::string log_header_;
