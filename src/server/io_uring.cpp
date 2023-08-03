@@ -318,11 +318,20 @@ void IOUring::EventLoopRunOnce(size_t* inflight_ops) {
         uint64_t op_id = DCHECK_NOTNULL(cqe)->user_data;
         DCHECK(ops_.contains(op_id));
         Op* op = ops_[op_id];
-        ops_.erase(op_id);
-        OnOpComplete(op, cqe);
-        op_pool_.Return(op);
-        io_uring_cqe_seen(&ring_, cqe);
-        count++;
+
+        int io_uring_ret = DCHECK_NOTNULL(cqe)->res;
+        if (-io_uring_ret == EINTR) {
+            // Interrupted system call, try again
+            VLOG_F(2, "Interrupted system call for op_id={}", op_id);
+            io_uring_cqe_seen(&ring_, cqe);
+            EnqueueOp(op);
+        } else {
+            ops_.erase(op_id);
+            OnOpComplete(op, cqe);
+            op_pool_.Return(op);
+            io_uring_cqe_seen(&ring_, cqe);
+            count++;
+        }
     }
     if (count > 0) {
         int64_t elasped_time = GetMonotonicNanoTimestamp() - start_timestamp;
@@ -331,12 +340,8 @@ void IOUring::EventLoopRunOnce(size_t* inflight_ops) {
         completed_ops_counter_.Tick(count);
         completed_ops_stat_.AddSample(gsl::narrow_cast<int>(count));
 
-        std::vector<Op*> temp;
-        temp.reserve(pending_ops_.size());
-        for(const auto& [op_id, op] : pending_ops_) {
-            temp.push_back(op);
-        }
-        for(Op* op : temp) {
+        auto pending_ops(std::move(pending_ops_));
+        for(const auto& [op_id, op] : pending_ops) {
             EnqueueOp(op);
         }
     }

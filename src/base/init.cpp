@@ -104,7 +104,7 @@ void InitMain(int argc, char* argv[],
     struct sigaction act;
     memset(&act, 0, sizeof(struct sigaction));
     act.sa_sigaction = BTSignalHandler;
-    act.sa_flags |= SA_SIGINFO;
+    act.sa_flags |= SA_SIGINFO | SA_RESTART;
     RAW_CHECK(sigaction(SIGABRT, &act, nullptr) == 0,
               "Failed to set SIGABRT handler");
     RAW_CHECK(sigaction(SIGTERM, &act, nullptr) == 0,

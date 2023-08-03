@@ -757,11 +757,11 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         pending_syncto_queries_.push_back(BuildContinueQuery(
             query, end_index_found, end_index, end_seqnum, end_engine_id, end_localid, result_id));
         if (end_index_found) {
-            // HVLOG_F(1, "ProcessReadNextU: ContinueQuery last localid={:016X} seqnum={:016X} id={}",
-            //     localid, end_seqnum, result_id);
+            HVLOG_F(1, "ProcessReadNextU: ContinueQuery last localid={:016X} seqnum={:016X} id={}",
+                end_localid, end_seqnum, result_id);
         } else {
             // no entry in PerSpaceLogIndex
-            // HVLOG(1) << "ProcessReadNextU: ContinueQuery nothing found yet";
+            HVLOG(1) << "ProcessReadNextU: ContinueQuery nothing found yet";
         }
     } else {
         pending_query_results_.push_back(BuildResolvedResult(query, result_id));
@@ -789,6 +789,7 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
         (size_t index, uint64_t seqnum, uint16_t engine_id, uint64_t localid) {
             if (localid == target_localid) {
                 sync_continue = false;
+                HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid=0x{:016X}", localid);
                 return true;    // stop
             }
             pending_query_results_.push_back(
@@ -797,14 +798,22 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
             end_seqnum = seqnum;
             end_engine_id = engine_id;
             end_localid = localid;
-            HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", seqnum);
+            HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: seqnum=0x{:016X}", seqnum);
             return false;   // stop
         });
     if (sync_continue) {
         pending_syncto_queries_.push_back(BuildContinueQuery(
             query, /*end_index_found*/ n > 0, end_index, end_seqnum, end_engine_id, end_localid, result_id));
+        if (n > 0) {
+            HVLOG_F(1, "ProcessReadNextU Continue: ContinueQuery last localid={:016X} seqnum={:016X} id={}",
+                end_localid, end_seqnum, result_id);
+        } else {
+            // no entry in PerSpaceLogIndex
+            HVLOG(1) << "ProcessReadNextU Continue: ContinueQuery nothing found yet";
+        }
     } else {
         pending_query_results_.push_back(BuildResolvedResult(query, result_id));
+        HVLOG_F(1, "ProcessReadNextU Continue: ResolvedResult all preceding logs are synced id={}", result_id);
     }
 }
 

@@ -527,6 +527,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 LogCachePutAuxData(aux_entry);
             }
         } else {
+            HVLOG_F(1, "Receive remote read EOF response for log (seqnum {})", bits::HexStr0x(seqnum));
             // EOF
             DCHECK(op->type == protocol::SharedLogOpType::READ_SYNCTO);
             uint64_t response_id = op->response_counter.GetBufferedRequestId(seqnum);

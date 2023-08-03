@@ -229,18 +229,18 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 					// log.Printf("[DEBUG] load last view=%+v", view)
 					q.view = view.(*QueueAuxData)
 				}
-				// if auxView != nil {
-				// 	encoded, err := q.EncodeView(auxView.view)
-				// 	if err != nil {
-				// 		errCh <- ctx.Err()
-				// 		return
-				// 	}
-				// 	// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
-				// 	if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
-				// 		errCh <- ctx.Err()
-				// 		return
-				// 	}
-				// }
+				if auxView != nil {
+					encoded, err := q.EncodeView(auxView.view)
+					if err != nil {
+						errCh <- ctx.Err()
+						return
+					}
+					// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
+					if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
+						errCh <- ctx.Err()
+						return
+					}
+				}
 				// log.Printf("[DEBUG] syncToFuture finished %+v", logIndex)
 				doneCh <- struct{}{}
 				break
@@ -269,16 +269,16 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 						auxTags: auxTags,
 						view:    nextView,
 					}
-					encoded, err := q.EncodeView(auxView.view)
-					if err != nil {
-						errCh <- ctx.Err()
-						return
-					}
-					// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
-					if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
-						errCh <- ctx.Err()
-						return
-					}
+					// encoded, err := q.EncodeView(auxView.view)
+					// if err != nil {
+					// 	errCh <- ctx.Err()
+					// 	return
+					// }
+					// // log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
+					// if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
+					// 	errCh <- ctx.Err()
+					// 	return
+					// }
 				}
 			}
 		}

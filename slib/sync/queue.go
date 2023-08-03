@@ -70,7 +70,7 @@ func decodeQueueLogEntry(logEntry *types.LogEntry) *QueueLogEntry {
 	return queueLog
 }
 
-func NewQueue(ctx context.Context, env types.Environment, name string) (*Queue, error) {
+func NewQueue(ctx context.Context, env types.Environment, name string, iShard int) (*Queue, error) {
 	q := &Queue{
 		ctx:        ctx,
 		env:        env,
