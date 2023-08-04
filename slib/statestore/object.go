@@ -27,6 +27,8 @@ func (env *envImpl) Object(name string) *ObjectRef {
 	if env.txnCtx != nil && !env.txnCtx.active {
 		panic("Cannot create object within inactive transaction!")
 	}
+	env.objsMu.Lock()
+	defer env.objsMu.Unlock()
 	if obj, exists := env.objs[name]; exists {
 		return obj
 	} else {
@@ -51,7 +53,7 @@ func (objView *ObjectView) Clone() *ObjectView {
 	}
 }
 
-func (obj *ObjectRef) ensureView() error {
+func (obj *ObjectRef) EnsureView() error {
 	if obj.view == nil {
 		tailSeqNum := protocol.MaxLogSeqnum
 		if obj.txnCtx != nil {
@@ -77,7 +79,7 @@ func (obj *ObjectRef) Get(path string) (Value, error) {
 	if obj.txnCtx != nil && !obj.txnCtx.active {
 		panic("Cannot call Get within inactive transaction!")
 	}
-	if err := obj.ensureView(); err != nil {
+	if err := obj.EnsureView(); err != nil {
 		return NullValue(), err
 	}
 	resolved := obj.view.contents.Path(path)

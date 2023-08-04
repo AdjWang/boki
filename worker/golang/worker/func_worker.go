@@ -160,8 +160,8 @@ func (w *FuncWorker) Run() {
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if queue, exists := w.outgoingLogOps[id]; exists {
-				go func() { queue.Enqueue(message) }()
-				// queue.Enqueue(message)
+				// go func() { queue.Enqueue(message) }()
+				queue.Enqueue(message)
 			} else {
 				log.Printf("[WARN] Unexpected log message id for sync ops: %d, InspectMessage=%v",
 					id, protocol.InspectMessage(message))
@@ -821,6 +821,7 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 	default:
 		response = queue.Dequeue()
 	}
+
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
 	if result == protocol.SharedLogResultType_READ_OK {
 		return buildLogEntryFromReadResponse(response), nil

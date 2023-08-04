@@ -128,6 +128,7 @@ public:
                     std::span<const uint64_t> user_tags,
                     std::span<const char> aux_data);
     std::optional<AuxEntry> GetAuxData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+    std::optional<AuxEntry> GetAuxDataWithIndex(uint64_t tag, uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
     std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum);
     bool GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum);
     std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum);

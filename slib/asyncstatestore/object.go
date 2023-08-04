@@ -1,6 +1,9 @@
 package asyncstatestore
 
 import (
+	"fmt"
+	"reflect"
+
 	"cs.utexas.edu/zjia/faas/slib/common"
 
 	"cs.utexas.edu/zjia/faas/protocol"
@@ -12,6 +15,23 @@ type ObjectView struct {
 	name       string
 	nextSeqNum uint64
 	contents   *gabs.Container
+}
+
+func (view ObjectView) Equal(other ObjectView) bool {
+	if view.name != other.name {
+		return false
+	}
+	if !reflect.DeepEqual(view.contents.Data(), other.contents.Data()) {
+		return false
+	}
+	return true
+}
+
+func (view *ObjectView) String() string {
+	if view == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("name=%v data=%+v", view.name, view.contents.Data())
 }
 
 type ObjectRef struct {

@@ -30,6 +30,27 @@ CacheDBMUpdateLogger::UpdatesVec CacheDBMUpdateLogger::PopUpdates() {
 namespace faas {
 namespace log {
 
+// cache key utilities
+namespace {
+    inline std::string MakeLogCacheKey(uint64_t seqnum) {
+        return fmt::format("0_{:016x}", seqnum);
+    }
+    inline std::string MakeAuxCacheKey(uint64_t seqnum) {
+        return fmt::format("1_{:016x}", seqnum);
+    }
+    inline std::string MakeAuxCacheKeyWithIndex(uint64_t tag, uint64_t seqnum) {
+        return fmt::format("2_{:016x}_{:016x}", tag, seqnum);
+    }
+
+    inline uint64_t GetSeqNumFromAuxCacheKeyWithIndex(const std::string& key_str) {
+        return std::strtoul(key_str.substr(19, 16).c_str(), nullptr, 16);
+    }
+
+    inline bool IsAuxCacheKeyWithIndex(std::string_view key_str) {
+        return key_str[0] == '2';
+    }
+}
+
 LRUCache::LRUCache(int mem_cap_mb) {
     int64_t cap_mem_size = -1;
     if (mem_cap_mb > 0) {
@@ -42,13 +63,13 @@ LRUCache::~LRUCache() {}
 
 void LRUCache::Put(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
                    std::span<const char> log_data) {
-    std::string key_str = fmt::format("0_{:016x}", log_metadata.seqnum);
+    std::string key_str = MakeLogCacheKey(log_metadata.seqnum);
     std::string data = log_utils::EncodeEntry<LogMetaData>(log_metadata, user_tags, log_data);
     dbm_->Set(key_str, data, /* overwrite= */ false);
 }
 
 std::optional<LogEntry> LRUCache::Get(uint64_t seqnum) {
-    std::string key_str = fmt::format("0_{:016x}", seqnum);
+    std::string key_str = MakeLogCacheKey(seqnum);
     std::string data;
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()) {
@@ -62,13 +83,13 @@ std::optional<LogEntry> LRUCache::Get(uint64_t seqnum) {
 }
 
 void LRUCache::PutAuxData(uint64_t seqnum, std::span<const char> data) {
-    std::string key_str = fmt::format("1_{:016x}", seqnum);
+    std::string key_str = MakeAuxCacheKey(seqnum);
     dbm_->Set(key_str, std::string_view(data.data(), data.size()),
               /* overwrite= */ true);
 }
 
 std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
-    std::string key_str = fmt::format("1_{:016x}", seqnum);
+    std::string key_str = MakeAuxCacheKey(seqnum);
     std::string data;
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()) {
@@ -172,7 +193,6 @@ std::string AuxIndex::Inspect() const {
         for (const uint64_t seqnum : seqnums) {
             ss << fmt::format("0x{:016X}, ", seqnum);
         }
-        ss << "\b\b  \b\b";  // remove tailing 2 characters
         if (seqnums.empty()) {
             output.append(fmt::format("tag={}, seqnums=[none]\n", tag));
         } else {
@@ -184,7 +204,6 @@ std::string AuxIndex::Inspect() const {
         for (const uint64_t tag : tags) {
             ss << fmt::format("{}, ", tag);
         }
-        ss << "\b\b  \b\b";  // remove tailing 2 characters
         if (tags.empty()) {
             output.append(fmt::format("seqnum={:016X}, tags=[none]\n", seqnum));
         } else {
@@ -211,7 +230,7 @@ ShardedLRUCache::~ShardedLRUCache() {}
 void ShardedLRUCache::PutLogData(const LogMetaData& log_metadata,
                                  std::span<const uint64_t> user_tags,
                                  std::span<const char> log_data) {
-    std::string key_str = fmt::format("0_{:016x}", log_metadata.seqnum);
+    std::string key_str = MakeLogCacheKey(log_metadata.seqnum);
     std::string data = log_utils::EncodeEntry<LogMetaData>(log_metadata, user_tags, log_data);
     {
         absl::MutexLock cache_lk_(&cache_mu_);
@@ -221,7 +240,7 @@ void ShardedLRUCache::PutLogData(const LogMetaData& log_metadata,
 }
 
 std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    std::string key_str = fmt::format("0_{:016x}", seqnum);
+    std::string key_str = MakeLogCacheKey(seqnum);
     std::string data;
     // not touching index, so no lock here
     auto status = dbm_->Get(key_str, &data);
@@ -243,20 +262,44 @@ void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
 void ShardedLRUCache::PutAuxData(const AuxMetaData& aux_metadata,
                                  std::span<const uint64_t> user_tags,
                                  std::span<const char> aux_data) {
-    std::string key_str = fmt::format("1_{:016x}", aux_metadata.seqnum);
-    {
-        absl::MutexLock cache_lk_(&cache_mu_);
-        aux_index_->Add(user_tags, aux_metadata.seqnum);
-        HVLOG_F(1, "ShardedLRUCache::PutAuxData tags={}, seqnum=0x{:016X}",
-                    user_tags, aux_metadata.seqnum);
-        std::string data = log_utils::EncodeEntry<AuxMetaData>(aux_metadata, user_tags, aux_data);
-        dbm_->Set(key_str, data, /* overwrite= */ true);
-        UpdateCacheIndex();
+    absl::MutexLock cache_lk_(&cache_mu_);
+    // update index for addings
+    aux_index_->Add(user_tags, aux_metadata.seqnum);
+    HVLOG_F(1, "ShardedLRUCache::PutAuxData tags={}, seqnum=0x{:016X}",
+                user_tags, aux_metadata.seqnum);
+    // update data
+    std::string data = log_utils::EncodeEntry<AuxMetaData>(aux_metadata, user_tags, aux_data);
+    // TODO: compatible with boki, remove in the future
+    std::string key_str = MakeAuxCacheKey(aux_metadata.seqnum);
+    dbm_->Set(key_str, data, /* overwrite= */ true);
+
+    for (const uint64_t tag : user_tags) {
+        std::string idx_key_str = MakeAuxCacheKeyWithIndex(tag, aux_metadata.seqnum);
+        dbm_->Set(idx_key_str, data, /* overwrite= */ true);
+    }
+    // update index for potential removes, add twice is ok
+    UpdateCacheIndex();
+}
+
+// TODO: compatible with boki, remove in the future
+std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    std::string key_str = MakeAuxCacheKey(seqnum);
+    std::string data;
+    // not touching index, so no lock here
+    auto status = dbm_->Get(key_str, &data);
+    HVLOG_F(1, "ShardedLRUCache::GetAuxData seqnum=0x{:016X}, found={}", seqnum, status.IsOK());
+    if (status.IsOK()) {
+        AuxEntry aux_entry;
+        log_utils::DecodeEntry<AuxMetaData, AuxEntry>(std::move(data), &aux_entry);
+        DCHECK_EQ(seqnum, aux_entry.metadata.seqnum);
+        return aux_entry;
+    } else {
+        return std::nullopt;
     }
 }
 
-std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    std::string key_str = fmt::format("1_{:016x}", seqnum);
+std::optional<AuxEntry> ShardedLRUCache::GetAuxDataWithIndex(uint64_t tag, uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    std::string key_str = MakeAuxCacheKeyWithIndex(tag, seqnum);
     std::string data;
     // not touching index, so no lock here
     auto status = dbm_->Get(key_str, &data);
@@ -274,8 +317,14 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) ABSL_NO_THR
 std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t seqnum) {
     absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     uint64_t result_seqnum;
+    // DEBUG
+    // {
+    //     bool found = aux_index_->FindPrev(seqnum, tag, &result_seqnum);
+    //     HVLOG_F(1, "ShardedLRUCache::GetAuxDataPrev tag={}, seqnum={:016X}, found={}:{:016X}\n{}",
+    //                 tag, seqnum, found, result_seqnum, aux_index_->Inspect());
+    // }
     if (aux_index_->FindPrev(seqnum, tag, &result_seqnum)) {
-        std::optional<AuxEntry> aux_entry = GetAuxData(result_seqnum);
+        std::optional<AuxEntry> aux_entry = GetAuxDataWithIndex(tag, result_seqnum);
         DCHECK(aux_entry.has_value());
         return aux_entry;
     } else {
@@ -293,7 +342,7 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataNext(uint64_t tag, uint64_t s
     absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     uint64_t result_seqnum;
     if (aux_index_->FindNext(seqnum, tag, &result_seqnum)) {
-        std::optional<AuxEntry> aux_entry = GetAuxData(result_seqnum);
+        std::optional<AuxEntry> aux_entry = GetAuxDataWithIndex(tag, result_seqnum);
         DCHECK(aux_entry.has_value());
         return aux_entry;
     } else {
@@ -313,12 +362,10 @@ void ShardedLRUCache::UpdateCacheIndex() {
     // provide updates to aux index
     for (const auto& [op_type, seqnum_key] : updates) {
         DCHECK(seqnum_key != "");
-        // only apply aux updates, heading with "1_"
-        if (seqnum_key[0] == '0') {
+        if (!IsAuxCacheKeyWithIndex(seqnum_key)) {
             continue;
         }
-        // +2 to skip "1_"
-        uint64_t seqnum = std::strtoul(seqnum_key.substr(2, 16).c_str(), nullptr, 16);
+        uint64_t seqnum = GetSeqNumFromAuxCacheKeyWithIndex(seqnum_key);
         if (op_type == tkrzw::CacheDBMUpdateLogger::OpType::OP_SET) {
             // should have been added when putting new aux entries
             DCHECK(aux_index_->Contains(seqnum))

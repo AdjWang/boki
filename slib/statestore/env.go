@@ -2,6 +2,7 @@ package statestore
 
 import (
 	"context"
+	"sync"
 
 	"cs.utexas.edu/zjia/faas/types"
 )
@@ -15,6 +16,7 @@ type Env interface {
 type envImpl struct {
 	faasCtx context.Context
 	faasEnv types.Environment
+	objsMu  sync.Mutex
 	objs    map[string]*ObjectRef
 	txnCtx  *txnContext
 }
