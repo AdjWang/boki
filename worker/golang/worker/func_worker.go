@@ -941,7 +941,7 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
-func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
+func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -949,9 +949,9 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, tar
 	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
 		panic("unreachable")
 	} else if target.SeqNum != protocol.InvalidLogSeqNum {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.SeqNum, false /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id)
 	} else {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.LocalId, true /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id)
 	}
 
 	w.mux.Lock()
@@ -1001,7 +1001,7 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, tar
 	return results
 }
 
-func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
+func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -1009,9 +1009,9 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
 		panic("unreachable")
 	} else if target.SeqNum != protocol.InvalidLogSeqNum {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.SeqNum, false /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id)
 	} else {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, target.LocalId, true /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id)
 	}
 
 	w.mux.Lock()

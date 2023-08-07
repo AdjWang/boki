@@ -63,6 +63,7 @@ protected:
         uint64_t client_data;
         uint64_t metalog_progress;
         uint64_t query_tag;
+        uint64_t query_start_seqnum;
         union {
             uint64_t localid;
             uint64_t seqnum;

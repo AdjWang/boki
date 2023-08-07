@@ -692,12 +692,12 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
             syncto_seqnum == kMaxLogSeqNum ? syncto_seqnum : syncto_seqnum - 1;
         end_index_found = perspace_index->FindPrev(query_end_seqnum, query.user_tag,
             &end_seqnum, &end_engine_id, &end_localid, &end_index);
-        HVLOG_F(1, "ProcessReadNextUntil find end: query_end_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
-                query_end_seqnum, end_seqnum, query.user_logspace, query.user_tag);
+        HVLOG_F(1, "ProcessReadNextUntil find end: found={} query_end_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
+                end_index_found, query_end_seqnum, end_seqnum, query.user_logspace, query.user_tag);
     }
     if (end_index_found) {
         size_t start_index = 0;
-        uint64_t start_seqnum = 0;
+        uint64_t start_seqnum = query.query_start_seqnum;
         DCHECK(result_id == 0);
         // get view before target
         if (query.promised_auxdata.has_value()) {
@@ -722,22 +722,16 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
                     return false;   // stop
                 });
             DCHECK(n > 0);
-        } else if (start_seqnum > end_seqnum) {
-            // Got start_seqnum from aux cache, and larger than the log index.
-            // This may happen due to the aux cache is separated from the log index and can be set with
-            // any seqnum, mostly because bugs in user code. If user did this, ignore with a warning.
-            HLOG_F(WARNING, "ProcessReadNextU: Got view_seqnum={:016X} > end_seqnum={:016X}",
-                            start_seqnum, end_seqnum);
-            // DEBUG
-            UNREACHABLE();
-            // pending_query_results_.push_back(BuildNotFoundResult(query, result_id));
-            // HVLOG(1) << "ProcessReadNextU: NotFoundResult Bad query";
-            // return;
-        } else /* if start_seqnum == end_seqnum */ {
+        } else if (start_seqnum == end_seqnum) {
             // proceed only one step
             pending_query_results_.push_back(
                 BuildFoundResult(query, view_->id(), end_seqnum, end_engine_id, end_localid, result_id++));
             HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
+        } else /* if (start_seqnum > end_seqnum) */ {
+            // this may happen when got a query_start_seqnum belongs to
+            // (last_seqnum, target_seqnum) of the tag, where end_seqnum = last_seqnum
+            HVLOG_F(1, "ProcessReadNextU: start_seqnum={:016X} out of range [{:016X}, {:016X}]",
+                        start_seqnum, query.query_start_seqnum, end_seqnum);
         }
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));

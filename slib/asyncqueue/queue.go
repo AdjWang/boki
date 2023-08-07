@@ -200,7 +200,7 @@ func (s syncToInspector) String() string {
 }
 
 func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
-	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, q.GetTag(), logIndex)
+	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, q.GetTag(), 0 /*fromSeqNum*/, logIndex)
 	doneCh := make(chan struct{})
 	errCh := make(chan error)
 	// log.Printf("[DEBUG] syncToFuture start %+v", logIndex)

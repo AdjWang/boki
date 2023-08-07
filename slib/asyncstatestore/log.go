@@ -134,110 +134,6 @@ func (l *ObjectLogEntry) withinWriteSet(objName string) bool {
 	return exists
 }
 
-func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, error) {
-	if txnCommitLog.LogType != LOG_TxnCommit {
-		panic("Wrong log type")
-	}
-	if txnCommitLog.auxData != nil {
-		if v, exists := txnCommitLog.auxData["r"]; exists {
-			return v.(bool), nil
-		}
-	} else {
-		txnCommitLog.auxData = make(map[string]interface{})
-	}
-	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
-	tags := make([]uint64, 0, len(txnCommitLog.Ops))
-	commitResult := true
-	checkedTag := make(map[uint64]bool)
-	for _, op := range txnCommitLog.Ops {
-		tag := objectLogTag(common.NameHash(op.ObjName))
-		tags = append(tags, objectLogTag(common.NameHash("commit"+op.ObjName)))
-		if _, exists := checkedTag[tag]; exists {
-			continue
-		}
-		seqNum := txnCommitLog.seqNum
-		currentSeqNum := txnCommitLog.TxnId
-
-		var err error
-		var currentLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
-		var nextLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
-		first := true
-		for seqNum > currentSeqNum {
-			if seqNum != protocol.MaxLogSeqnum {
-				seqNum -= 1
-			}
-			if first {
-				first = false
-				// 1. first read
-				currentLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
-				if err != nil {
-					return false, newRuntimeError(err.Error())
-				}
-			}
-			if currentLogEntryFuture == nil || currentLogEntryFuture.GetSeqNum() <= currentSeqNum {
-				break
-			}
-			if currentLogEntryFuture.IsResolved() {
-				// HACK: disable async read if logs are cached
-				first = true
-			} else {
-				// 3. aggressively do next read
-				seqNum = currentLogEntryFuture.GetSeqNum()
-				if seqNum > currentSeqNum {
-					if seqNum != protocol.MaxLogSeqnum {
-						seqNum -= 1
-					}
-					nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
-					if err != nil {
-						return false, newRuntimeError(err.Error())
-					}
-				}
-			}
-			// 2. sync the current read
-			logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
-			if err != nil {
-				return false, newRuntimeError(err.Error())
-			}
-			if logEntry == nil || logEntry.SeqNum < currentSeqNum {
-				// unreachable since the log's seqnum exists and had been asserted
-				// by the future object above
-				panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
-			}
-			seqNum = logEntry.SeqNum
-
-			currentLogEntryFuture = nextLogEntryFuture
-			nextLogEntryFuture = nil
-
-			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
-
-			objectLog := decodeLogEntry(logEntry)
-			if !txnCommitLog.writeSetOverlapped(objectLog) {
-				continue
-			}
-			if objectLog.LogType == LOG_NormalOp {
-				commitResult = false
-				break
-			} else if objectLog.LogType == LOG_TxnCommit {
-				if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
-					return false, err
-				} else if committed {
-					commitResult = false
-					break
-				}
-			}
-		}
-		if !commitResult {
-			break
-		}
-		checkedTag[tag] = true
-	}
-	txnCommitLog.auxData["r"] = commitResult
-	if !FLAGS_DisableAuxData {
-		env.setLogAuxData(tags, txnCommitLog.seqNum, txnCommitLog.auxData)
-	}
-	return commitResult, nil
-}
-
 // func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, error) {
 // 	if txnCommitLog.LogType != LOG_TxnCommit {
 // 		panic("Wrong log type")
@@ -250,77 +146,182 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 // 		txnCommitLog.auxData = make(map[string]interface{})
 // 	}
 // 	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
-// 	commitResult := true
 // 	tags := make([]uint64, 0, len(txnCommitLog.Ops))
+// 	commitResult := true
 // 	checkedTag := make(map[uint64]bool)
 // 	for _, op := range txnCommitLog.Ops {
 // 		tag := objectLogTag(common.NameHash(op.ObjName))
-// 		tags = append(tags, tag)
+// 		tags = append(tags, objectLogTag(common.NameHash("commit"+op.ObjName)))
 // 		if _, exists := checkedTag[tag]; exists {
 // 			continue
 // 		}
-// 		logStream := env.faasEnv.AsyncSharedLogReadNextUntil(env.faasCtx, tag, types.LogEntryIndex{
-// 			LocalId: protocol.InvalidLogLocalId,
-// 			SeqNum:  txnCommitLog.seqNum,
-// 		})
-// 		doneCh := make(chan bool)
-// 		errCh := make(chan error)
-// 		go func(ctx context.Context) {
-// 			opCommitResult := true
-// 			for {
-// 				var logEntry *types.LogEntryWithMeta
-// 				select {
-// 				case <-ctx.Done():
-// 					errCh <- ctx.Err()
-// 					return
-// 				default:
-// 					logStreamEntry := logStream.BlockingDequeue()
-// 					logEntry = logStreamEntry.LogEntry
-// 					err := logStreamEntry.Err
-// 					if err != nil {
-// 						errCh <- ctx.Err()
-// 						return
-// 					}
-// 				}
-// 				if logEntry == nil {
-// 					break
-// 				}
-// 				objectLog := decodeLogEntry(logEntry)
-// 				if !txnCommitLog.writeSetOverlapped(objectLog) {
-// 					continue
-// 				}
-// 				if objectLog.LogType == LOG_NormalOp {
-// 					opCommitResult = false
-// 					break
-// 				} else if objectLog.LogType == LOG_TxnCommit {
-// 					if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
-// 						errCh <- err
-// 						return
-// 					} else if committed {
-// 						opCommitResult = false
-// 						break
-// 					}
+// 		seqNum := txnCommitLog.seqNum
+// 		currentSeqNum := txnCommitLog.TxnId
+
+// 		var err error
+// 		var currentLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
+// 		var nextLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
+// 		first := true
+// 		for seqNum > currentSeqNum {
+// 			if seqNum != protocol.MaxLogSeqnum {
+// 				seqNum -= 1
+// 			}
+// 			if first {
+// 				first = false
+// 				// 1. first read
+// 				currentLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+// 				if err != nil {
+// 					return false, newRuntimeError(err.Error())
 // 				}
 // 			}
-// 			doneCh <- opCommitResult
-// 		}(env.faasCtx)
-// 		checkedTag[tag] = true
-
-// 		select {
-// 		case commitResult = <-doneCh:
-// 			if !commitResult {
+// 			if currentLogEntryFuture == nil || currentLogEntryFuture.GetSeqNum() <= currentSeqNum {
 // 				break
 // 			}
-// 		case err := <-errCh:
-// 			return false, err
+// 			if currentLogEntryFuture.IsResolved() {
+// 				// HACK: disable async read if logs are cached
+// 				first = true
+// 			} else {
+// 				// 3. aggressively do next read
+// 				seqNum = currentLogEntryFuture.GetSeqNum()
+// 				if seqNum > currentSeqNum {
+// 					if seqNum != protocol.MaxLogSeqnum {
+// 						seqNum -= 1
+// 					}
+// 					nextLogEntryFuture, err = env.faasEnv.AsyncSharedLogReadPrev2(env.faasCtx, tag, seqNum)
+// 					if err != nil {
+// 						return false, newRuntimeError(err.Error())
+// 					}
+// 				}
+// 			}
+// 			// 2. sync the current read
+// 			logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
+// 			if err != nil {
+// 				return false, newRuntimeError(err.Error())
+// 			}
+// 			if logEntry == nil || logEntry.SeqNum < currentSeqNum {
+// 				// unreachable since the log's seqnum exists and had been asserted
+// 				// by the future object above
+// 				panic(fmt.Errorf("unreachable: %+v, %v", logEntry, currentSeqNum))
+// 			}
+// 			seqNum = logEntry.SeqNum
+
+// 			currentLogEntryFuture = nextLogEntryFuture
+// 			nextLogEntryFuture = nil
+
+// 			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
+
+// 			objectLog := decodeLogEntry(logEntry)
+// 			if !txnCommitLog.writeSetOverlapped(objectLog) {
+// 				continue
+// 			}
+// 			if objectLog.LogType == LOG_NormalOp {
+// 				commitResult = false
+// 				break
+// 			} else if objectLog.LogType == LOG_TxnCommit {
+// 				if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+// 					return false, err
+// 				} else if committed {
+// 					commitResult = false
+// 					break
+// 				}
+// 			}
 // 		}
+// 		if !commitResult {
+// 			break
+// 		}
+// 		checkedTag[tag] = true
 // 	}
-// 	txnCommitLog.auxData["r"] = true
+// 	txnCommitLog.auxData["r"] = commitResult
 // 	if !FLAGS_DisableAuxData {
 // 		env.setLogAuxData(tags, txnCommitLog.seqNum, txnCommitLog.auxData)
 // 	}
 // 	return commitResult, nil
 // }
+
+func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, error) {
+	if txnCommitLog.LogType != LOG_TxnCommit {
+		panic("Wrong log type")
+	}
+	if txnCommitLog.auxData != nil {
+		if v, exists := txnCommitLog.auxData["r"]; exists {
+			return v.(bool), nil
+		}
+	} else {
+		txnCommitLog.auxData = make(map[string]interface{})
+	}
+	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
+	commitResult := true
+	tags := make([]uint64, 0, len(txnCommitLog.Ops))
+	checkedTag := make(map[uint64]bool)
+	for _, op := range txnCommitLog.Ops {
+		tag := objectLogTag(common.NameHash(op.ObjName))
+		if _, exists := checkedTag[tag]; exists {
+			continue
+		}
+		tags = append(tags, objectLogTag(common.NameHash("commit"+op.ObjName)))
+
+		logStream := env.faasEnv.AsyncSharedLogReadNextUntil(env.faasCtx, tag, txnCommitLog.TxnId, types.LogEntryIndex{
+			LocalId: protocol.InvalidLogLocalId,
+			SeqNum:  txnCommitLog.seqNum,
+		})
+		doneCh := make(chan bool)
+		errCh := make(chan error)
+		go func(ctx context.Context) {
+			opCommitResult := true
+			for {
+				var logEntry *types.LogEntryWithMeta
+				select {
+				case <-ctx.Done():
+					errCh <- ctx.Err()
+					return
+				default:
+					logStreamEntry := logStream.BlockingDequeue()
+					logEntry = logStreamEntry.LogEntry
+					err := logStreamEntry.Err
+					if err != nil {
+						errCh <- ctx.Err()
+						return
+					}
+				}
+				if logEntry == nil {
+					break
+				}
+				objectLog := decodeLogEntry(logEntry)
+				if !txnCommitLog.writeSetOverlapped(objectLog) {
+					continue
+				}
+				if objectLog.LogType == LOG_NormalOp {
+					opCommitResult = false
+					break
+				} else if objectLog.LogType == LOG_TxnCommit {
+					if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+						errCh <- err
+						return
+					} else if committed {
+						opCommitResult = false
+						break
+					}
+				}
+			}
+			doneCh <- opCommitResult
+		}(env.faasCtx)
+		checkedTag[tag] = true
+
+		select {
+		case commitResult = <-doneCh:
+			if !commitResult {
+				break
+			}
+		case err := <-errCh:
+			return false, err
+		}
+	}
+	txnCommitLog.auxData["r"] = commitResult
+	if !FLAGS_DisableAuxData {
+		env.setLogAuxData(tags, txnCommitLog.seqNum, txnCommitLog.auxData)
+	}
+	return commitResult, nil
+}
 
 func (l *ObjectLogEntry) listCachedObjectView() string {
 	if l.auxData == nil {
@@ -438,7 +439,7 @@ func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
 	// defer log.Println("")
 	// defer log.Printf("[DEBUG] %v syncToFuture end", prefix)
 
-	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, types.LogEntryIndex{
+	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, 0 /*fromSeqNum*/, types.LogEntryIndex{
 		LocalId: protocol.InvalidLogLocalId,
 		SeqNum:  tailSeqNum,
 	})

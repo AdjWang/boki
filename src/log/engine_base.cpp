@@ -214,15 +214,17 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->metalog_progress = ctx.metalog_progress;
     op->type = MessageHelper::GetSharedLogOpType(message);
     op->seqnum = kInvalidLogSeqNum;
+    op->query_start_seqnum = 0;
     op->query_tag = kInvalidLogTag;
     op->user_tags.clear();
     op->data.Reset();
     op->flags = 0;
     op->response_counter.Reset();
 
-    DCHECK(!(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type) &&
-             message.log_seqnum == protocol::kInvalidLogSeqNum &&
-             message.log_localid == protocol::kInvalidLogLocalId));
+    // TODO: modified format
+    // DCHECK(!(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type) &&
+    //          message.log_seqnum == protocol::kInvalidLogSeqNum &&
+    //          message.log_localid == protocol::kInvalidLogLocalId));
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -237,20 +239,31 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::ASYNC_READ_PREV_AUX:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
         op->query_tag = message.log_tag;
-        op->seqnum = message.log_seqnum;
+        DCHECK(message.log_query_seqnum != protocol::kInvalidLogSeqNum);
+        op->seqnum = message.log_query_seqnum;
         break;
     case SharedLogOpType::READ_SYNCTO:
         op->query_tag = message.log_tag;
-        if (message.log_seqnum != protocol::kInvalidLogSeqNum) {
-            op->seqnum = message.log_seqnum;
+        if (message.log_query_start_seqnum != protocol::kInvalidLogSeqNum) {
+            op->query_start_seqnum = message.log_query_start_seqnum;
+        }
+        if ((message.flags & protocol::kLogQueryLocalIdFlag) == 0) {
+            DCHECK(message.log_query_seqnum != protocol::kInvalidLogSeqNum);
+            op->seqnum = message.log_query_seqnum;
+            DCHECK(op->query_start_seqnum <= op->seqnum)
+                << fmt::format("start_seqnum={:016X} target_seqnum={:016X}",
+                               op->query_start_seqnum, op->seqnum);
         } else {
             op->flags |= LocalOp::kReadLocalIdFlag;
-            op->localid = message.log_localid;
+            DCHECK(message.log_query_localid != protocol::kInvalidLogLocalId);
+            op->localid = message.log_query_localid;
         }
         break;
     case SharedLogOpType::ASYNC_READ_LOCALID:
+        DCHECK((message.flags & protocol::kLogQueryLocalIdFlag) != 0);
         op->flags |= LocalOp::kReadLocalIdFlag;
-        op->localid = message.log_localid;
+        DCHECK(message.log_query_localid != protocol::kInvalidLogLocalId);
+        op->localid = message.log_query_localid;
         break;
     case SharedLogOpType::TRIM:
         op->seqnum = message.log_seqnum;

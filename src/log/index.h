@@ -44,6 +44,7 @@ struct IndexQuery {
         uint64_t query_localid;
         uint64_t query_seqnum;
     };
+    uint64_t query_start_seqnum;    // Used by kReadNextU
     uint64_t metalog_progress;
     uint16_t flags;
 

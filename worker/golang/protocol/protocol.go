@@ -112,6 +112,7 @@ const (
 	FLAG_kLogResponseContinueFlag  uint32 = (1 << 3)
 	FLAG_kLogResponseEOFDataFlag   uint32 = (1 << 4)
 	FLAG_kLogResponseEOFFlag       uint32 = (1 << 5)
+	FLAG_kLogQueryLocalIdFlag      uint32 = (1 << 6)
 )
 
 // DEBUG
@@ -131,6 +132,11 @@ func GetResponseIdFromMessage(buffer []byte) uint64 {
 
 func GetFlagsFromMessage(buffer []byte) uint32 {
 	return binary.LittleEndian.Uint32(buffer[28:32])
+}
+func SetFlagsToMessage(buffer []byte, flag uint32) {
+	flags := binary.LittleEndian.Uint32(buffer[28:32])
+	flags |= flag
+	binary.LittleEndian.PutUint32(buffer[28:32], flags)
 }
 
 func GetSharedLogOpFlagsFromMessage(buffer []byte) uint32 {
@@ -167,6 +173,7 @@ func GetSharedLogResultTypeFromMessage(buffer []byte) uint16 {
 	return binary.LittleEndian.Uint16(buffer[34:36])
 }
 
+// only from response
 func GetLogLocalIdFromMessage(buffer []byte) uint64 {
 	return binary.LittleEndian.Uint64(buffer[56:64])
 }
@@ -230,8 +237,8 @@ func IsSharedLogAsyncResult(buffer []byte) bool {
 func NewEmptyMessage() []byte {
 	buffer := make([]byte, MessageFullByteSize)
 	// set default localid and seqnum
-	binary.LittleEndian.PutUint64(buffer[8:16], InvalidLogSeqNum)
-	binary.LittleEndian.PutUint64(buffer[56:64], InvalidLogLocalId)
+	binary.LittleEndian.PutUint64(buffer[8:16], InvalidLogSeqNum)  // target
+	binary.LittleEndian.PutUint64(buffer[56:64], InvalidLogSeqNum) // from
 	return buffer
 }
 
@@ -292,7 +299,7 @@ func NewAsyncSharedLogAppendMessage(currentCallId uint64, myClientId uint16, num
 	return buffer
 }
 
-func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint64, logIndex uint64, useLocalId bool, clientData uint64) []byte {
+func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint64, fromSeqNum uint64, logIndex uint64, useLocalId bool, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -300,10 +307,10 @@ func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	binary.LittleEndian.PutUint64(buffer[56:64], fromSeqNum)
+	binary.LittleEndian.PutUint64(buffer[8:16], logIndex)
 	if useLocalId {
-		binary.LittleEndian.PutUint64(buffer[56:64], logIndex)
-	} else {
-		binary.LittleEndian.PutUint64(buffer[8:16], logIndex)
+		SetFlagsToMessage(buffer, FLAG_kLogQueryLocalIdFlag)
 	}
 	return buffer
 }
@@ -361,7 +368,8 @@ func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, 
 	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_ASYNC_READ_LOCALID)
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
-	binary.LittleEndian.PutUint64(buffer[56:64], localId)
+	binary.LittleEndian.PutUint64(buffer[8:16], localId)
+	SetFlagsToMessage(buffer, FLAG_kLogQueryLocalIdFlag)
 	return buffer
 }
 

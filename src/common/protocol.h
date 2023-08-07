@@ -179,6 +179,7 @@ constexpr uint32_t kLogResponseEOFFlag            = (1 << 5);
         target &= ~(uint32_t)((1 << 3) | (1 << 4) | (1 << 5)); \
         target |= flag;                                        \
     } while (0)
+constexpr uint32_t kLogQueryLocalIdFlag           = (1 << 6);
 
 struct Message {
     struct {
@@ -194,7 +195,11 @@ struct Message {
             int32_t dispatch_delay;   // [8:12]  Used in FUNC_CALL_COMPLETE, FUNC_CALL_FAILED
             int32_t processing_time;  // [12:16] Used in FUNC_CALL_COMPLETE
         } __attribute__ ((packed));
-        uint64_t log_seqnum;          // [8:16]  Used in SHARED_LOG_OP
+        union {
+            uint64_t log_seqnum;          // [8:16]  Used in SHARED_LOG_OP
+            uint64_t log_query_localid;
+            uint64_t log_query_seqnum;
+        };
     };
     int64_t send_timestamp;       // [16:24]
     int32_t payload_size;         // [24:28] Used in HANDSHAKE_RESPONSE, INVOKE_FUNC,
@@ -219,7 +224,10 @@ struct Message {
     };
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
-    uint64_t log_localid;         // [56:64] Used in SHARED_LOG_OP carry localid simultaneous with log_seqnum
+    union {
+        uint64_t log_localid;         // [56:64] Used in SHARED_LOG_OP carry localid simultaneous with log_seqnum
+        uint64_t log_query_start_seqnum;
+    };
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
         __attribute__ ((aligned (__FAAS_CACHE_LINE_SIZE)));
@@ -276,8 +284,9 @@ struct GatewayMessage {
 
 static_assert(sizeof(GatewayMessage) == 16, "Unexpected GatewayMessage size");
 
-constexpr uint16_t kReadInitialFlag  = (1 << 0);
-constexpr uint16_t kReadLocalIdFlag  = (1 << 1);    // Indicates the data of [40:48]
+constexpr uint16_t kReadInitialFlag    = (1 << 0);
+constexpr uint16_t kReadLocalIdFlag    = (1 << 1);    // Indicates the data of [40:48]
+constexpr uint16_t kReadPrevFoundFlag  = (1 << 2);
 
 struct SharedLogMessage {
     uint16_t op_type;         // [0:2]
@@ -329,7 +338,10 @@ struct SharedLogMessage {
     };
     uint64_t client_data;       // [48:56]
 
-    uint64_t prev_found_seqnum; // [56:64]
+    union {
+        uint64_t query_start_seqnum; // [56:64]
+        uint64_t prev_found_seqnum;  // [56:64]
+    };
 
 } __attribute__ (( packed, aligned(__FAAS_CACHE_LINE_SIZE) ));
 
