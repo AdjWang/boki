@@ -272,7 +272,7 @@ void ShardedLRUCache::PutAuxData(const AuxMetaData& aux_metadata,
     // TODO: compatible with boki, remove in the future
     std::string key_str = MakeAuxCacheKey(aux_metadata.seqnum);
     dbm_->Set(key_str, data, /* overwrite= */ true);
-
+    // TODO: reduce data duplications
     for (const uint64_t tag : user_tags) {
         std::string idx_key_str = MakeAuxCacheKeyWithIndex(tag, aux_metadata.seqnum);
         dbm_->Set(idx_key_str, data, /* overwrite= */ true);

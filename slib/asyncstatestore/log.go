@@ -414,10 +414,10 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) []strin
 // }
 
 func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
-	var refView *ObjectView
-	if err := obj.syncToBackward(tailSeqNum, &refView); err != nil {
-		panic(err)
-	}
+	// var refView *ObjectView
+	// if err := obj.syncToBackward(tailSeqNum, &refView); err != nil {
+	// 	panic(err)
+	// }
 
 	tag := objectLogTag(obj.nameHash)
 	env := obj.env
@@ -433,10 +433,10 @@ func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
 	}
 
 	// DEBUG
-	prefix := fmt.Sprintf("%v:%v", obj.name, tag)
-	log.Printf("[DEBUG] %v syncToFuture start until seqnum=%016X", prefix, tailSeqNum)
-	defer log.Println("")
-	defer log.Printf("[DEBUG] %v syncToFuture end", prefix)
+	// prefix := fmt.Sprintf("%v:%v", obj.name, tag)
+	// log.Printf("[DEBUG] %v syncToFuture start until seqnum=%016X", prefix, tailSeqNum)
+	// defer log.Println("")
+	// defer log.Printf("[DEBUG] %v syncToFuture end", prefix)
 
 	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, types.LogEntryIndex{
 		LocalId: protocol.InvalidLogLocalId,
@@ -477,13 +477,13 @@ func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
 				break
 			}
 			objectLog := decodeLogEntry(logEntry)
-			log.Printf("[DEBUG] %v syncToFuture got seqnum=%016X opSet=%v", prefix, logEntry.SeqNum, objectLog.listCachedObjectView())
+			// log.Printf("[DEBUG] %v syncToFuture got seqnum=%016X opSet=%v", prefix, logEntry.SeqNum, objectLog.listCachedObjectView())
 			if !objectLog.withinWriteSet(obj.name) {
 				continue
 			}
 			if cachedView := objectLog.loadCachedObjectView(obj.name); cachedView != nil {
 				view = cachedView
-				log.Printf("[DEBUG] %v syncToFuture Load cached view: seqNum=%016X obj=%s", prefix, objectLog.seqNum, obj.name)
+				// log.Printf("[DEBUG] %v syncToFuture Load cached view: seqNum=%016X obj=%s", prefix, objectLog.seqNum, obj.name)
 				continue
 			}
 			if objectLog.LogType == LOG_TxnCommit {
@@ -495,7 +495,7 @@ func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
 				}
 			}
 			// apply view
-			log.Printf("[DEBUG] %v syncToFuture apply seqnum=%016X", prefix, objectLog.seqNum)
+			// log.Printf("[DEBUG] %v syncToFuture apply seqnum=%016X", prefix, objectLog.seqNum)
 			if objectLog.seqNum < view.nextSeqNum {
 				log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
 			}
@@ -505,16 +505,17 @@ func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
 					view.applyWriteOp(op)
 				}
 			}
-			opSet := objectLog.cacheObjectView(env, view)
-			log.Printf("[DEBUG] %v syncToFuture cache view for seqnum=%016X obj=%s opSet=%v", prefix, objectLog.seqNum, view.name, opSet)
+			objectLog.cacheObjectView(env, view)
+			// opSet := objectLog.cacheObjectView(env, view)
+			// log.Printf("[DEBUG] %v syncToFuture cache view for seqnum=%016X obj=%s opSet=%v", prefix, objectLog.seqNum, view.name, opSet)
 		}
 	}(obj.env.faasCtx)
 	select {
 	case <-doneCh:
-		log.Printf("[DEBUG] %v syncToFuture final view=%+v", prefix, view.contents.Data())
-		if !refView.Equal(*view) {
-			log.Fatalf("different view: ref=%v current=%v", refView, view)
-		}
+		// log.Printf("[DEBUG] %v syncToFuture final view=%+v", prefix, view.contents.Data())
+		// if !refView.Equal(*view) {
+		// 	log.Fatalf("different view: ref=%v current=%v", refView, view)
+		// }
 		obj.view = view
 		return nil
 	case err := <-errCh:
@@ -583,9 +584,9 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64, tempView **ObjectView) e
 	}
 
 	// DEBUG
-	prefix := fmt.Sprintf("%v:%v", obj.name, tag)
-	log.Printf("[DEBUG] %v syncToBackward start until seqnum=%016X", prefix, tailSeqNum)
-	defer log.Printf("[DEBUG] %v syncToBackward end", prefix)
+	// prefix := fmt.Sprintf("%v:%v", obj.name, tag)
+	// log.Printf("[DEBUG] %v syncToBackward start until seqnum=%016X", prefix, tailSeqNum)
+	// defer log.Printf("[DEBUG] %v syncToBackward end", prefix)
 
 	var err error
 	var currentLogEntryFuture types.Future[*types.LogEntryWithMeta] = nil
@@ -637,7 +638,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64, tempView **ObjectView) e
 		currentLogEntryFuture = nextLogEntryFuture
 		nextLogEntryFuture = nil
 
-		log.Printf("[DEBUG] %v syncToBackward got seqnum=%016X", prefix, logEntry.SeqNum)
+		// log.Printf("[DEBUG] %v syncToBackward got seqnum=%016X", prefix, logEntry.SeqNum)
 		objectLog := decodeLogEntry(logEntry)
 		if !objectLog.withinWriteSet(obj.name) {
 			continue
@@ -653,7 +654,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64, tempView **ObjectView) e
 		if view == nil {
 			objectLogs = append(objectLogs, objectLog)
 		} else {
-			log.Printf("[DEBUG] %v syncToBackward Load cached view: seqNum=%016X obj=%s", prefix, seqNum, obj.name)
+			// log.Printf("[DEBUG] %v syncToBackward Load cached view: seqNum=%016X obj=%s", prefix, seqNum, obj.name)
 			break
 		}
 	}
@@ -671,7 +672,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64, tempView **ObjectView) e
 	}
 	for i := len(objectLogs) - 1; i >= 0; i-- {
 		objectLog := objectLogs[i]
-		log.Printf("[DEBUG] %v syncToBackward apply seqnum=%016X", prefix, objectLog.seqNum)
+		// log.Printf("[DEBUG] %v syncToBackward apply seqnum=%016X", prefix, objectLog.seqNum)
 		if objectLog.seqNum < view.nextSeqNum {
 			log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
 		}
@@ -682,12 +683,14 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64, tempView **ObjectView) e
 			}
 		}
 		// DEBUG
-		// objectLog.cacheObjectView(env, view)
+		objectLog.cacheObjectView(env, view)
 	}
 	// DEBUG
-	// obj.view = view
-	log.Printf("[DEBUG] %v syncToBackward final view=%+v", prefix, view.contents.Data())
-	*tempView = view
+	obj.view = view
+	// log.Printf("[DEBUG] %v syncToBackward final view=%+v", prefix, view.contents.Data())
+	if tempView != nil {
+		*tempView = view
+	}
 	return nil
 }
 
