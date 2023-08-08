@@ -139,12 +139,14 @@ func (w *FuncWorker) Run() {
 
 	go w.servingLoop()
 	for {
+		// tracer := utils.NewTracer()
 		message := protocol.NewEmptyMessage()
 		if n, err := w.inputPipe.Read(message); err != nil {
 			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
 		} else if n != protocol.MessageFullByteSize {
 			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
+		// tracer.Trace().Tip("[PROF] Worker read message")
 		if protocol.IsDispatchFuncCallMessage(message) {
 			w.newFuncCallChan <- message
 		} else if protocol.IsFuncCallCompleteMessage(message) || protocol.IsFuncCallFailedMessage(message) {
@@ -157,6 +159,8 @@ func (w *FuncWorker) Run() {
 			w.mux.Unlock()
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
+			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+			log.Printf("[PROF] dispatchDelay: %v us", dispatchDelay)
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if queue, exists := w.outgoingLogOps[id]; exists {
@@ -167,6 +171,8 @@ func (w *FuncWorker) Run() {
 					id, protocol.InspectMessage(message))
 			}
 			w.mux.Unlock()
+			// tracer.Trace().Tip("[PROF] Worker enqueue message")
+			// log.Println(tracer)
 		} else {
 			log.Fatal("[FATAL] Unknown message type")
 		}

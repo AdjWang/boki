@@ -15,7 +15,7 @@ if __name__ == '__main__':
 
     statistics = []
     for log in logs:
-        found = re.findall(r'ReadMessage pop: (\d+) us', log)
+        found = re.findall(r'dispatchDelay: (\d+) us', log)
         if len(found) > 0:
             assert len(found) == 1
             statistics.append(int(found[0]))

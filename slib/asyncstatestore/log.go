@@ -254,6 +254,9 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 	commitResult := true
 	tags := make([]uint64, 0, len(txnCommitLog.Ops))
 	checkedTag := make(map[uint64]bool)
+	doneCh := make(chan bool)
+	errCh := make(chan error)
+	ctx, cancel := context.WithCancel(context.Background())
 	for _, op := range txnCommitLog.Ops {
 		tag := objectLogTag(common.NameHash(op.ObjName))
 		if _, exists := checkedTag[tag]; exists {
@@ -265,8 +268,6 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 			LocalId: txnCommitLog.localId,
 			SeqNum:  txnCommitLog.seqNum,
 		})
-		doneCh := make(chan bool)
-		errCh := make(chan error)
 		go func(ctx context.Context) {
 			opCommitResult := true
 			for {
@@ -305,18 +306,27 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 				}
 			}
 			doneCh <- opCommitResult
-		}(env.faasCtx)
+		}(ctx)
 		checkedTag[tag] = true
-
+	}
+	for range checkedTag {
 		select {
-		case commitResult = <-doneCh:
-			if !commitResult {
+		case committed := <-doneCh:
+			if !committed {
+				commitResult = false
 				break
 			}
 		case err := <-errCh:
+			cancel()
+			close(doneCh)
+			close(errCh)
 			return false, err
 		}
 	}
+	cancel()
+	close(doneCh)
+	close(errCh)
+
 	txnCommitLog.auxData["r"] = commitResult
 	if !FLAGS_DisableAuxData {
 		env.setLogAuxData(tags, txnCommitLog.seqNum, txnCommitLog.auxData)

@@ -256,144 +256,145 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) {
 func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
 	return obj.syncToBackward(tailSeqNum)
 }
-func (obj *ObjectRef) syncToFuture(tailSeqNum uint64) error {
-	// return obj.syncToBackward(tailSeqNum)
-	tag := objectLogTag(obj.nameHash)
-	env := obj.env
-	currentSeqNum := uint64(0)
-	if obj.view != nil {
-		currentSeqNum = obj.view.nextSeqNum
-		if tailSeqNum < currentSeqNum {
-			log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", currentSeqNum, tailSeqNum)
-		}
-	}
-	if tailSeqNum == currentSeqNum {
-		return nil
-	}
-	logStream := env.faasEnv.SharedLogReadNextUntil(obj.env.faasCtx, tag, types.LogEntryIndex{
-		LocalId: protocol.InvalidLogLocalId,
-		SeqNum:  tailSeqNum,
-	})
-	objectLogs := make([]*ObjectLogEntry, 0, 4)
-	doneCh := make(chan struct{})
-	errCh := make(chan error)
-	go func(ctx context.Context) {
-		// var view interface{}
-		for {
-			var logEntry *types.LogEntry
-			select {
-			case <-ctx.Done():
-				errCh <- ctx.Err()
-				return
-			default:
-				logStreamEntry := logStream.BlockingDequeue()
-				logEntry = logStreamEntry.LogEntry
-				err := logStreamEntry.Err
-				if err != nil {
-					errCh <- ctx.Err()
-					return
-				}
-			}
-			if logEntry == nil {
-				// if view != nil {
-				// 	obj.view = view.(*ObjectView)
-				// }
-				// if auxView != nil {
-				// 	encoded, err := q.EncodeView(auxView.view)
-				// 	if err != nil {
-				// 		errCh <- ctx.Err()
-				// 		return
-				// 	}
-				// 	// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
-				// 	if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
-				// 		errCh <- ctx.Err()
-				// 		return
-				// 	}
-				// }
-				doneCh <- struct{}{}
-				break
-			}
-			// log.Printf("[DEBUG] got seqnum=%016X", logEntry.SeqNum)
-			objectLog := decodeLogEntry(logEntry)
-			if !objectLog.withinWriteSet(obj.name) {
-				continue
-			}
-			if objectLog.LogType == LOG_TxnCommit {
-				if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
-					errCh <- ctx.Err()
-					return
-				} else if !committed {
-					continue
-				}
-			}
-			objectLogs = append(objectLogs, objectLog)
-			// if len(logEntry.AuxData) != 0 {
-			// 	decoded, err := q.DecodeView(logEntry.AuxData)
-			// 	if err != nil {
-			// 		errCh <- ctx.Err()
-			// 		return
-			// 	}
-			// 	view = decoded
-			// 	q.view = view.(*QueueAuxData)
-			// 	// log.Printf("%v %v pop syncTo got entry with aux view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
-			// } else {
-			// 	// log.Printf("%v %v pop syncTo got entry without aux current view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
-			// 	auxTags, nextView, applied := q.UpdateView(view, logEntry)
-			// 	// log.Printf("%v %v pop syncTo got entry without aux next view=%v applied=%v auxTags=%v", time.Now().UnixMicro(), q.iShard, nextView, applied, auxTags)
-			// 	// some times we only need to grab log entries with out view
-			// 	// so output view can be nil
-			// 	if applied {
-			// 		view = nextView
-			// 		auxView = &AuxView{
-			// 			seqNum:  logEntry.SeqNum,
-			// 			auxTags: auxTags,
-			// 			view:    nextView,
-			// 		}
-			// 		encoded, err := q.EncodeView(auxView.view)
-			// 		if err != nil {
-			// 			errCh <- ctx.Err()
-			// 			return
-			// 		}
-			// 		// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
-			// 		if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
-			// 			errCh <- ctx.Err()
-			// 			return
-			// 		}
-			// 	}
-			// }
-		}
-	}(obj.env.faasCtx)
-	select {
-	case <-doneCh:
-		// apply logs
-		var view *ObjectView
-		if obj.view != nil {
-			view = obj.view
-		} else {
-			view = &ObjectView{
-				name:       obj.name,
-				nextSeqNum: 0,
-				contents:   gabs.New(),
-			}
-		}
-		for _, objectLog := range objectLogs {
-			if objectLog.seqNum < view.nextSeqNum {
-				log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
-			}
-			view.nextSeqNum = objectLog.seqNum + 1
-			for _, op := range objectLog.Ops {
-				if op.ObjName == obj.name {
-					view.applyWriteOp(op)
-				}
-			}
-			objectLog.cacheObjectView(env, view)
-		}
-		obj.view = view
-		return nil
-	case err := <-errCh:
-		return err
-	}
-}
+
+// func (obj *ObjectRef) syncToFuture(tailSeqNum uint64) error {
+// 	// return obj.syncToBackward(tailSeqNum)
+// 	tag := objectLogTag(obj.nameHash)
+// 	env := obj.env
+// 	currentSeqNum := uint64(0)
+// 	if obj.view != nil {
+// 		currentSeqNum = obj.view.nextSeqNum
+// 		if tailSeqNum < currentSeqNum {
+// 			log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", currentSeqNum, tailSeqNum)
+// 		}
+// 	}
+// 	if tailSeqNum == currentSeqNum {
+// 		return nil
+// 	}
+// 	logStream := env.faasEnv.SharedLogReadNextUntil(obj.env.faasCtx, tag, types.LogEntryIndex{
+// 		LocalId: protocol.InvalidLogLocalId,
+// 		SeqNum:  tailSeqNum,
+// 	})
+// 	objectLogs := make([]*ObjectLogEntry, 0, 4)
+// 	doneCh := make(chan struct{})
+// 	errCh := make(chan error)
+// 	go func(ctx context.Context) {
+// 		// var view interface{}
+// 		for {
+// 			var logEntry *types.LogEntry
+// 			select {
+// 			case <-ctx.Done():
+// 				errCh <- ctx.Err()
+// 				return
+// 			default:
+// 				logStreamEntry := logStream.BlockingDequeue()
+// 				logEntry = logStreamEntry.LogEntry
+// 				err := logStreamEntry.Err
+// 				if err != nil {
+// 					errCh <- ctx.Err()
+// 					return
+// 				}
+// 			}
+// 			if logEntry == nil {
+// 				// if view != nil {
+// 				// 	obj.view = view.(*ObjectView)
+// 				// }
+// 				// if auxView != nil {
+// 				// 	encoded, err := q.EncodeView(auxView.view)
+// 				// 	if err != nil {
+// 				// 		errCh <- ctx.Err()
+// 				// 		return
+// 				// 	}
+// 				// 	// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
+// 				// 	if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
+// 				// 		errCh <- ctx.Err()
+// 				// 		return
+// 				// 	}
+// 				// }
+// 				doneCh <- struct{}{}
+// 				break
+// 			}
+// 			// log.Printf("[DEBUG] got seqnum=%016X", logEntry.SeqNum)
+// 			objectLog := decodeLogEntry(logEntry)
+// 			if !objectLog.withinWriteSet(obj.name) {
+// 				continue
+// 			}
+// 			if objectLog.LogType == LOG_TxnCommit {
+// 				if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+// 					errCh <- ctx.Err()
+// 					return
+// 				} else if !committed {
+// 					continue
+// 				}
+// 			}
+// 			objectLogs = append(objectLogs, objectLog)
+// 			// if len(logEntry.AuxData) != 0 {
+// 			// 	decoded, err := q.DecodeView(logEntry.AuxData)
+// 			// 	if err != nil {
+// 			// 		errCh <- ctx.Err()
+// 			// 		return
+// 			// 	}
+// 			// 	view = decoded
+// 			// 	q.view = view.(*QueueAuxData)
+// 			// 	// log.Printf("%v %v pop syncTo got entry with aux view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
+// 			// } else {
+// 			// 	// log.Printf("%v %v pop syncTo got entry without aux current view=%v localid=%016X seqnum=%016X", time.Now().UnixMicro(), q.iShard, view, logEntry.LocalId, logEntry.SeqNum)
+// 			// 	auxTags, nextView, applied := q.UpdateView(view, logEntry)
+// 			// 	// log.Printf("%v %v pop syncTo got entry without aux next view=%v applied=%v auxTags=%v", time.Now().UnixMicro(), q.iShard, nextView, applied, auxTags)
+// 			// 	// some times we only need to grab log entries with out view
+// 			// 	// so output view can be nil
+// 			// 	if applied {
+// 			// 		view = nextView
+// 			// 		auxView = &AuxView{
+// 			// 			seqNum:  logEntry.SeqNum,
+// 			// 			auxTags: auxTags,
+// 			// 			view:    nextView,
+// 			// 		}
+// 			// 		encoded, err := q.EncodeView(auxView.view)
+// 			// 		if err != nil {
+// 			// 			errCh <- ctx.Err()
+// 			// 			return
+// 			// 		}
+// 			// 		// log.Printf("[DEBUG] AuxData seqnum=%016X, view=%v", logEntry.SeqNum, string(encoded))
+// 			// 		if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, auxView.auxTags, auxView.seqNum, encoded); err != nil {
+// 			// 			errCh <- ctx.Err()
+// 			// 			return
+// 			// 		}
+// 			// 	}
+// 			// }
+// 		}
+// 	}(obj.env.faasCtx)
+// 	select {
+// 	case <-doneCh:
+// 		// apply logs
+// 		var view *ObjectView
+// 		if obj.view != nil {
+// 			view = obj.view
+// 		} else {
+// 			view = &ObjectView{
+// 				name:       obj.name,
+// 				nextSeqNum: 0,
+// 				contents:   gabs.New(),
+// 			}
+// 		}
+// 		for _, objectLog := range objectLogs {
+// 			if objectLog.seqNum < view.nextSeqNum {
+// 				log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
+// 			}
+// 			view.nextSeqNum = objectLog.seqNum + 1
+// 			for _, op := range objectLog.Ops {
+// 				if op.ObjName == obj.name {
+// 					view.applyWriteOp(op)
+// 				}
+// 			}
+// 			objectLog.cacheObjectView(env, view)
+// 		}
+// 		obj.view = view
+// 		return nil
+// 	case err := <-errCh:
+// 		return err
+// 	}
+// }
 
 func (obj *ObjectRef) syncToForward(tailSeqNum uint64) error {
 	tag := objectLogTag(obj.nameHash)
