@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"cs.utexas.edu/zjia/faas/protocol"
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -47,6 +46,7 @@ const (
 )
 
 type ObjectLogEntry struct {
+	localId  uint64
 	seqNum   uint64
 	auxData  map[string]interface{}
 	writeSet map[string]bool
@@ -109,6 +109,7 @@ func decodeLogEntry(logEntry *types.LogEntryWithMeta) *ObjectLogEntry {
 		}
 		objectLog.auxData = contents
 	}
+	objectLog.localId = logEntry.LocalId
 	objectLog.seqNum = logEntry.SeqNum
 	objectLog.fillWriteSet()
 	return objectLog
@@ -261,7 +262,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 		tags = append(tags, objectLogTag(common.NameHash("commit"+op.ObjName)))
 
 		logStream := env.faasEnv.AsyncSharedLogReadNextUntil(env.faasCtx, tag, txnCommitLog.TxnId, types.LogEntryIndex{
-			LocalId: protocol.InvalidLogLocalId,
+			LocalId: txnCommitLog.localId,
 			SeqNum:  txnCommitLog.seqNum,
 		})
 		doneCh := make(chan bool)
@@ -414,35 +415,34 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) []strin
 // 	return obj.syncToBackward(tailSeqNum)
 // }
 
-func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
+func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 	// var refView *ObjectView
 	// if err := obj.syncToBackward(tailSeqNum, &refView); err != nil {
 	// 	panic(err)
 	// }
 
-	tag := objectLogTag(obj.nameHash)
-	env := obj.env
-	currentSeqNum := uint64(0)
-	if obj.view != nil {
-		currentSeqNum = obj.view.nextSeqNum
-		if tailSeqNum < currentSeqNum {
-			log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", currentSeqNum, tailSeqNum)
+	if logIndex.SeqNum != protocol.InvalidLogSeqNum {
+		tailSeqNum := logIndex.SeqNum
+		currentSeqNum := uint64(0)
+		if obj.view != nil {
+			currentSeqNum = obj.view.nextSeqNum
+			if tailSeqNum < currentSeqNum {
+				log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", currentSeqNum, tailSeqNum)
+			}
+		}
+		if tailSeqNum == currentSeqNum {
+			return nil
 		}
 	}
-	if tailSeqNum == currentSeqNum {
-		return nil
-	}
+
+	tag := objectLogTag(obj.nameHash)
+	env := obj.env
 
 	// DEBUG
 	// prefix := fmt.Sprintf("%v:%v", obj.name, tag)
 	// log.Printf("[DEBUG] %v syncToFuture start until seqnum=%016X", prefix, tailSeqNum)
 	// defer log.Println("")
 	// defer log.Printf("[DEBUG] %v syncToFuture end", prefix)
-
-	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, 0 /*fromSeqNum*/, types.LogEntryIndex{
-		LocalId: protocol.InvalidLogLocalId,
-		SeqNum:  tailSeqNum,
-	})
 
 	var view *ObjectView
 	if obj.view != nil {
@@ -454,6 +454,7 @@ func (obj *ObjectRef) syncTo(tailSeqNum uint64) error {
 			contents:   gabs.New(),
 		}
 	}
+	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, 0 /*fromSeqNum*/, logIndex)
 	doneCh := make(chan struct{})
 	errCh := make(chan error)
 	go func(ctx context.Context) {
@@ -625,7 +626,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64, tempView **ObjectView) e
 			}
 		}
 		// 2. sync the current read
-		logEntry, err := currentLogEntryFuture.GetResult(60 * time.Second)
+		logEntry, err := currentLogEntryFuture.GetResult(common.AsyncWaitTimeout)
 		if err != nil {
 			return newRuntimeError(err.Error())
 		}
@@ -695,7 +696,7 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64, tempView **ObjectView) e
 	return nil
 }
 
-func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (uint64 /* seqNum */, error) {
+func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (types.Future[uint64], error) {
 	if len(ops) == 0 {
 		panic("Empty Ops for NormalOp log")
 	}
@@ -712,22 +713,17 @@ func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (uint64 /* seqNum */, er
 	}
 	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
 	if err != nil {
-		return 0, newRuntimeError(err.Error())
+		return nil, newRuntimeError(err.Error())
 	} else {
-		// TODO: optimize
-		seqNum, err := future.GetResult(60 * time.Second)
-		if err != nil {
-			return 0, newRuntimeError(err.Error())
-		}
-		return seqNum, nil
+		return future, nil
 	}
 }
 
-func (obj *ObjectRef) appendWriteLog(op *WriteOp) (uint64 /* seqNum */, error) {
+func (obj *ObjectRef) appendWriteLog(op *WriteOp) (types.Future[uint64], error) {
 	return obj.appendNormalOpLog([]*WriteOp{op})
 }
 
-func (env *envImpl) appendTxnBeginLog() (uint64 /* seqNum */, error) {
+func (env *envImpl) appendTxnBeginLog() (types.Future[uint64], error) {
 	logEntry := &ObjectLogEntry{LogType: LOG_TxnBegin}
 	encoded, err := json.Marshal(logEntry)
 	if err != nil {
@@ -738,15 +734,10 @@ func (env *envImpl) appendTxnBeginLog() (uint64 /* seqNum */, error) {
 	}
 	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
 	if err != nil {
-		return 0, newRuntimeError(err.Error())
+		return nil, newRuntimeError(err.Error())
 	} else {
 		// log.Printf("[DEBUG] Append TxnBegin log: seqNum=%#016x", seqNum)
-		// TODO: optimize
-		seqNum, err := future.GetResult(60 * time.Second)
-		if err != nil {
-			return 0, newRuntimeError(err.Error())
-		}
-		return seqNum, nil
+		return future, nil
 	}
 }
 

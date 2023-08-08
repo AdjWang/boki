@@ -1,6 +1,7 @@
 package asyncstatestore
 
 import (
+	"cs.utexas.edu/zjia/faas/slib/common"
 	gabs "github.com/Jeffail/gabs/v2"
 )
 
@@ -103,11 +104,15 @@ func (obj *ObjectRef) MultiCommit() error {
 		// Nothing to commit
 		return nil
 	}
-	seqNum, err := obj.appendNormalOpLog(ctx.ops)
+	future, err := obj.appendNormalOpLog(ctx.ops)
 	if err != nil {
 		return err
 	}
-	if err := obj.syncTo(seqNum); err != nil {
+	if err := obj.syncTo(future.GetLogEntryIndex()); err != nil {
+		return err
+	}
+	seqNum, err := future.GetResult(common.AsyncWaitTimeout)
+	if err != nil {
 		return err
 	}
 	obj.view.nextSeqNum = seqNum + 1
@@ -142,11 +147,15 @@ func (obj *ObjectRef) doWriteOp(op *WriteOp) *WriteResult {
 		result.successWithValue(NullValue())
 		return result
 	}
-	seqNum, err := obj.appendWriteLog(op)
+	future, err := obj.appendWriteLog(op)
 	if err != nil {
 		return result.failure(err)
 	}
-	if err := obj.syncTo(seqNum); err != nil {
+	if err := obj.syncTo(future.GetLogEntryIndex()); err != nil {
+		return result.failure(err)
+	}
+	seqNum, err := future.GetResult(common.AsyncWaitTimeout)
+	if err != nil {
 		return result.failure(err)
 	}
 	obj.view.nextSeqNum = seqNum + 1

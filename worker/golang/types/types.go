@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"cs.utexas.edu/zjia/faas/protocol"
 )
 
 type LogEntry struct {
@@ -41,6 +43,8 @@ type LogEntryIndex struct {
 	SeqNum  uint64
 }
 
+var InvalidLogEntryIndex = LogEntryIndex{LocalId: protocol.InvalidLogLocalId, SeqNum: protocol.InvalidLogSeqNum}
+
 // DEBUG
 func (l LogEntryIndex) String() string {
 	return fmt.Sprintf("LocalId=%016X SeqNum=%016X", l.LocalId, l.SeqNum)
@@ -49,6 +53,7 @@ func (l LogEntryIndex) String() string {
 type Future[T uint64 | *LogEntryWithMeta] interface {
 	GetLocalId() uint64
 	GetSeqNum() uint64
+	GetLogEntryIndex() LogEntryIndex
 	GetResult(timeout time.Duration) (T, error)
 	Await(timeout time.Duration) error
 	IsResolved() bool

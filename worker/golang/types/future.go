@@ -110,6 +110,13 @@ func (f *futureImpl[T]) GetSeqNum() uint64 {
 	return f.SeqNum
 }
 
+func (f *futureImpl[T]) GetLogEntryIndex() LogEntryIndex {
+	return LogEntryIndex{
+		LocalId: f.LocalId,
+		SeqNum:  f.SeqNum,
+	}
+}
+
 func (f *futureImpl[T]) IsResolved() bool {
 	return f.resolved.Load()
 }

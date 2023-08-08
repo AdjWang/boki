@@ -3,8 +3,8 @@ package asyncstatestore
 import (
 	"context"
 	"encoding/json"
-	"time"
 
+	"cs.utexas.edu/zjia/faas/protocol"
 	"cs.utexas.edu/zjia/faas/slib/common"
 
 	"cs.utexas.edu/zjia/faas/types"
@@ -13,17 +13,18 @@ import (
 type txnContext struct {
 	active   bool
 	readonly bool
-	id       uint64 // TxnId is the seqnum of TxnBegin log
+	// id       uint64 // TxnId is the seqnum of TxnBegin log
+	idFuture types.Future[uint64]
 	ops      []*WriteOp
 }
 
 func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 	env := CreateEnv(ctx, faasEnv).(*envImpl)
-	if seqNum, err := env.appendTxnBeginLog(); err == nil {
+	if future, err := env.appendTxnBeginLog(); err == nil {
 		env.txnCtx = &txnContext{
 			active:   true,
 			readonly: false,
-			id:       seqNum,
+			idFuture: future,
 			ops:      make([]*WriteOp, 0, 4),
 		}
 		return env, nil
@@ -42,8 +43,9 @@ func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, 
 		env.txnCtx = &txnContext{
 			active:   true,
 			readonly: true,
-			id:       seqNum,
-			ops:      nil,
+			idFuture: types.NewDummyFuture(tail.LocalId, tail.SeqNum,
+				func() (uint64, error) { return seqNum, nil }),
+			ops: nil,
 		}
 		return env, nil
 	} else {
@@ -61,9 +63,13 @@ func (env *envImpl) TxnAbort() error {
 	ctx := env.txnCtx
 	env.txnCtx = nil
 	ctx.active = false
+	txnId, err := ctx.idFuture.GetResult(common.AsyncWaitTimeout)
+	if err != nil {
+		return newRuntimeError(err.Error())
+	}
 	logEntry := ObjectLogEntry{
 		LogType: LOG_TxnAbort,
-		TxnId:   ctx.id,
+		TxnId:   txnId,
 	}
 	encoded, err := json.Marshal(logEntry)
 	if err != nil {
@@ -71,9 +77,9 @@ func (env *envImpl) TxnAbort() error {
 	}
 	tags := []types.Tag{
 		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
-		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(ctx.id)},
+		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(txnId)},
 	}
-	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id}); err == nil {
+	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.idFuture.GetLocalId()}); err == nil {
 		// ensure durability
 		return future.Await(common.AsyncWaitTimeout)
 	} else {
@@ -92,10 +98,14 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 	env.txnCtx = nil
 	ctx.active = false
 	// Append commit log
+	txnId, err := ctx.idFuture.GetResult(common.AsyncWaitTimeout)
+	if err != nil {
+		return false, newRuntimeError(err.Error())
+	}
 	objectLog := &ObjectLogEntry{
 		LogType: LOG_TxnCommit,
 		Ops:     ctx.ops,
-		TxnId:   ctx.id,
+		TxnId:   txnId,
 	}
 	encoded, err := json.Marshal(objectLog)
 	if err != nil {
@@ -103,7 +113,7 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 	}
 	tags := []types.Tag{
 		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
-		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(ctx.id)},
+		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(txnId)},
 	}
 	for _, op := range ctx.ops {
 		tags = append(tags, types.Tag{
@@ -111,18 +121,14 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 			StreamId:   objectLogTag(common.NameHash(op.ObjName)),
 		})
 	}
-	future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.id})
-	if err != nil {
-		return false, newRuntimeError(err.Error())
-	}
-	// TODO: optimize
-	seqNum, err := future.GetResult(60 * time.Second)
+	future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.idFuture.GetLocalId()})
 	if err != nil {
 		return false, newRuntimeError(err.Error())
 	}
 	// log.Printf("[DEBUG] Append TxnCommit log: seqNum=%#016x, op_size=%d", seqNum, len(ctx.ops))
 	objectLog.fillWriteSet()
-	objectLog.seqNum = seqNum
+	objectLog.localId = future.GetLocalId()
+	objectLog.seqNum = protocol.InvalidLogSeqNum
 	// Check for status
 	if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
 		return false, err

@@ -753,7 +753,7 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 				}
 			}
 			// seqNum is invalid when appending
-			return types.NewFuture(localId, protocol.MaxLogSeqnum, resolve), nil
+			return types.NewFuture(localId, protocol.InvalidLogSeqNum, resolve), nil
 		} else if result == protocol.SharedLogResultType_ASYNC_DISCARDED {
 			log.Printf("[ERROR] Async Append first discarded, will retry")
 			if remainingRetries > 0 {

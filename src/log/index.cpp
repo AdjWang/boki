@@ -772,7 +772,10 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
     uint64_t result_id = query.next_result_id;
     uint64_t tag = query.user_tag;
     uint64_t target_localid = query.query_localid;
-    bool sync_continue = true;
+    // When target_localid had been propagated, GetRange may also return none
+    // if the target_localid is added to a different tag, but the view is new
+    // and able to return EOF.
+    bool sync_continue = !log_index_map_.contains(target_localid);
     size_t end_index = std::numeric_limits<size_t>::max();
     uint64_t end_seqnum;
     uint16_t end_engine_id;
@@ -792,7 +795,7 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
             end_seqnum = seqnum;
             end_engine_id = engine_id;
             end_localid = localid;
-            HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: seqnum=0x{:016X}", seqnum);
+            HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid={:016X} seqnum=0x{:016X}", localid, seqnum);
             return false;   // stop
         });
     if (sync_continue) {

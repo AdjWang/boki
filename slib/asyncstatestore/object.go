@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
+	"cs.utexas.edu/zjia/faas/types"
 
 	"cs.utexas.edu/zjia/faas/protocol"
 
@@ -73,11 +74,14 @@ func (objView *ObjectView) Clone() *ObjectView {
 
 func (obj *ObjectRef) ensureView() error {
 	if obj.view == nil {
-		tailSeqNum := protocol.MaxLogSeqnum
-		if obj.txnCtx != nil {
-			tailSeqNum = obj.txnCtx.id
+		tailLogIndex := types.LogEntryIndex{
+			LocalId: protocol.InvalidLogLocalId,
+			SeqNum:  protocol.MaxLogSeqnum,
 		}
-		return obj.syncTo(tailSeqNum)
+		if obj.txnCtx != nil {
+			tailLogIndex = obj.txnCtx.idFuture.GetLogEntryIndex()
+		}
+		return obj.syncTo(tailLogIndex)
 	} else {
 		return nil
 	}
@@ -87,7 +91,10 @@ func (obj *ObjectRef) Sync() error {
 	if obj.txnCtx != nil {
 		panic("Cannot Sync() objects within a transaction context")
 	}
-	return obj.syncTo(protocol.MaxLogSeqnum)
+	return obj.syncTo(types.LogEntryIndex{
+		LocalId: protocol.InvalidLogLocalId,
+		SeqNum:  protocol.MaxLogSeqnum,
+	})
 }
 
 func (obj *ObjectRef) Get(path string) (Value, error) {
