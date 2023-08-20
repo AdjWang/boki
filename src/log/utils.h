@@ -95,16 +95,49 @@ void PopulateMetaDataToMessage(const log::LogMetaData& metadata,
 void PopulateMetaDataToMessage(const log::LogEntryProto& log_entry,
                                protocol::SharedLogMessage* message);
 
-// encode/decode LogMetaData+LogEntry or AuxMetaData+AuxEntry
-template <typename TEntryMeta>
-inline std::string EncodeEntry(const TEntryMeta& log_metadata,
+// encode/decode AuxMetaData+AuxEntry
+inline std::string EncodeAuxEntry(const log::AuxEntry& aux_entry) {
+    uint64_t seqnum = aux_entry.metadata.seqnum;
+    std::string aux_data = aux_entry.data;
+
+    size_t total_size = aux_data.size() + sizeof(log::AuxMetaData);
+    std::string encoded;
+    encoded.resize(total_size);
+    char* ptr = encoded.data();
+
+    DCHECK_GT(aux_data.size(), 0U);
+    memcpy(ptr, aux_data.data(), aux_data.size());
+    ptr += aux_data.size();
+
+    log::AuxMetaData aux_metadata = {
+        .seqnum = seqnum,
+        .data_size = aux_data.size(),
+    };
+    memcpy(ptr, &aux_metadata, sizeof(log::AuxMetaData));
+    return encoded;
+}
+inline void DecodeAuxEntry(std::string encoded, log::AuxEntry* aux_entry) {
+    DCHECK_GT(encoded.size(), sizeof(log::AuxMetaData));
+    log::AuxMetaData& metadata = aux_entry->metadata;
+    memcpy(&metadata,
+           encoded.data() + encoded.size() - sizeof(log::AuxMetaData),
+           sizeof(log::AuxMetaData));
+    size_t total_size = metadata.data_size
+                      + sizeof(log::AuxMetaData);
+    DCHECK_EQ(total_size, encoded.size());
+    encoded.resize(metadata.data_size);
+    aux_entry->data = std::move(encoded);
+}
+
+// encode/decode LogMetaData+LogEntry 
+inline std::string EncodeEntry(const log::LogMetaData& log_metadata,
                                std::span<const uint64_t> user_tags,
                                std::span<const char> log_data) {
     DCHECK_EQ(log_metadata.num_tags, user_tags.size());
     DCHECK_EQ(log_metadata.data_size, log_data.size());
     size_t total_size = log_data.size()
                       + user_tags.size() * sizeof(uint64_t)
-                      + sizeof(TEntryMeta);
+                      + sizeof(log::LogMetaData);
     std::string encoded;
     encoded.resize(total_size);
     char* ptr = encoded.data();
@@ -115,19 +148,18 @@ inline std::string EncodeEntry(const TEntryMeta& log_metadata,
         memcpy(ptr, user_tags.data(), user_tags.size() * sizeof(uint64_t));
         ptr += user_tags.size() * sizeof(uint64_t);
     }
-    memcpy(ptr, &log_metadata, sizeof(TEntryMeta));
+    memcpy(ptr, &log_metadata, sizeof(log::LogMetaData));
     return encoded;
 }
-template <typename TEntryMeta, typename TEntry>
-inline void DecodeEntry(std::string encoded, TEntry* log_entry) {
-    DCHECK_GT(encoded.size(), sizeof(TEntryMeta));
-    TEntryMeta& metadata = log_entry->metadata;
+inline void DecodeEntry(std::string encoded, log::LogEntry* log_entry) {
+    DCHECK_GT(encoded.size(), sizeof(log::LogMetaData));
+    log::LogMetaData& metadata = log_entry->metadata;
     memcpy(&metadata,
-           encoded.data() + encoded.size() - sizeof(TEntryMeta),
-           sizeof(TEntryMeta));
+           encoded.data() + encoded.size() - sizeof(log::LogMetaData),
+           sizeof(log::LogMetaData));
     size_t total_size = metadata.data_size
                       + metadata.num_tags * sizeof(uint64_t)
-                      + sizeof(TEntryMeta);
+                      + sizeof(log::LogMetaData);
     DCHECK_EQ(total_size, encoded.size());
     if (metadata.num_tags > 0) {
         std::span<const uint64_t> user_tags(

@@ -7,6 +7,9 @@ __BEGIN_THIRD_PARTY_HEADERS
 #include <tkrzw_dbm_cache.h>
 #include <tkrzw_dbm.h>
 #include <tkrzw_thread_util.h>
+
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
 __END_THIRD_PARTY_HEADERS
 
 namespace tkrzw {
@@ -89,9 +92,11 @@ public:
     explicit AuxIndex() {}
     virtual ~AuxIndex() {}
 
-    void Add(std::span<const uint64_t> user_tags, uint64_t seqnum);
+    void Add(uint64_t seqnum, uint64_t tag);
     void Remove(uint64_t seqnum);
-    bool Contains(uint64_t seqnum);
+    bool Contains(uint64_t seqnum) const;
+    bool Contains(uint64_t seqnum, uint64_t tag) const;
+    UserTagVec GetTags(uint64_t seqnum) const;
 
     bool FindPrev(uint64_t query_seqnum, uint64_t aux_tag,
                   uint64_t* seqnum) const;
@@ -124,13 +129,10 @@ public:
     std::optional<LogEntry> GetLogData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
     void PutAuxData(const AuxEntry& aux_entry);
-    void PutAuxData(const AuxMetaData& aux_metadata,
-                    std::span<const uint64_t> user_tags,
+    void PutAuxData(uint64_t seqnum, uint64_t tag,
                     std::span<const char> aux_data);
-    std::optional<AuxEntry> GetAuxData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
-    std::optional<AuxEntry> GetAuxDataWithIndex(uint64_t tag, uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+    std::optional<AuxEntry> GetAuxData(uint64_t seqnum);
     std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum);
-    bool GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum);
     std::optional<AuxEntry> GetAuxDataNext(uint64_t tag, uint64_t seqnum);
 
 private:
@@ -143,8 +145,9 @@ private:
 
     std::unique_ptr<tkrzw::CacheDBMUpdateLogger> ulogger_;
 
+    std::optional<AuxEntry> GetAuxDataChecked(uint64_t seqnum, uint64_t tag) const ABSL_SHARED_LOCKS_REQUIRED(cache_mu_);
     // this function had been placed into the guarded scope.
-    void UpdateCacheIndex() EXCLUSIVE_LOCKS_REQUIRED(cache_mu_);
+    void UpdateCacheIndex() ABSL_EXCLUSIVE_LOCKS_REQUIRED(cache_mu_);
 
     DISALLOW_COPY_AND_ASSIGN(ShardedLRUCache);
 };

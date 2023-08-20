@@ -53,16 +53,11 @@ struct LogEntry {
 
 struct AuxMetaData {
     uint64_t seqnum;
-    size_t num_tags;
     size_t data_size;
 };
 
 struct AuxEntry {
     AuxMetaData metadata;
-    // NOT the copy of the user_tags in LogEntry
-    // tags in LogEntry are used to indicate which object had operated
-    // tags here are used to indicate which object had cached
-    UserTagVec  user_tags;
     std::string data;
 };
 

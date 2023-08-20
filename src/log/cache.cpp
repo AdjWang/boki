@@ -38,12 +38,12 @@ namespace {
     inline std::string MakeAuxCacheKey(uint64_t seqnum) {
         return fmt::format("1_{:016x}", seqnum);
     }
-    inline std::string MakeAuxCacheKeyWithIndex(uint64_t tag, uint64_t seqnum) {
-        return fmt::format("2_{:016x}_{:016x}", tag, seqnum);
+    inline std::string MakeAuxCacheKeyWithIndex(uint64_t seqnum, uint64_t tag) {
+        return fmt::format("2_{:016x}_{:016x}", seqnum, tag);
     }
 
     inline uint64_t GetSeqNumFromAuxCacheKeyWithIndex(const std::string& key_str) {
-        return std::strtoul(key_str.substr(19, 16).c_str(), nullptr, 16);
+        return std::strtoul(key_str.substr(2, 16).c_str(), nullptr, 16);
     }
 
     inline bool IsAuxCacheKeyWithIndex(std::string_view key_str) {
@@ -64,7 +64,7 @@ LRUCache::~LRUCache() {}
 void LRUCache::Put(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
                    std::span<const char> log_data) {
     std::string key_str = MakeLogCacheKey(log_metadata.seqnum);
-    std::string data = log_utils::EncodeEntry<LogMetaData>(log_metadata, user_tags, log_data);
+    std::string data = log_utils::EncodeEntry(log_metadata, user_tags, log_data);
     dbm_->Set(key_str, data, /* overwrite= */ false);
 }
 
@@ -74,7 +74,7 @@ std::optional<LogEntry> LRUCache::Get(uint64_t seqnum) {
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()) {
         LogEntry log_entry;
-        log_utils::DecodeEntry<LogMetaData, LogEntry>(std::move(data), &log_entry);
+        log_utils::DecodeEntry(std::move(data), &log_entry);
         DCHECK_EQ(seqnum, log_entry.metadata.seqnum);
         return log_entry;
     } else {
@@ -99,33 +99,44 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
     }
 }
 
-void AuxIndex::Add(std::span<const uint64_t> user_tags, uint64_t seqnum) {
-    if (!user_tags.empty()) {
-        for (const uint64_t user_tag : user_tags) {
-            seqnums_by_tag_[user_tag].emplace(seqnum);
-            tags_by_seqnum_[seqnum].emplace(user_tag);
-        }
-    } else {
-        // use default empty tag
-        seqnums_by_tag_[kEmptyLogTag].emplace(seqnum);
-        tags_by_seqnum_[seqnum].emplace(kEmptyLogTag);
-    }
+void AuxIndex::Add(uint64_t seqnum, uint64_t tag) {
+    seqnums_by_tag_[tag].emplace(seqnum);
+    tags_by_seqnum_[seqnum].emplace(tag);
 }
 
 void AuxIndex::Remove(uint64_t seqnum) {
-    if (!tags_by_seqnum_.contains(seqnum)) {
-        return;
-    }
-    const absl::btree_set<uint64_t>& user_tags = tags_by_seqnum_.at(seqnum);
-    for (uint64_t user_tag : user_tags) {
-        DCHECK(seqnums_by_tag_.contains(user_tag));
-        seqnums_by_tag_.erase(user_tag);
-    }
-    tags_by_seqnum_.erase(seqnum);
+    // TODO: handle key with tag
+    NOT_IMPLEMENTED();
+
+    // if (!tags_by_seqnum_.contains(seqnum)) {
+    //     return;
+    // }
+    // const absl::btree_set<uint64_t>& user_tags = tags_by_seqnum_.at(seqnum);
+    // for (uint64_t user_tag : user_tags) {
+    //     DCHECK(seqnums_by_tag_.contains(user_tag));
+    //     seqnums_by_tag_.erase(user_tag);
+    // }
+    // tags_by_seqnum_.erase(seqnum);
 }
 
-bool AuxIndex::Contains(uint64_t seqnum) {
+bool AuxIndex::Contains(uint64_t seqnum) const {
     return tags_by_seqnum_.contains(seqnum);
+}
+
+bool AuxIndex::Contains(uint64_t seqnum, uint64_t tag) const {
+    if (tags_by_seqnum_.contains(seqnum)) {
+        return tags_by_seqnum_.at(seqnum).contains(tag);
+    } else {
+        return false;
+    }
+}
+
+UserTagVec AuxIndex::GetTags(uint64_t seqnum) const {
+    if (!tags_by_seqnum_.contains(seqnum)) {
+        return UserTagVec();
+    }
+    auto tag_set = tags_by_seqnum_.at(seqnum);
+    return UserTagVec(tag_set.begin(), tag_set.end());
 }
 
 bool AuxIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
@@ -231,7 +242,7 @@ void ShardedLRUCache::PutLogData(const LogMetaData& log_metadata,
                                  std::span<const uint64_t> user_tags,
                                  std::span<const char> log_data) {
     std::string key_str = MakeLogCacheKey(log_metadata.seqnum);
-    std::string data = log_utils::EncodeEntry<LogMetaData>(log_metadata, user_tags, log_data);
+    std::string data = log_utils::EncodeEntry(log_metadata, user_tags, log_data);
     {
         absl::MutexLock cache_lk_(&cache_mu_);
         dbm_->Set(key_str, data, /* overwrite= */ false);
@@ -246,7 +257,7 @@ std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) ABSL_NO_THR
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()) {
         LogEntry log_entry;
-        log_utils::DecodeEntry<LogMetaData, LogEntry>(std::move(data), &log_entry);
+        log_utils::DecodeEntry(std::move(data), &log_entry);
         DCHECK_EQ(seqnum, log_entry.metadata.seqnum);
         return log_entry;
     } else {
@@ -255,63 +266,95 @@ std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) ABSL_NO_THR
 }
 
 void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
-    PutAuxData(aux_entry.metadata, VECTOR_AS_SPAN(aux_entry.user_tags),
-               STRING_AS_SPAN(aux_entry.data));
+    uint64_t seqnum = aux_entry.metadata.seqnum;
+    json aux_entry_data = json::parse(aux_entry.data);
+    {
+        absl::MutexLock cache_lk_(&cache_mu_);
+        for (auto& [tag_str, aux_data] : aux_entry_data.items()) {
+            DCHECK(!aux_data.empty());
+            uint64_t tag = std::strtoul(tag_str.c_str(), nullptr, 16);
+            // update index for addings
+            aux_index_->Add(seqnum, tag);
+            HVLOG_F(1, "ShardedLRUCache::PutAuxData from entry seqnum={:016X} tag={}",
+                        seqnum, tag);
+            // update data
+            std::string idx_key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
+            dbm_->Set(idx_key_str, aux_data.dump(), /* overwrite= */ true);
+        }
+        // update index for potential removes, add twice is ok
+        UpdateCacheIndex();
+    }
 }
 
-void ShardedLRUCache::PutAuxData(const AuxMetaData& aux_metadata,
-                                 std::span<const uint64_t> user_tags,
+void ShardedLRUCache::PutAuxData(uint64_t seqnum, uint64_t tag,
                                  std::span<const char> aux_data) {
     absl::MutexLock cache_lk_(&cache_mu_);
     // update index for addings
-    aux_index_->Add(user_tags, aux_metadata.seqnum);
-    HVLOG_F(1, "ShardedLRUCache::PutAuxData tags={}, seqnum=0x{:016X}",
-                user_tags, aux_metadata.seqnum);
-    // update data
-    std::string data = log_utils::EncodeEntry<AuxMetaData>(aux_metadata, user_tags, aux_data);
-    // TODO: compatible with boki, remove in the future
-    std::string key_str = MakeAuxCacheKey(aux_metadata.seqnum);
-    dbm_->Set(key_str, data, /* overwrite= */ true);
-    // TODO: reduce data duplications
-    for (const uint64_t tag : user_tags) {
-        std::string idx_key_str = MakeAuxCacheKeyWithIndex(tag, aux_metadata.seqnum);
-        dbm_->Set(idx_key_str, data, /* overwrite= */ true);
-    }
+    aux_index_->Add(seqnum, tag);
+    HVLOG_F(1, "ShardedLRUCache::PutAuxData seqnum={:016X} tag={}", seqnum, tag);
+    std::string idx_key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
+    dbm_->Set(idx_key_str, SPAN_AS_STRING(aux_data), /* overwrite= */ true);
     // update index for potential removes, add twice is ok
     UpdateCacheIndex();
 }
 
-// TODO: compatible with boki, remove in the future
-std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    std::string key_str = MakeAuxCacheKey(seqnum);
-    std::string data;
-    // not touching index, so no lock here
-    auto status = dbm_->Get(key_str, &data);
-    HVLOG_F(1, "ShardedLRUCache::GetAuxData seqnum=0x{:016X}, found={}", seqnum, status.IsOK());
-    if (status.IsOK()) {
-        AuxEntry aux_entry;
-        log_utils::DecodeEntry<AuxMetaData, AuxEntry>(std::move(data), &aux_entry);
-        DCHECK_EQ(seqnum, aux_entry.metadata.seqnum);
-        return aux_entry;
-    } else {
+std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) {
+    absl::ReaderMutexLock cache_rlk_(&cache_mu_);
+    UserTagVec tags = aux_index_->GetTags(seqnum);
+    json aux_entry;
+    for (uint64_t tag : tags) {
+        std::string key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
+        std::string data;
+        auto status = dbm_->Get(key_str, &data);
+        if (status.IsOK()) {
+            aux_entry[fmt::format("{}", tag)] = data;
+        }
+    }
+    if (aux_entry.empty()) {
         return std::nullopt;
+    } else {
+        std::string aux_data_str = aux_entry.dump();
+        HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_data_str);
+        AuxMetaData aux_metadata = {
+            .seqnum = seqnum,
+            .data_size = aux_data_str.size(),
+        };
+        return AuxEntry {
+            .metadata = aux_metadata,
+            .data = aux_data_str,
+        };
     }
 }
 
-std::optional<AuxEntry> ShardedLRUCache::GetAuxDataWithIndex(uint64_t tag, uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    std::string key_str = MakeAuxCacheKeyWithIndex(tag, seqnum);
-    std::string data;
-    // not touching index, so no lock here
-    auto status = dbm_->Get(key_str, &data);
-    HVLOG_F(1, "ShardedLRUCache::GetAuxData seqnum=0x{:016X}, found={}", seqnum, status.IsOK());
-    if (status.IsOK()) {
-        AuxEntry aux_entry;
-        log_utils::DecodeEntry<AuxMetaData, AuxEntry>(std::move(data), &aux_entry);
-        DCHECK_EQ(seqnum, aux_entry.metadata.seqnum);
-        return aux_entry;
-    } else {
+std::optional<AuxEntry> ShardedLRUCache::GetAuxDataChecked(uint64_t seqnum, uint64_t tag) const {
+    if (!aux_index_->Contains(seqnum, tag)) {
         return std::nullopt;
     }
+    bool contains_tag = false;
+    UserTagVec tags = aux_index_->GetTags(seqnum);
+    json aux_entry;
+    for (uint64_t aux_tag : tags) {
+        if (aux_tag == tag) {
+            contains_tag = true;
+        }
+        std::string key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
+        std::string data;
+        auto status = dbm_->Get(key_str, &data);
+        DCHECK(status.IsOK());
+        aux_entry[fmt::format("{}", tag)] = data;
+    }
+    DCHECK(contains_tag);
+    DCHECK(!aux_entry.empty());
+    std::string aux_data_str = aux_entry.dump();
+    HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_data_str);
+    AuxMetaData aux_metadata = {
+        .seqnum = seqnum,
+        .data_size = aux_data_str.size(),
+    };
+    return AuxEntry {
+        .metadata = aux_metadata,
+        .data = aux_data_str,
+    };
 }
 
 std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t seqnum) {
@@ -324,7 +367,7 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t s
     //                 tag, seqnum, found, result_seqnum, aux_index_->Inspect());
     // }
     if (aux_index_->FindPrev(seqnum, tag, &result_seqnum)) {
-        std::optional<AuxEntry> aux_entry = GetAuxDataWithIndex(tag, result_seqnum);
+        std::optional<AuxEntry> aux_entry = GetAuxDataChecked(result_seqnum, tag);
         DCHECK(aux_entry.has_value());
         return aux_entry;
     } else {
@@ -333,16 +376,12 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t s
     // HVLOG_F(1, "ShardedLRUCache::GetAuxDataPrev tag={}, seqnum=0x{:016X}, found={}",
     //             tag, seqnum, status.IsOK());
 }
-bool ShardedLRUCache::GetAuxIndexPrev(uint64_t tag, uint64_t seqnum, uint64_t* result_seqnum) {
-    absl::ReaderMutexLock cache_rlk_(&cache_mu_);
-    return aux_index_->FindPrev(seqnum, tag, /*out*/ result_seqnum);
-}
 
 std::optional<AuxEntry> ShardedLRUCache::GetAuxDataNext(uint64_t tag, uint64_t seqnum) {
     absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     uint64_t result_seqnum;
     if (aux_index_->FindNext(seqnum, tag, &result_seqnum)) {
-        std::optional<AuxEntry> aux_entry = GetAuxDataWithIndex(tag, result_seqnum);
+        std::optional<AuxEntry> aux_entry = GetAuxDataChecked(result_seqnum, tag);
         DCHECK(aux_entry.has_value());
         return aux_entry;
     } else {

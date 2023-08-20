@@ -1206,33 +1206,24 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 }
 
 // Implement types.Environment
-func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, tags []uint64, seqNum uint64, auxData []byte) error {
+func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, seqNum uint64, tag uint64, auxData []byte) error {
 	if len(auxData) == 0 {
 		return fmt.Errorf("auxiliary data cannot be empty")
 	}
-	tags, err := checkAndDuplicateTags(tags)
-	if err != nil {
-		return err
-	}
-	if len(auxData)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
-		return fmt.Errorf("auxiliary data too larger (size=%d, num_tags=%d), expect no more than %d bytes",
-			len(auxData), len(tags), protocol.MessageInlineDataSize)
+	if len(auxData) > protocol.MessageInlineDataSize {
+		return fmt.Errorf("auxiliary data too larger (size=%d), expect no more than %d bytes",
+			len(auxData), protocol.MessageInlineDataSize)
 	}
 
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogSetAuxDataMessageWithShards(currentCallId, w.clientId, uint16(len(tags)), seqNum, id)
-	if len(tags) == 0 {
-		protocol.FillInlineDataInMessage(message, auxData)
-	} else {
-		tagBuffer := protocol.BuildLogTagsBuffer(tags)
-		protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, auxData}, nil /* sep */))
-	}
+	message := protocol.NewSharedLogSetAuxDataMessageWithShards(currentCallId, w.clientId, seqNum, tag, id)
+	protocol.FillInlineDataInMessage(message, auxData)
 
 	w.mux.Lock()
 	queue := NewLogOpsQueue(w, id)
 	w.outgoingLogOps[id] = queue
-	_, err = w.outputPipe.Write(message)
+	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
 	if err != nil {
 		return err

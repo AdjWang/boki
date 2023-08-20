@@ -326,10 +326,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
 }
 
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
-    UserTagVec user_tags = op->user_tags;
     uint64_t seqnum = op->seqnum;
-    AuxMetaData aux_metadata = AuxMetaDataFromOp(op);
-    LogCachePutAuxData(aux_metadata, VECTOR_AS_SPAN(user_tags), op->data.to_span());
+    uint64_t tag = op->query_tag;
+    LogCachePutAuxData(seqnum, tag, op->data.to_span());
     // localid and seqnum are useless here, set any value
     Message response = MessageHelper::NewSharedLogOpSucceeded(
         SharedLogResultType::AUXDATA_OK, protocol::kInvalidLogLocalId, seqnum);
@@ -343,12 +342,10 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
     if (auto log_entry = LogCacheGet(seqnum); log_entry.has_value()) {
         if (auto aux_entry = LogCacheGetAuxData(seqnum); aux_entry.has_value()) {
             uint16_t view_id = log_utils::GetViewId(seqnum);
-            std::string aux_entry_data = log_utils::EncodeEntry<AuxMetaData>(
-                aux_entry->metadata, VECTOR_AS_SPAN(aux_entry->user_tags),
-                STRING_AS_SPAN(aux_entry->data));
             absl::ReaderMutexLock view_lk(&view_mu_);
             if (view_id < views_.size()) {
                 const View* view = views_.at(view_id);
+                std::string aux_entry_data = log_utils::EncodeAuxEntry(aux_entry.value());
                 PropagateAuxData(view, log_entry->metadata, STRING_AS_SPAN(aux_entry_data));
             }
         }
@@ -490,7 +487,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             AuxEntry aux_entry;
             if (aux_entry_data.size() > 0) {
                 std::string str_aux_entry_data(aux_entry_data.begin(), aux_entry_data.end());
-                log_utils::DecodeEntry<AuxMetaData, AuxEntry>(str_aux_entry_data, &aux_entry);
+                log_utils::DecodeAuxEntry(str_aux_entry_data, &aux_entry);
             }
             // make response message
             if (result == SharedLogResultType::ASYNC_READ_OK) {
@@ -908,13 +905,12 @@ void Engine::LogCachePutAuxData(const AuxEntry& aux_entry) {
     log_cache_->PutAuxData(aux_entry);
 }
 
-void Engine::LogCachePutAuxData(const AuxMetaData& aux_metadata,
-                                std::span<const uint64_t> user_tags,
+void Engine::LogCachePutAuxData(uint64_t seqnum, uint64_t tag,
                                 std::span<const char> aux_data) {
     if (!log_cache_enabled_) {
         return;
     }
-    log_cache_->PutAuxData(aux_metadata, user_tags, aux_data);
+    log_cache_->PutAuxData(seqnum, tag, aux_data);
 }
 
 std::optional<AuxEntry> Engine::LogCacheGetAuxData(uint64_t seqnum) {

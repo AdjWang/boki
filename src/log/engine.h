@@ -67,21 +67,11 @@ private:
                      std::span<const char> log_data);
     std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
     void LogCachePutAuxData(const AuxEntry& aux_entry);
-    void LogCachePutAuxData(const AuxMetaData& aux_metadata,
-                            std::span<const uint64_t> user_tags,
+    void LogCachePutAuxData(uint64_t seqnum, uint64_t tag,
                             std::span<const char> aux_data);
     std::optional<AuxEntry> LogCacheGetAuxData(uint64_t seqnum);
     std::optional<AuxEntry> LogCacheGetAuxDataPrev(uint64_t tag, uint64_t seqnum);
     std::optional<AuxEntry> LogCacheGetAuxDataNext(uint64_t tag, uint64_t seqnum);
-
-    inline AuxMetaData AuxMetaDataFromOp(LocalOp* op) {
-        DCHECK(op->type == protocol::SharedLogOpType::SET_AUXDATA);
-        return AuxMetaData {
-            .seqnum = op->seqnum,
-            .num_tags = op->user_tags.size(),
-            .data_size = op->data.length()
-        };
-    }
 
     inline LogMetaData MetaDataFromAppendOp(LocalOp* op) {
         DCHECK(op->type == protocol::SharedLogOpType::APPEND

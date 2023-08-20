@@ -269,6 +269,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::SET_AUXDATA:
+        op->query_tag = message.log_aux_key;
+        DCHECK(message.log_num_tags == 0);
         PopulateLogTagsAndData(message, op);
         op->seqnum = message.log_seqnum;
         break;

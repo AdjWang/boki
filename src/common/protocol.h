@@ -219,6 +219,7 @@ struct Message {
     uint16_t log_aux_data_size;   // [38:40]
 
     union {
+        uint64_t log_aux_key;     // [40:48] Used in SHARED_LOG_OP, as SetAuxData() key
         uint64_t log_tag;         // [40:48] Used in SHARED_LOG_OP, as query_tag in log reading
         uint64_t response_id;     // [40:48] Used in SHARED_LOG_OP
     };
