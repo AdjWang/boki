@@ -14,6 +14,7 @@ import (
 
 	gabs "github.com/Jeffail/gabs/v2"
 	redis "github.com/go-redis/redis/v8"
+	"github.com/pkg/errors"
 )
 
 var FLAGS_DisableAuxData bool = false
@@ -45,10 +46,41 @@ const (
 	LOG_TxnHistory
 )
 
+// AuxData format:
+type AuxData map[ /*tag*/ uint64] /*value*/ string
+
+func NewAuxData() AuxData {
+	return make(AuxData)
+}
+
+func DeserializeAuxData(rawData []byte) AuxData {
+	if len(rawData) == 0 {
+		return nil
+	}
+	result := NewAuxData()
+	if err := json.Unmarshal(rawData, &result); err != nil {
+		rawDataStr := "["
+		for _, i := range rawData {
+			rawDataStr += fmt.Sprintf("%02X ", i)
+		}
+		rawDataStr += "]"
+		panic(errors.Wrap(err, rawDataStr))
+	}
+	return result
+}
+
+// func (ab AuxData) Serialize() []byte {
+// 	res, err := json.Marshal(ab)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	return res
+// }
+
 type ObjectLogEntry struct {
 	localId  uint64
 	seqNum   uint64
-	auxData  map[string]interface{}
+	auxData  AuxData
 	writeSet map[string]bool
 
 	LogType int        `json:"t"`
@@ -74,12 +106,12 @@ func (l *ObjectLogEntry) fillWriteSet() {
 }
 
 func decodeLogEntry(logEntry *types.LogEntryWithMeta) *ObjectLogEntry {
-	reader, err := common.DecompressReader(logEntry.Data)
+	rawObjectLog, err := common.DecompressData(logEntry.Data)
 	if err != nil {
 		panic(err)
 	}
 	objectLog := &ObjectLogEntry{}
-	err = json.NewDecoder(reader).Decode(objectLog)
+	err = json.Unmarshal(rawObjectLog, objectLog)
 	if err != nil {
 		panic(err)
 	}
@@ -98,12 +130,8 @@ func decodeLogEntry(logEntry *types.LogEntryWithMeta) *ObjectLogEntry {
 		auxData = logEntry.AuxData
 	}
 	if len(auxData) > 0 {
-		reader, err := common.DecompressReader(auxData)
-		if err != nil {
-			panic(err)
-		}
-		var contents map[string]interface{}
-		err = json.NewDecoder(reader).Decode(&contents)
+		var contents AuxData
+		err = json.Unmarshal(auxData, &contents)
 		if err != nil {
 			panic(err)
 		}
@@ -244,15 +272,14 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 		panic("Wrong log type")
 	}
 	if txnCommitLog.auxData != nil {
-		if v, exists := txnCommitLog.auxData["r"]; exists {
-			return v.(bool), nil
+		if v, exists := txnCommitLog.auxData[common.KeyCommitResult]; exists {
+			return v == "t", nil
 		}
 	} else {
-		txnCommitLog.auxData = make(map[string]interface{})
+		txnCommitLog.auxData = NewAuxData()
 	}
 	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
 	commitResult := true
-	tags := make([]uint64, 0, len(txnCommitLog.Ops))
 	checkedTag := make(map[uint64]bool)
 	doneCh := make(chan bool)
 	errCh := make(chan error)
@@ -262,7 +289,6 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 		if _, exists := checkedTag[tag]; exists {
 			continue
 		}
-		tags = append(tags, objectLogTag(common.NameHash("commit"+op.ObjName)))
 
 		logStream := env.faasEnv.AsyncSharedLogReadNextUntil(env.faasCtx, tag, txnCommitLog.TxnId, types.LogEntryIndex{
 			LocalId: txnCommitLog.localId,
@@ -327,9 +353,13 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 	close(doneCh)
 	close(errCh)
 
-	txnCommitLog.auxData["r"] = commitResult
+	commitResultStr := "f"
+	if commitResult {
+		commitResultStr = "t"
+	}
+	txnCommitLog.auxData[common.KeyCommitResult] = commitResultStr
 	if !FLAGS_DisableAuxData {
-		env.setLogAuxData(tags, txnCommitLog.seqNum, txnCommitLog.auxData)
+		env.setLogAuxData(txnCommitLog.seqNum, common.KeyCommitResult, commitResultStr)
 	}
 	return commitResult, nil
 }
@@ -341,9 +371,9 @@ func (l *ObjectLogEntry) listCachedObjectView() string {
 	if l.LogType == LOG_NormalOp {
 		return "NormalOp"
 	} else if l.LogType == LOG_TxnCommit {
-		objNames := make([]string, 0, len(l.auxData))
+		objNames := make([]uint64, 0, len(l.auxData))
 		for key, _ := range l.auxData {
-			objNames = append(objNames, key[1:])
+			objNames = append(objNames, key)
 		}
 		return fmt.Sprint(objNames)
 	}
@@ -358,7 +388,7 @@ func (l *ObjectLogEntry) hasCachedObjectView(objName string) bool {
 		return true
 	} else if l.LogType == LOG_TxnCommit {
 		key := "v" + objName
-		_, exists := l.auxData[key]
+		_, exists := l.auxData[common.KeyHash(key)]
 		return exists
 	}
 	return false
@@ -369,18 +399,26 @@ func (l *ObjectLogEntry) loadCachedObjectView(objName string) *ObjectView {
 		return nil
 	}
 	if l.LogType == LOG_NormalOp {
+		var gabsData map[string]interface{}
+		if err := json.Unmarshal([]byte(l.auxData[common.KeyHash(objName)]), &gabsData); err != nil {
+			panic(err)
+		}
 		return &ObjectView{
 			name:       objName,
 			nextSeqNum: l.seqNum + 1,
-			contents:   gabs.Wrap(l.auxData),
+			contents:   gabs.Wrap(gabsData),
 		}
 	} else if l.LogType == LOG_TxnCommit {
 		key := "v" + objName
-		if data, exists := l.auxData[key]; exists {
+		if data, exists := l.auxData[common.KeyHash(key)]; exists {
+			var gabsData map[string]interface{}
+			if err := json.Unmarshal([]byte(data), &gabsData); err != nil {
+				panic(err)
+			}
 			return &ObjectView{
 				name:       objName,
 				nextSeqNum: l.seqNum + 1,
-				contents:   gabs.Wrap(data),
+				contents:   gabs.Wrap(gabsData),
 			}
 		}
 	}
@@ -395,25 +433,16 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) []strin
 	keySet := make([]string, 0, 10)
 	if l.LogType == LOG_NormalOp {
 		if l.auxData == nil {
-			tag := objectLogTag(common.NameHash(view.name))
-			env.setLogAuxData([]uint64{tag}, l.seqNum, view.contents.Data())
+			env.setLogAuxData(l.seqNum, common.KeyHash(view.name), view.contents.Data())
 			keySet = append(keySet, "n-"+view.name)
 		}
 	} else if l.LogType == LOG_TxnCommit {
 		if l.auxData == nil {
-			l.auxData = make(map[string]interface{})
+			l.auxData = NewAuxData()
 		}
-		key := "v" + view.name
+		key := common.KeyHash("v" + view.name)
 		if _, exists := l.auxData[key]; !exists {
-			l.auxData[key] = view.contents.Data()
-			tags := make([]uint64, 0, len(l.auxData))
-			for key := range l.auxData {
-				tag := objectLogTag(common.NameHash(key[1:]))
-				tags = append(tags, tag)
-				keySet = append(keySet, key[1:])
-			}
-			env.setLogAuxData(tags, l.seqNum, l.auxData)
-			delete(l.auxData, key)
+			env.setLogAuxData(l.seqNum, key, view.contents.Data())
 		}
 	} else {
 		panic("Wrong log type")
@@ -751,21 +780,22 @@ func (env *envImpl) appendTxnBeginLog() (types.Future[uint64], error) {
 	}
 }
 
-func (env *envImpl) setLogAuxData(tags []uint64, seqNum uint64, data interface{}) error {
+func (env *envImpl) setLogAuxData(seqNum uint64, key uint64, data interface{}) error {
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		panic(err)
 	}
 	compressed := common.CompressData(encoded)
 	if FLAGS_RedisForAuxData {
-		key := fmt.Sprintf("%#016x", seqNum)
-		result := redisClient.Set(context.Background(), key, compressed, 0)
-		if result.Err() != nil {
-			log.Fatalf("[FATAL] Failed to set AuxData in Redis: %v", result.Err())
-		}
-		return nil
+		panic("not implemented")
+		// key := fmt.Sprintf("%#016x", seqNum)
+		// result := redisClient.Set(context.Background(), key, compressed, 0)
+		// if result.Err() != nil {
+		// 	log.Fatalf("[FATAL] Failed to set AuxData in Redis: %v", result.Err())
+		// }
+		// return nil
 	}
-	err = env.faasEnv.SharedLogSetAuxDataWithShards(env.faasCtx, tags, seqNum, compressed)
+	err = env.faasEnv.SharedLogSetAuxDataWithShards(env.faasCtx, seqNum, key, compressed)
 	if err != nil {
 		return newRuntimeError(err.Error())
 	} else {

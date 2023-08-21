@@ -3,6 +3,7 @@ package asyncstatestore
 import (
 	"fmt"
 	"log"
+	"runtime/debug"
 )
 
 const (
@@ -24,6 +25,9 @@ func (e *Error) GetCode() int {
 }
 
 func (e *Error) Error() string {
+	// DEBUG
+	debug.PrintStack()
+
 	switch e.code {
 	case ERROR_Runtime:
 		return fmt.Sprintf("RuntimeError: %s", e.message)

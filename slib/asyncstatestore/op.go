@@ -1,6 +1,8 @@
 package asyncstatestore
 
 import (
+	"log"
+
 	"cs.utexas.edu/zjia/faas/slib/common"
 	gabs "github.com/Jeffail/gabs/v2"
 )
@@ -315,6 +317,9 @@ func applyNumberFetchAddOp(parent *gabs.Container, lastSeg string, delta float64
 		if _, err := parent.Set(delta, lastSeg); err == nil {
 			return NumberValue(0), nil
 		} else {
+			// DEBUG
+			log.Printf("[DEBUG] gabs=%v lastSet=%v delta=%v", parent.Data(), lastSeg, delta)
+
 			return NullValue(), newGabsError(err)
 		}
 	}
