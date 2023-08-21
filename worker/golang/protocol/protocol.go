@@ -382,6 +382,7 @@ func NewSharedLogSetAuxDataMessage(currentCallId uint64, myClientId uint16, seqN
 	binary.LittleEndian.PutUint16(buffer[36:38], 0 /*numTags*/)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
+	binary.LittleEndian.PutUint64(buffer[40:48], 0 /*tag*/)
 	return buffer
 }
 

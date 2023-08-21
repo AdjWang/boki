@@ -273,7 +273,8 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 	}
 	if txnCommitLog.auxData != nil {
 		if v, exists := txnCommitLog.auxData[common.KeyCommitResult]; exists {
-			return v == "t", nil
+			// use json ["t"]
+			return v == "\"t\"", nil
 		}
 	} else {
 		txnCommitLog.auxData = NewAuxData()
@@ -479,7 +480,7 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 
 	// DEBUG
 	// prefix := fmt.Sprintf("%v:%v", obj.name, tag)
-	// log.Printf("[DEBUG] %v syncToFuture start until seqnum=%016X", prefix, tailSeqNum)
+	// log.Printf("[DEBUG] %v syncToFuture start until seqnum=%016X", prefix, logIndex.SeqNum)
 	// defer log.Println("")
 	// defer log.Printf("[DEBUG] %v syncToFuture end", prefix)
 
@@ -518,7 +519,8 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 				break
 			}
 			objectLog := decodeLogEntry(logEntry)
-			// log.Printf("[DEBUG] %v syncToFuture got seqnum=%016X opSet=%v", prefix, logEntry.SeqNum, objectLog.listCachedObjectView())
+			// log.Printf("[DEBUG] %v syncToFuture got seqnum=%016X objName=%v opSet=%v writeSet=%+v",
+			// 	prefix, logEntry.SeqNum, obj.name, objectLog.listCachedObjectView(), objectLog.writeSet)
 			if !objectLog.withinWriteSet(obj.name) {
 				continue
 			}
@@ -532,6 +534,7 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 					errCh <- ctx.Err()
 					return
 				} else if !committed {
+					// log.Printf("[DEBUG] %v syncToFuture skip seqnum=%016X due to not committed", prefix, objectLog.seqNum)
 					continue
 				}
 			}
@@ -543,6 +546,7 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			view.nextSeqNum = objectLog.seqNum + 1
 			for _, op := range objectLog.Ops {
 				if op.ObjName == obj.name {
+					// log.Printf("[DEBUG] %v syncToFuture apply op=%+v", prefix, op)
 					view.applyWriteOp(op)
 				}
 			}

@@ -98,7 +98,12 @@ func decodeLogEntry(logEntry *types.LogEntry) *ObjectLogEntry {
 		auxData = logEntry.AuxData
 	}
 	if len(auxData) > 0 {
-		reader, err := common.DecompressReader(auxData)
+		var rawAuxData map[uint64]string
+		if err := json.Unmarshal(auxData, &rawAuxData); err != nil {
+			panic(err)
+		}
+		shardedAuxData := rawAuxData[0]
+		reader, err := common.DecompressReader([]byte(shardedAuxData))
 		if err != nil {
 			panic(err)
 		}

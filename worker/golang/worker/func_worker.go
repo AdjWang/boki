@@ -159,8 +159,10 @@ func (w *FuncWorker) Run() {
 			w.mux.Unlock()
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
-			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-			log.Printf("[PROF] dispatchDelay: %v us", dispatchDelay)
+			// DEBUG: PROF
+			// dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+			// log.Printf("[PROF] dispatchDelay: %v us", dispatchDelay)
+
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if queue, exists := w.outgoingLogOps[id]; exists {
