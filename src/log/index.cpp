@@ -638,12 +638,16 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
     uint64_t syncto_seqnum; // syncto not including self
     bool sync_continue;
     if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+        // query use seqnum
         if (query.query_seqnum == 0) {
             pending_query_results_.push_back(BuildResolvedResult(query, result_id));
             HVLOG(1) << "ProcessReadNextU: ResolvedResult no preceding logs need to be synced";
             return;
         }
         syncto_seqnum = query.query_seqnum;
+        if ((query.flags & IndexQuery::kReadFromCachedFlag) == 0) {
+            DCHECK(!query.promised_auxdata.has_value());
+        }
         if (query.promised_auxdata.has_value() && query.promised_auxdata->metadata.seqnum >= syncto_seqnum) {
             // when log append finished before starting to query
             DCHECK(result_id == 0);
@@ -655,17 +659,20 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
         HVLOG_F(1, "ProcessReadNextUntil: hop_times={} seqnum={:016X} logspace={} tag={} syncto_seqnum={:016X} continue={}",
                 query.hop_times, query.query_seqnum, query.user_logspace, tag, syncto_seqnum, sync_continue);
     } else {
+        // query use localid
         if (log_index_map_.contains(query.query_localid)) {
             // syncto future
             syncto_seqnum = log_index_map_.at(query.query_localid).seqnum;
-            // Disable auxdata would not causing loop here: the IndexQuery::kReadLocalIdFlag
-            // would be clear in Engine::BuildIndexQuery, so the next query would never reach to here again.
-            if (!query.promised_auxdata.has_value() || query.promised_auxdata->metadata.seqnum >= syncto_seqnum) {
-                // when log append finished before starting to query
-                DCHECK(result_id == 0);
-                pending_query_results_.push_back(BuildAuxContinueResult(query, syncto_seqnum));
-                HVLOG(1) << "ProcessReadNextU: AuxContinueResult";
-                return;
+            if ((query.flags & IndexQuery::kReadFromCachedFlag) != 0) {
+                // Disable auxdata would not causing loop here: the IndexQuery::kReadLocalIdFlag
+                // would be clear in Engine::BuildIndexQuery, so the next query would never reach to here again.
+                if (!query.promised_auxdata.has_value() || query.promised_auxdata->metadata.seqnum >= syncto_seqnum) {
+                    // when log append finished before starting to query
+                    DCHECK(result_id == 0);
+                    pending_query_results_.push_back(BuildAuxContinueResult(query, syncto_seqnum));
+                    HVLOG(1) << "ProcessReadNextU: AuxContinueResult";
+                    return;
+                }
             }
             sync_continue = false;
         } else {

@@ -15,7 +15,8 @@ struct IndexFoundResult {
 };
 
 struct IndexQuery {
-    static constexpr uint16_t kReadLocalIdFlag   = (1 << 1);     // Indicates localid/seqnum
+    static constexpr uint16_t kReadLocalIdFlag    = (1 << 1);     // Indicates localid/seqnum
+    static constexpr uint16_t kReadFromCachedFlag = (1 << 2);     // Indicates whether skip previous cached logs
 
     // determines how to response
     // kSync: return once with the log entry

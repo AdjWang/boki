@@ -180,6 +180,7 @@ constexpr uint32_t kLogResponseEOFFlag            = (1 << 5);
         target |= flag;                                        \
     } while (0)
 constexpr uint32_t kLogQueryLocalIdFlag           = (1 << 6);
+constexpr uint32_t kLogQueryFromCachedFlag        = (1 << 7);
 
 struct Message {
     struct {

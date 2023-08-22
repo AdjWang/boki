@@ -76,7 +76,8 @@ protected:
         // Used by READ_SYNCTO to reorder results
         log_utils::ThreadSafeCounter response_counter;
 
-        static constexpr uint16_t kReadLocalIdFlag = (1 << 1);     // Indicates localid/seqnum
+        static constexpr uint16_t kReadLocalIdFlag    = (1 << 1);     // Indicates localid/seqnum
+        static constexpr uint16_t kReadFromCachedFlag = (1 << 2);     // Indicates whether skip previous cached logs
         std::string InspectRead() const {
             if ((flags & kReadLocalIdFlag) != 0) {
                 return fmt::format("op_id={} localid={:016X}", id, localid);

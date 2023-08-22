@@ -6,7 +6,7 @@ def percentile(datas):
     p50 = np.percentile(datas, 50)
     p90 = np.percentile(datas, 90)
     p99 = np.percentile(datas, 99)
-    return p50, p90, p99, max(datas)
+    return p50, p90, p99, max(datas), len(datas)
 
 
 if __name__ == '__main__':
@@ -20,4 +20,5 @@ if __name__ == '__main__':
             assert len(found) == 1
             statistics.append(int(found[0]))
 
-    print(percentile(statistics))
+    p50, p90, p99, p100, count = percentile(statistics)
+    print(f'p50: {p50}; p90: {p90}; p99: {p99}; p100: {p100}; count: {count}')

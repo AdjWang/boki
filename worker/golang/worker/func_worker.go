@@ -160,8 +160,8 @@ func (w *FuncWorker) Run() {
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			// DEBUG: PROF
-			// dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-			// log.Printf("[PROF] dispatchDelay: %v us", dispatchDelay)
+			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+			log.Printf("[PROF] dispatchDelay: %v us", dispatchDelay)
 
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
@@ -949,7 +949,7 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
-func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
+func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, fromCached bool) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -957,9 +957,9 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seq
 	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
 		panic("unreachable")
 	} else if target.SeqNum != protocol.InvalidLogSeqNum {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id, fromCached)
 	} else {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id, fromCached)
 	}
 
 	w.mux.Lock()
@@ -1009,7 +1009,7 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seq
 	return results
 }
 
-func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
+func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, fromCached bool) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -1017,9 +1017,9 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
 		panic("unreachable")
 	} else if target.SeqNum != protocol.InvalidLogSeqNum {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id, fromCached)
 	} else {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id, fromCached)
 	}
 
 	w.mux.Lock()

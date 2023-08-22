@@ -182,9 +182,10 @@ std::string EngineBase::DebugListExistingFnCall(const absl::flat_hash_map</* ful
     output += "\n";
     return output;
 }
+// DEBUG
 static std::string DebugPrintMessage(const Message& message) {
-    return fmt::format("msg_type={}, client_id={}, client_data={}, log_op_type={}",
-        message.message_type, message.log_client_id, message.log_client_data, message.log_op);
+    return fmt::format("msg_type={} client_id={} client_data={} log_op_type={} flags={:08X}",
+        message.message_type, message.log_client_id, message.log_client_data, message.log_op, message.flags);
 }
 void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     protocol::FuncCall func_call = MessageHelper::GetFuncCall(message);
@@ -257,6 +258,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
             op->flags |= LocalOp::kReadLocalIdFlag;
             DCHECK(message.log_query_localid != protocol::kInvalidLogLocalId);
             op->localid = message.log_query_localid;
+        }
+        if ((message.flags & protocol::kLogQueryFromCachedFlag) != 0) {
+            op->flags |= LocalOp::kReadFromCachedFlag;
         }
         break;
     case SharedLogOpType::ASYNC_READ_LOCALID:

@@ -193,6 +193,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 	}
 	txnCommitLog.auxData["r"] = commitResult
 	if !FLAGS_DisableAuxData {
+		log.Println("[DEBUG] SharedLogSetAuxData of commit")
 		env.setLogAuxData(txnCommitLog.seqNum, txnCommitLog.auxData)
 	}
 	return commitResult, nil
@@ -241,6 +242,7 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) {
 	}
 	if l.LogType == LOG_NormalOp {
 		if l.auxData == nil {
+			log.Println("[DEBUG] SharedLogSetAuxData of syncTo NormalOp")
 			env.setLogAuxData(l.seqNum, view.contents.Data())
 		}
 	} else if l.LogType == LOG_TxnCommit {
@@ -250,6 +252,7 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) {
 		key := "v" + view.name
 		if _, exists := l.auxData[key]; !exists {
 			l.auxData[key] = view.contents.Data()
+			log.Println("[DEBUG] SharedLogSetAuxData of syncTo TxnCommit")
 			env.setLogAuxData(l.seqNum, l.auxData)
 			delete(l.auxData, key)
 		}
@@ -583,6 +586,7 @@ func (env *envImpl) setLogAuxData(seqNum uint64, data interface{}) error {
 		}
 		return nil
 	}
+	log.Println("[DEBUG] SharedLogSetAuxData overall")
 	err = env.faasEnv.SharedLogSetAuxData(env.faasCtx, seqNum, compressed)
 	if err != nil {
 		return newRuntimeError(err.Error())

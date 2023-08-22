@@ -113,6 +113,7 @@ const (
 	FLAG_kLogResponseEOFDataFlag   uint32 = (1 << 4)
 	FLAG_kLogResponseEOFFlag       uint32 = (1 << 5)
 	FLAG_kLogQueryLocalIdFlag      uint32 = (1 << 6)
+	FLAG_kLogQueryFromCachedFlag   uint32 = (1 << 7)
 )
 
 // DEBUG
@@ -299,7 +300,7 @@ func NewAsyncSharedLogAppendMessage(currentCallId uint64, myClientId uint16, num
 	return buffer
 }
 
-func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint64, fromSeqNum uint64, logIndex uint64, useLocalId bool, clientData uint64) []byte {
+func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint64, fromSeqNum uint64, logIndex uint64, useLocalId bool, clientData uint64, fromCached bool) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -311,6 +312,9 @@ func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint
 	binary.LittleEndian.PutUint64(buffer[8:16], logIndex)
 	if useLocalId {
 		SetFlagsToMessage(buffer, FLAG_kLogQueryLocalIdFlag)
+	}
+	if fromCached {
+		SetFlagsToMessage(buffer, FLAG_kLogQueryFromCachedFlag)
 	}
 	return buffer
 }

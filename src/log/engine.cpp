@@ -271,11 +271,11 @@ void Engine::HandleLocalTrim(LocalOp* op) {
 void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     if ((op->flags & LocalOp::kReadLocalIdFlag) == 0) {
-        HVLOG_F(1, "HandleLocalRead: op_type={} op_id={} logspace={} tag={} from={:016X} seqnum={:016X}",
-                op->type, op->id, op->user_logspace, op->query_tag, op->query_start_seqnum, op->seqnum);
+        HVLOG_F(1, "HandleLocalRead: op_type={} op_id={} logspace={} tag={} from={:016X} seqnum={:016X} flags={:04X}",
+                op->type, op->id, op->user_logspace, op->query_tag, op->query_start_seqnum, op->seqnum, op->flags);
     } else {
-        HVLOG_F(1, "HandleLocalRead: op_type={} op_id={} logspace={} tag={} from={:016X} localid={:016X}",
-                op->type, op->id, op->user_logspace, op->query_tag, op->query_start_seqnum, op->localid);
+        HVLOG_F(1, "HandleLocalRead: op_type={} op_id={} logspace={} tag={} from={:016X} localid={:016X} flags={:04X}",
+                op->type, op->id, op->user_logspace, op->query_tag, op->query_start_seqnum, op->localid, op->flags);
     }
     const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
@@ -998,6 +998,9 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
         request.user_metalog_progress = result.metalog_progress;
         DCHECK((query.flags & IndexQuery::kReadLocalIdFlag) != 0);
         request.flags &= ~protocol::kReadLocalIdFlag;
+        if ((query.flags & IndexQuery::kReadFromCachedFlag) != 0) {
+            request.flags |= protocol::kLogQueryFromCachedFlag;
+        }
         request.prev_view_id = 0;
         request.prev_engine_id = 0;
         request.flags &= ~protocol::kReadPrevFoundFlag;
@@ -1010,15 +1013,18 @@ IndexQuery Engine::UpdateQueryWithAux(IndexQuery& query) {
         query.direction == IndexQuery::ReadDirection::kReadNextU) {
         if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
             DCHECK(query.initial);
+            if ((query.flags & IndexQuery::kReadFromCachedFlag) == 0) {
+                return query;
+            }
+            HVLOG_F(1, "query kReadNextU flags={:04X}", query.flags);
             // syncto not including target seqnum
-            // std::optional<AuxEntry> aux_entry =
-            //     LogCacheGetAuxDataPrev(query.user_tag, query.query_seqnum - 1);
             std::optional<AuxEntry> aux_entry =
                 LogCacheGetAuxDataNext(query.user_tag, query.query_start_seqnum);
             if (aux_entry.has_value() && aux_entry->metadata.seqnum < query.query_seqnum) {
                 query.promised_auxdata = aux_entry;
             }
         } else {
+            HVLOG_F(1, "query kReadPrevAux flags={:04X}", query.flags);
             std::optional<AuxEntry> aux_entry =
                 LogCacheGetAuxDataPrev(query.user_tag, query.query_seqnum);
             query.promised_auxdata = aux_entry;
@@ -1058,6 +1064,9 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
     };
     if ((op->flags & LocalOp::kReadLocalIdFlag) != 0) {
         query.flags |= IndexQuery::kReadLocalIdFlag;
+    }
+    if ((op->flags & LocalOp::kReadFromCachedFlag) != 0) {
+        query.flags |= IndexQuery::kReadFromCachedFlag;
     }
     return UpdateQueryWithAux(query);
 }
@@ -1099,6 +1108,9 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
     }
     if ((message.flags & protocol::kReadLocalIdFlag) != 0) {
         query.flags |= IndexQuery::kReadLocalIdFlag;
+    }
+    if ((message.flags & protocol::kLogQueryFromCachedFlag) != 0) {
+        query.flags |= IndexQuery::kReadFromCachedFlag;
     }
     return UpdateQueryWithAux(query);
 }

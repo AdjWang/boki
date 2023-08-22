@@ -314,7 +314,6 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) {
         return std::nullopt;
     } else {
         std::string aux_data_str = aux_entry.dump();
-        HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_data_str);
         AuxMetaData aux_metadata = {
             .seqnum = seqnum,
             .data_size = aux_data_str.size(),
