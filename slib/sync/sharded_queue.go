@@ -46,14 +46,6 @@ func NewShardedQueue(ctx context.Context, env types.Environment, name string, sh
 	}, nil
 }
 
-func (q *ShardedQueue) GetProfInfo() []string {
-	result := make([]string, 0, len(q.subQueues))
-	for _, queue := range q.subQueues {
-		result = append(result, queue.GetProfInfo()...)
-	}
-	return result
-}
-
 func (q *ShardedQueue) Push(payload string) error {
 	shard := q.shards[q.nextPush]
 	q.nextPush = (q.nextPush + 1) % len(q.shards)
