@@ -517,7 +517,7 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			contents:   gabs.New(),
 		}
 	}
-	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, 0 /*fromSeqNum*/, logIndex, true /*fromCached*/)
+	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, view.nextSeqNum, logIndex, true /*fromCached*/)
 	doneCh := make(chan struct{})
 	errCh := make(chan error)
 	go func(ctx context.Context) {

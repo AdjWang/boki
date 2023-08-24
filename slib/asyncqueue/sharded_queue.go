@@ -60,12 +60,6 @@ func (q *ShardedQueue) Push(payload string) error {
 	return queue.Push(payload)
 }
 
-func (q *ShardedQueue) BatchPop(n int) ([]string /* payloads */, error) {
-	shard := q.shards[q.nextPop]
-	q.nextPop = (q.nextPop + 1) % len(q.shards)
-	queue := q.subQueues[shard]
-	return queue.BatchPop(n)
-}
 func (q *ShardedQueue) Pop() (string /* payload */, error) {
 	shard := q.shards[q.nextPop]
 	q.nextPop = (q.nextPop + 1) % len(q.shards)

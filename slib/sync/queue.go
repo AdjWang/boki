@@ -79,17 +79,14 @@ func decodeQueueLogEntry(logEntry *types.LogEntry, auxKey uint64) *QueueLogEntry
 	}
 	if len(logEntry.AuxData) > 0 {
 		auxData := DeserializeAuxData(logEntry.AuxData)
-		viewData, found := auxData[auxKey]
-		if !found {
-			panic("not found view data key")
+		if viewData, found := auxData[queueLogTag(common.NameHash(queueLog.QueueName))]; found {
+			view := QueueAuxData{Consumed: 0, Tail: 0}
+			err := json.Unmarshal([]byte(viewData), &view)
+			if err != nil {
+				panic(errors.Wrapf(err, "auxdata json unmarshal error: %v", viewData))
+			}
+			queueLog.auxData = &view
 		}
-		view := QueueAuxData{Consumed: 0, Tail: 0}
-		err := json.Unmarshal([]byte(viewData), &view)
-		if err != nil {
-			panic(errors.Wrapf(err, "logEntry=%+v, auxData: %v:%v",
-				logEntry, string(logEntry.AuxData), logEntry.AuxData))
-		}
-		queueLog.auxData = &view
 	}
 	queueLog.seqNum = logEntry.SeqNum
 	return queueLog
