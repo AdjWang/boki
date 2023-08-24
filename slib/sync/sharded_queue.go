@@ -46,13 +46,6 @@ func NewShardedQueue(ctx context.Context, env types.Environment, name string, sh
 	}, nil
 }
 
-func (q *ShardedQueue) BatchPush(payloads []string) error {
-	shard := q.shards[q.nextPush]
-	q.nextPush = (q.nextPush + 1) % len(q.shards)
-	queue := q.subQueues[shard]
-	return queue.BatchPush(payloads)
-}
-
 func (q *ShardedQueue) Push(payload string) error {
 	shard := q.shards[q.nextPush]
 	q.nextPush = (q.nextPush + 1) % len(q.shards)
@@ -60,12 +53,6 @@ func (q *ShardedQueue) Push(payload string) error {
 	return queue.Push(payload)
 }
 
-func (q *ShardedQueue) BatchPop(n int) ([]string /* payloads */, error) {
-	shard := q.shards[q.nextPop]
-	q.nextPop = (q.nextPop + 1) % len(q.shards)
-	queue := q.subQueues[shard]
-	return queue.BatchPop(n)
-}
 func (q *ShardedQueue) Pop() (string /* payload */, error) {
 	shard := q.shards[q.nextPop]
 	q.nextPop = (q.nextPop + 1) % len(q.shards)
