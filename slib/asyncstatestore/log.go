@@ -342,6 +342,21 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 		}(ctx)
 		checkedTag[tag] = true
 		// DEBUG
+		// select {
+		// case committed := <-doneCh:
+		// 	if !committed {
+		// 		commitResult = false
+		// 		break
+		// 	}
+		// case err := <-errCh:
+		// 	cancel()
+		// 	close(doneCh)
+		// 	close(errCh)
+		// 	return false, err
+		// }
+	}
+	// DEBUG
+	for range checkedTag {
 		select {
 		case committed := <-doneCh:
 			if !committed {
@@ -355,21 +370,6 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 			return false, err
 		}
 	}
-	// DEBUG
-	// for range checkedTag {
-	// 	select {
-	// 	case committed := <-doneCh:
-	// 		if !committed {
-	// 			commitResult = false
-	// 			break
-	// 		}
-	// 	case err := <-errCh:
-	// 		cancel()
-	// 		close(doneCh)
-	// 		close(errCh)
-	// 		return false, err
-	// 	}
-	// }
 	cancel()
 	close(doneCh)
 	close(errCh)
@@ -380,7 +380,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 	}
 	txnCommitLog.auxData[common.KeyCommitResult] = commitResultStr
 	if !FLAGS_DisableAuxData {
-		log.Println("[DEBUG] SharedLogSetAuxData of commit")
+		// log.Println("[DEBUG] SharedLogSetAuxData of commit")
 		env.setLogAuxData(txnCommitLog.seqNum, common.KeyCommitResult, commitResultStr)
 	}
 	return commitResult, nil
@@ -409,8 +409,7 @@ func (l *ObjectLogEntry) hasCachedObjectView(objName string) bool {
 	if l.LogType == LOG_NormalOp {
 		return true
 	} else if l.LogType == LOG_TxnCommit {
-		key := "v" + objName
-		_, exists := l.auxData[common.KeyHash(key)]
+		_, exists := l.auxData[objectLogTag(common.NameHash(objName))]
 		return exists
 	}
 	return false
@@ -420,22 +419,33 @@ func (l *ObjectLogEntry) loadCachedObjectView(objName string) *ObjectView {
 	if l.auxData == nil {
 		return nil
 	}
+	key := objectLogTag(common.NameHash(objName))
 	if l.LogType == LOG_NormalOp {
 		var gabsData map[string]interface{}
-		if err := json.Unmarshal([]byte(l.auxData[common.KeyHash(objName)]), &gabsData); err != nil {
-			panic(err)
-		}
-		return &ObjectView{
-			name:       objName,
-			nextSeqNum: l.seqNum + 1,
-			contents:   gabs.Wrap(gabsData),
+		if data, exists := l.auxData[key]; exists {
+			if err := json.Unmarshal([]byte(data), &gabsData); err != nil {
+				rawDataStr := fmt.Sprintf("NormalOp %v %+v [", key, l.auxData)
+				for _, i := range []byte(l.auxData[key]) {
+					rawDataStr += fmt.Sprintf("%02X ", i)
+				}
+				rawDataStr += "]"
+				panic(errors.Wrap(err, rawDataStr))
+			}
+			return &ObjectView{
+				name:       objName,
+				nextSeqNum: l.seqNum + 1,
+				contents:   gabs.Wrap(gabsData),
+			}
 		}
 	} else if l.LogType == LOG_TxnCommit {
-		key := "v" + objName
-		if data, exists := l.auxData[common.KeyHash(key)]; exists {
+		if data, exists := l.auxData[key]; exists {
 			var gabsData map[string]interface{}
 			if err := json.Unmarshal([]byte(data), &gabsData); err != nil {
-				panic(err)
+				rawDataStr := fmt.Sprintf("TxnCommit %v %+v [", key, l.auxData)
+				for _, i := range []byte(l.auxData[key]) {
+					rawDataStr += fmt.Sprintf("%02X ", i)
+				}
+				rawDataStr += "]"
 			}
 			return &ObjectView{
 				name:       objName,
@@ -451,21 +461,21 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) []strin
 	if FLAGS_DisableAuxData {
 		return nil
 	}
+	key := objectLogTag(common.NameHash(view.name))
 	// DEBUG
 	keySet := make([]string, 0, 10)
 	if l.LogType == LOG_NormalOp {
 		if l.auxData == nil {
-			log.Println("[DEBUG] SharedLogSetAuxData of syncTo NormalOp")
-			env.setLogAuxData(l.seqNum, common.KeyHash(view.name), view.contents.Data())
-			keySet = append(keySet, "n-"+view.name)
+			// log.Println("[DEBUG] SharedLogSetAuxData of syncTo NormalOp")
+			env.setLogAuxData(l.seqNum, key, view.contents.Data())
+			keySet = append(keySet, view.name)
 		}
 	} else if l.LogType == LOG_TxnCommit {
 		if l.auxData == nil {
 			l.auxData = NewAuxData()
 		}
-		key := common.KeyHash("v" + view.name)
 		if _, exists := l.auxData[key]; !exists {
-			log.Println("[DEBUG] SharedLogSetAuxData of syncTo TxnCommit")
+			// log.Println("[DEBUG] SharedLogSetAuxData of syncTo TxnCommit")
 			env.setLogAuxData(l.seqNum, key, view.contents.Data())
 		}
 	} else {
@@ -517,78 +527,70 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			contents:   gabs.New(),
 		}
 	}
+	// count := 0
+	// seqNums := make([]uint64, 0)
+	// auxCount := 0
+	// auxSeqNums := make([]uint64, 0)
+	// startSeqNum := view.nextSeqNum
 	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, view.nextSeqNum, logIndex, true /*fromCached*/)
-	doneCh := make(chan struct{})
-	errCh := make(chan error)
-	go func(ctx context.Context) {
-		// var view interface{}
-		for {
-			var logEntry *types.LogEntryWithMeta
-			select {
-			case <-ctx.Done():
-				errCh <- ctx.Err()
-				return
-			default:
-				logStreamEntry := logStream.BlockingDequeue()
-				logEntry = logStreamEntry.LogEntry
-				err := logStreamEntry.Err
-				if err != nil {
-					errCh <- ctx.Err()
-					return
-				}
-			}
-			if logEntry == nil {
-				doneCh <- struct{}{}
-				break
-			}
-			objectLog := decodeLogEntry(logEntry)
-			// log.Printf("[DEBUG] %v syncToFuture got seqnum=%016X objName=%v opSet=%v writeSet=%+v",
-			// 	prefix, logEntry.SeqNum, obj.name, objectLog.listCachedObjectView(), objectLog.writeSet)
-			if !objectLog.withinWriteSet(obj.name) {
-				continue
-			}
-			if cachedView := objectLog.loadCachedObjectView(obj.name); cachedView != nil {
-				view = cachedView
-				// log.Printf("[DEBUG] %v syncToFuture Load cached view: seqNum=%016X obj=%s", prefix, objectLog.seqNum, obj.name)
-				continue
-			}
-			if objectLog.LogType == LOG_TxnCommit {
-				if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
-					errCh <- ctx.Err()
-					return
-				} else if !committed {
-					// log.Printf("[DEBUG] %v syncToFuture skip seqnum=%016X due to not committed", prefix, objectLog.seqNum)
-					continue
-				}
-			}
-			// apply view
-			// log.Printf("[DEBUG] %v syncToFuture apply seqnum=%016X", prefix, objectLog.seqNum)
-			if objectLog.seqNum < view.nextSeqNum {
-				log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
-			}
-			view.nextSeqNum = objectLog.seqNum + 1
-			for _, op := range objectLog.Ops {
-				if op.ObjName == obj.name {
-					// log.Printf("[DEBUG] %v syncToFuture apply op=%+v", prefix, op)
-					view.applyWriteOp(op)
-				}
-			}
-			objectLog.cacheObjectView(env, view)
-			// opSet := objectLog.cacheObjectView(env, view)
-			// log.Printf("[DEBUG] %v syncToFuture cache view for seqnum=%016X obj=%s opSet=%v", prefix, objectLog.seqNum, view.name, opSet)
+	for {
+		logStreamEntry := logStream.BlockingDequeue()
+		logEntry := logStreamEntry.LogEntry
+		err := logStreamEntry.Err
+		if err != nil {
+			return err
 		}
-	}(obj.env.faasCtx)
-	select {
-	case <-doneCh:
-		// log.Printf("[DEBUG] %v syncToFuture final view=%+v", prefix, view.contents.Data())
-		// if !refView.Equal(*view) {
-		// 	log.Fatalf("different view: ref=%v current=%v", refView, view)
-		// }
-		obj.view = view
-		return nil
-	case err := <-errCh:
-		return err
+		if logEntry == nil {
+			break
+		}
+		// DEBUG
+		// count++
+		// seqNums = append(seqNums, logEntry.SeqNum)
+
+		objectLog := decodeLogEntry(logEntry)
+		// log.Printf("[DEBUG] %v syncToFuture got seqnum=%016X objName=%v opSet=%v writeSet=%+v",
+		// 	prefix, logEntry.SeqNum, obj.name, objectLog.listCachedObjectView(), objectLog.writeSet)
+		if !objectLog.withinWriteSet(obj.name) {
+			continue
+		}
+		if cachedView := objectLog.loadCachedObjectView(obj.name); cachedView != nil {
+			// DEBUG
+			// auxCount++
+			// auxSeqNums = append(auxSeqNums, logEntry.SeqNum)
+
+			view = cachedView
+			// log.Printf("[DEBUG] %v syncToFuture Load cached view: seqNum=%016X obj=%s", prefix, objectLog.seqNum, obj.name)
+			continue
+		}
+		if objectLog.LogType == LOG_TxnCommit {
+			if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+				return err
+			} else if !committed {
+				// log.Printf("[DEBUG] %v syncToFuture skip seqnum=%016X due to not committed", prefix, objectLog.seqNum)
+				continue
+			}
+		}
+		// apply view
+		// log.Printf("[DEBUG] %v syncToFuture apply seqnum=%016X", prefix, objectLog.seqNum)
+		if objectLog.seqNum < view.nextSeqNum {
+			log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
+		}
+		view.nextSeqNum = objectLog.seqNum + 1
+		for _, op := range objectLog.Ops {
+			if op.ObjName == obj.name {
+				// log.Printf("[DEBUG] %v syncToFuture apply op=%+v", prefix, op)
+				view.applyWriteOp(op)
+			}
+		}
+		objectLog.cacheObjectView(env, view)
+		// opSet := objectLog.cacheObjectView(env, view)
+		// log.Printf("[DEBUG] %v syncToFuture cache view for seqnum=%016X obj=%s opSet=%v", prefix, objectLog.seqNum, view.name, opSet)
 	}
+	obj.view = view
+	// log.Printf("[DEBUG] syncTo obj=%v from=%016X tag=%v nextFrom=%016X count=%v auxCount=%v",
+	// 	obj.name, startSeqNum, tag, view.nextSeqNum, count, auxCount)
+	// log.Printf("[DEBUG] syncTo from=%016X tag=%v count=%v:%v auxCount=%v:%v", startSeqNum, tag, count, seqNums, auxCount, auxSeqNums)
+	return nil
 }
 
 // func (obj *ObjectRef) syncToForward(tailSeqNum uint64) error {
@@ -822,7 +824,7 @@ func (env *envImpl) setLogAuxData(seqNum uint64, key uint64, data interface{}) e
 		// }
 		// return nil
 	}
-	log.Println("[DEBUG] SharedLogSetAuxData overall")
+	// log.Println("[DEBUG] SharedLogSetAuxData overall")
 	err = env.faasEnv.SharedLogSetAuxDataWithShards(env.faasCtx, seqNum, key, compressed)
 	if err != nil {
 		return newRuntimeError(err.Error())

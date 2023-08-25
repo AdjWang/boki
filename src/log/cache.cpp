@@ -379,6 +379,11 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t s
 std::optional<AuxEntry> ShardedLRUCache::GetAuxDataNext(uint64_t tag, uint64_t seqnum) {
     absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     uint64_t result_seqnum;
+    // DEBUG
+    // bool found = aux_index_->FindNext(seqnum, tag, &result_seqnum);
+    // HVLOG_F(1, "ShardedLRUCache::GetAuxDataNext tag={}, seqnum={:016X}, found={}",
+    //             tag, seqnum, found) << aux_index_->Inspect();
+    // if (found) {
     if (aux_index_->FindNext(seqnum, tag, &result_seqnum)) {
         std::optional<AuxEntry> aux_entry = GetAuxDataChecked(result_seqnum, tag);
         DCHECK(aux_entry.has_value());
@@ -386,8 +391,6 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataNext(uint64_t tag, uint64_t s
     } else {
         return std::nullopt;
     }
-    // HVLOG_F(1, "ShardedLRUCache::GetAuxDataNext tag={}, seqnum=0x{:016X}, found={}",
-    //             tag, seqnum, status.IsOK());
 }
 
 // NOTE: MUST be protected by cache_mu_ because modifies aux_index_

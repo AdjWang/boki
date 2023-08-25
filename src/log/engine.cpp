@@ -645,7 +645,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
         const LogEntry& log_entry = cached_log_entry.value();
         DCHECK_EQ(log_entry.metadata.localid, localid);
-        std::optional<AuxEntry> cached_aux_entry;
+        std::optional<AuxEntry> cached_aux_entry = std::nullopt;
         if (query.promised_auxdata.has_value() && seqnum == query.promised_auxdata->metadata.seqnum) {
             cached_aux_entry = query.promised_auxdata;
         } else {
@@ -1014,15 +1014,28 @@ IndexQuery Engine::UpdateQueryWithAux(IndexQuery& query) {
         if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
             DCHECK(query.initial);
             if ((query.flags & IndexQuery::kReadFromCachedFlag) == 0) {
+                // not skipping cached entries
                 return query;
             }
-            HVLOG_F(1, "query kReadNextU flags={:04X}", query.flags);
-            // syncto not including target seqnum
+            uint64_t target_seqnum;
+            if ((query.flags & IndexQuery::kReadLocalIdFlag) != 0) {
+                // use localid as target
+                target_seqnum = kMaxLogSeqNum;
+            } else {
+                // use seqnum as target
+                if (query.query_seqnum == 0) {
+                    return query;
+                }
+                // syncto not including target seqnum
+                target_seqnum = query.query_seqnum - 1;
+            }
             std::optional<AuxEntry> aux_entry =
-                LogCacheGetAuxDataNext(query.user_tag, query.query_start_seqnum);
-            if (aux_entry.has_value() && aux_entry->metadata.seqnum < query.query_seqnum) {
+                LogCacheGetAuxDataPrev(query.user_tag, target_seqnum);
+            if (aux_entry.has_value() && aux_entry->metadata.seqnum >= query.query_start_seqnum) {
                 query.promised_auxdata = aux_entry;
             }
+            // HVLOG_F(1, "query kReadNextU flags={:04X} tag={} seqfrom={:016X} seqnum={:016X} found={}",
+            //             query.flags, query.user_tag, query.query_start_seqnum, query.query_seqnum, query.promised_auxdata.has_value());
         } else {
             HVLOG_F(1, "query kReadPrevAux flags={:04X}", query.flags);
             std::optional<AuxEntry> aux_entry =
