@@ -100,3 +100,11 @@ cd $BASE_DIR/deps/rocksdb && rm -rf build && mkdir -p build && cd build && \
         -DCMAKE_INSTALL_PREFIX=${DEPS_INSTALL_PATH} .. && \
   make -j$(nproc) install && \
   rm -rf $BASE_DIR/deps/rocksdb/build
+
+# Build snappy
+cd $BASE_DIR/deps/snappy && rm -rf build && mkdir -p build && cd build && \
+  cmake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_CXX_STANDARD=11 \
+        -DCMAKE_INSTALL_PREFIX=${DEPS_INSTALL_PATH} \
+        -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF -DSNAPPY_REQUIRE_AVX2=ON .. && \
+  make -j$(nproc) install && \
+  rm -rf $BASE_DIR/deps/snappy/build

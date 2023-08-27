@@ -42,8 +42,12 @@ namespace {
         return fmt::format("2_{:016x}_{:016x}", seqnum, tag);
     }
 
-    inline uint64_t GetSeqNumFromAuxCacheKeyWithIndex(const std::string& key_str) {
-        return std::strtoul(key_str.substr(2, 16).c_str(), nullptr, 16);
+    inline void GetMetaFromAuxCacheKeyWithIndex(const std::string& key_str,
+                                                uint64_t* seqnum, uint64_t* tag) {
+        DCHECK(seqnum != nullptr);
+        DCHECK(tag != nullptr);
+        *seqnum = std::strtoul(key_str.substr(2, 16).c_str(), nullptr, 16);
+        *tag = std::strtoul(key_str.substr(19, 16).c_str(), nullptr, 16);
     }
 
     inline bool IsAuxCacheKeyWithIndex(std::string_view key_str) {
@@ -104,19 +108,9 @@ void AuxIndex::Add(uint64_t seqnum, uint64_t tag) {
     tags_by_seqnum_[seqnum].emplace(tag);
 }
 
-void AuxIndex::Remove(uint64_t seqnum) {
-    // TODO: handle key with tag
-    NOT_IMPLEMENTED();
-
-    // if (!tags_by_seqnum_.contains(seqnum)) {
-    //     return;
-    // }
-    // const absl::btree_set<uint64_t>& user_tags = tags_by_seqnum_.at(seqnum);
-    // for (uint64_t user_tag : user_tags) {
-    //     DCHECK(seqnums_by_tag_.contains(user_tag));
-    //     seqnums_by_tag_.erase(user_tag);
-    // }
-    // tags_by_seqnum_.erase(seqnum);
+void AuxIndex::Remove(uint64_t seqnum, uint64_t tag) {
+    seqnums_by_tag_[tag].erase(seqnum);
+    tags_by_seqnum_[seqnum].erase(tag);
 }
 
 bool AuxIndex::Contains(uint64_t seqnum) const {
@@ -166,7 +160,7 @@ bool AuxIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
 bool AuxIndex::FindPrev(const absl::btree_set<uint64_t>& seqnums,
                           uint64_t query_seqnum,
                           uint64_t* result_seqnum) const {
-    if (tags_by_seqnum_.empty()) {
+    if (seqnums.empty()) {
         return false;
     }
     if (query_seqnum == kMaxLogSeqNum) {
@@ -185,7 +179,7 @@ bool AuxIndex::FindPrev(const absl::btree_set<uint64_t>& seqnums,
 bool AuxIndex::FindNext(const absl::btree_set<uint64_t>& seqnums,
                           uint64_t query_seqnum,
                           uint64_t* result_seqnum) const {
-    if (tags_by_seqnum_.empty()) {
+    if (seqnums.empty()) {
         return false;
     }
     auto iter = seqnums.lower_bound(query_seqnum);
@@ -279,7 +273,7 @@ void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
                         seqnum, tag);
             // update data
             std::string idx_key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
-            dbm_->Set(idx_key_str, aux_data.dump(), /* overwrite= */ true);
+            dbm_->Set(idx_key_str, aux_data.get<std::string>(), /* overwrite= */ true);
         }
         // update index for potential removes, add twice is ok
         UpdateCacheIndex();
@@ -360,11 +354,11 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t s
     absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     uint64_t result_seqnum;
     // DEBUG
-    // {
-    //     bool found = aux_index_->FindPrev(seqnum, tag, &result_seqnum);
-    //     HVLOG_F(1, "ShardedLRUCache::GetAuxDataPrev tag={}, seqnum={:016X}, found={}:{:016X}\n{}",
-    //                 tag, seqnum, found, result_seqnum, aux_index_->Inspect());
-    // }
+    {
+        bool found = aux_index_->FindPrev(seqnum, tag, &result_seqnum);
+        HVLOG_F(1, "ShardedLRUCache::GetAuxDataPrev tag={}, seqnum={:016X}, found={}:{:016X}\n{}",
+                    tag, seqnum, found, result_seqnum, aux_index_->Inspect());
+    }
     if (aux_index_->FindPrev(seqnum, tag, &result_seqnum)) {
         std::optional<AuxEntry> aux_entry = GetAuxDataChecked(result_seqnum, tag);
         DCHECK(aux_entry.has_value());
@@ -406,18 +400,20 @@ void ShardedLRUCache::UpdateCacheIndex() {
         if (!IsAuxCacheKeyWithIndex(seqnum_key)) {
             continue;
         }
-        uint64_t seqnum = GetSeqNumFromAuxCacheKeyWithIndex(seqnum_key);
+        uint64_t seqnum, tag;
+        GetMetaFromAuxCacheKeyWithIndex(seqnum_key, &seqnum, &tag);
         if (op_type == tkrzw::CacheDBMUpdateLogger::OpType::OP_SET) {
             // should have been added when putting new aux entries
             DCHECK(aux_index_->Contains(seqnum))
                 << fmt::format("aux index not contains seqnum={:016X} to set", seqnum)
                 << aux_index_->Inspect();
         } else if (op_type == tkrzw::CacheDBMUpdateLogger::OpType::OP_REMOVE) {
+            HVLOG_F(1, "ShardedLRUCache::UpdateCacheIndex OP_REMOVE {}", seqnum_key);
             // removes must had been added
             DCHECK(aux_index_->Contains(seqnum))
                 << fmt::format("aux index not contains seqnum={:016X} to remove", seqnum)
                 << aux_index_->Inspect();
-            aux_index_->Remove(seqnum);
+            aux_index_->Remove(seqnum, tag);
         } else if (op_type == tkrzw::CacheDBMUpdateLogger::OpType::OP_CLEAR) {
             NOT_IMPLEMENTED();
         } else {

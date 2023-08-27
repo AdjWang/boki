@@ -15,6 +15,7 @@ import (
 
 	gabs "github.com/Jeffail/gabs/v2"
 	redis "github.com/go-redis/redis/v8"
+	"github.com/pkg/errors"
 )
 
 var FLAGS_DisableAuxData bool = false
@@ -74,12 +75,12 @@ func (l *ObjectLogEntry) fillWriteSet() {
 }
 
 func decodeLogEntry(logEntry *types.LogEntry) *ObjectLogEntry {
-	reader, err := common.DecompressReader(logEntry.Data)
+	rawObjectLog, err := common.DecompressData(logEntry.Data)
 	if err != nil {
 		panic(err)
 	}
 	objectLog := &ObjectLogEntry{}
-	err = json.NewDecoder(reader).Decode(objectLog)
+	err = json.Unmarshal(rawObjectLog, objectLog)
 	if err != nil {
 		panic(err)
 	}
@@ -102,15 +103,16 @@ func decodeLogEntry(logEntry *types.LogEntry) *ObjectLogEntry {
 		if err := json.Unmarshal(auxData, &rawAuxData); err != nil {
 			panic(err)
 		}
-		shardedAuxData := rawAuxData[0]
-		reader, err := common.DecompressReader([]byte(shardedAuxData))
+		shardedAuxData := rawAuxData[0 /*defaultKey*/]
+		decompressedAuxData, err := common.DecompressData([]byte(shardedAuxData))
 		if err != nil {
 			panic(err)
 		}
 		var contents map[string]interface{}
-		err = json.NewDecoder(reader).Decode(&contents)
+		err = json.Unmarshal(decompressedAuxData, &contents)
 		if err != nil {
-			panic(err)
+			// DEBUG: disabled compress
+			panic(errors.Wrapf(err, "json decode [%v:%v:%+v:%v]", shardedAuxData, []byte(shardedAuxData), rawAuxData, auxData))
 		}
 		objectLog.auxData = contents
 	}

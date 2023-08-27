@@ -25,7 +25,7 @@ PROTOC = LD_LIBRARY_PATH=./deps/out/lib/ ./deps/out/bin/protoc
 ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
 		| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
 LINK_FLAGS = -Ldeps/out/lib \
-	-Wl,-Bstatic -luv_a -lhttp_parser -lnghttp2 \
+	-Wl,-Bstatic -luv_a -lhttp_parser -lnghttp2 -lsnappy \
 	-luring -lprotobuf-lite -lrocksdb -ltkrzw -lzookeeper_st \
 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
 	-lzstd -ljemalloc \
@@ -41,7 +41,7 @@ DLINK_FLAGS =
 DISABLE_STAT = 1
 DEBUG_BUILD = 0
 BUILD_BENCH = 0
-FORCE_DCHECK = 0
+FORCE_DCHECK = 1
 
 ifneq ("$(wildcard config.mk)","")
 include config.mk

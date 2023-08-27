@@ -508,8 +508,10 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 UNREACHABLE();
             }
             if (aux_entry_data.size() > 0) {
-                auto aux_data = STRING_AS_SPAN(aux_entry.data);
-                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                std::string compressed_aux_data;
+                snappy::Compress(aux_entry.data.data(), aux_entry.data.size(), &compressed_aux_data);
+                auto aux_data = STRING_AS_SPAN(compressed_aux_data);
+                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(compressed_aux_data.size());
                 MessageHelper::AppendInlineData(&response, aux_data);
             }
             SendLocalOpWithResponse(
@@ -654,17 +656,19 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         std::span<const char> aux_data;
         if (cached_aux_entry.has_value()) {
             const std::string& cached_aux_data(cached_aux_entry->data);
+            std::string compressed_aux_data;
+            snappy::Compress(cached_aux_data.data(), cached_aux_data.size(), &compressed_aux_data);
             size_t full_size = log_entry.data.size()
                                 + log_entry.user_tags.size() * sizeof(uint64_t)
-                                + cached_aux_data.size();
+                                + compressed_aux_data.size();
             if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
-                aux_data = STRING_AS_SPAN(cached_aux_data);
+                aux_data = STRING_AS_SPAN(compressed_aux_data);
             } else {
                 HLOG_F(WARNING, "Inline buffer of message not large enough "
                                 "for auxiliary data of log (seqnum {}): "
-                                "log_size={}, num_tags={} aux_data_size={}",
+                                "log_size={} num_tags={} compressed_aux_data_size={}",
                         bits::HexStr0x(seqnum), log_entry.data.size(),
-                        log_entry.user_tags.size(), cached_aux_data.size());
+                        log_entry.user_tags.size(), compressed_aux_data.size());
             }
         }
         if (local_request) {

@@ -279,8 +279,12 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 	}
 	if txnCommitLog.auxData != nil {
 		if v, exists := txnCommitLog.auxData[common.KeyCommitResult]; exists {
+			commitResult, err := common.DecompressData([]byte(v))
+			if err != nil {
+				panic(err)
+			}
 			// use json ["t"]
-			return v == "\"t\"", nil
+			return string(commitResult) == "\"t\"", nil
 		}
 	} else {
 		txnCommitLog.auxData = NewAuxData()
@@ -423,7 +427,11 @@ func (l *ObjectLogEntry) loadCachedObjectView(objName string) *ObjectView {
 	if l.LogType == LOG_NormalOp {
 		var gabsData map[string]interface{}
 		if data, exists := l.auxData[key]; exists {
-			if err := json.Unmarshal([]byte(data), &gabsData); err != nil {
+			decompressedData, err := common.DecompressData([]byte(data))
+			if err != nil {
+				panic(err)
+			}
+			if err := json.Unmarshal(decompressedData, &gabsData); err != nil {
 				rawDataStr := fmt.Sprintf("NormalOp %v %+v [", key, l.auxData)
 				for _, i := range []byte(l.auxData[key]) {
 					rawDataStr += fmt.Sprintf("%02X ", i)
@@ -440,7 +448,11 @@ func (l *ObjectLogEntry) loadCachedObjectView(objName string) *ObjectView {
 	} else if l.LogType == LOG_TxnCommit {
 		if data, exists := l.auxData[key]; exists {
 			var gabsData map[string]interface{}
-			if err := json.Unmarshal([]byte(data), &gabsData); err != nil {
+			decompressedData, err := common.DecompressData([]byte(data))
+			if err != nil {
+				panic(err)
+			}
+			if err := json.Unmarshal(decompressedData, &gabsData); err != nil {
 				rawDataStr := fmt.Sprintf("TxnCommit %v %+v [", key, l.auxData)
 				for _, i := range []byte(l.auxData[key]) {
 					rawDataStr += fmt.Sprintf("%02X ", i)
@@ -590,6 +602,8 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 	// log.Printf("[DEBUG] syncTo obj=%v from=%016X tag=%v nextFrom=%016X count=%v auxCount=%v",
 	// 	obj.name, startSeqNum, tag, view.nextSeqNum, count, auxCount)
 	// log.Printf("[DEBUG] syncTo from=%016X tag=%v count=%v:%v auxCount=%v:%v", startSeqNum, tag, count, seqNums, auxCount, auxSeqNums)
+
+	// DEBUG
 	return nil
 }
 

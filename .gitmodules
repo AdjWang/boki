@@ -40,6 +40,10 @@
 [submodule "deps/zstd"]
 	path = deps/zstd
 	url = https://github.com/facebook/zstd.git
+# modified to report REMOVE in LRUCache
 [submodule "deps/tkrzw"]
 	path = deps/tkrzw
-	url = https://github.com/estraier/tkrzw.git
+	url = https://github.com/AdjWang/tkrzw.git
+[submodule "deps/snappy"]
+	path = deps/snappy
+	url = https://github.com/google/snappy.git

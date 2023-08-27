@@ -93,7 +93,7 @@ public:
     virtual ~AuxIndex() {}
 
     void Add(uint64_t seqnum, uint64_t tag);
-    void Remove(uint64_t seqnum);
+    void Remove(uint64_t seqnum, uint64_t tag);
     bool Contains(uint64_t seqnum) const;
     bool Contains(uint64_t seqnum, uint64_t tag) const;
     UserTagVec GetTags(uint64_t seqnum) const;

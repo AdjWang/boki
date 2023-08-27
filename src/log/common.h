@@ -5,6 +5,7 @@
 
 __BEGIN_THIRD_PARTY_HEADERS
 #include "proto/shared_log.pb.h"
+#include "snappy.h"
 __END_THIRD_PARTY_HEADERS
 
 namespace faas {

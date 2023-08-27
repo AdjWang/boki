@@ -1,28 +1,19 @@
 package common
 
-import (
-	"bytes"
-	"io"
-)
-
 // DEBUG
 func CompressData(uncompressed []byte) []byte {
-	// return snappy.Encode(nil, uncompressed)
+	// compressed := snappy.Encode(nil, uncompressed)
+	// encoded := base64.StdEncoding.EncodeToString(compressed)
+	// return []byte(encoded)
 	return uncompressed
 }
 
 // DEBUG
 func DecompressData(compressed []byte) ([]byte, error) {
-	// return snappy.Decode(nil, compressed)
-	return compressed, nil
-}
-
-// DEBUG
-func DecompressReader(compressed []byte) (io.Reader, error) {
-	// uncompressed, err := snappy.Decode(nil, compressed)
+	// decoded, err := base64.StdEncoding.DecodeString(string(compressed))
 	// if err != nil {
 	// 	return nil, err
 	// }
-	// return bytes.NewReader(uncompressed), nil
-	return bytes.NewReader(compressed), nil
+	// return snappy.Decode(nil, decoded)
+	return compressed, nil
 }
