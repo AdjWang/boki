@@ -51,6 +51,18 @@ func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, 
 	} else {
 		return nil, err
 	}
+
+	// if future, err := env.appendTxnBeginLog(); err == nil {
+	// 	env.txnCtx = &txnContext{
+	// 		active:   true,
+	// 		readonly: true,
+	// 		idFuture: future,
+	// 		ops:      nil,
+	// 	}
+	// 	return env, nil
+	// } else {
+	// 	return nil, err
+	// }
 }
 
 func (env *envImpl) TxnAbort() error {

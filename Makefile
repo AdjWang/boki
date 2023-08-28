@@ -41,7 +41,7 @@ DLINK_FLAGS =
 DISABLE_STAT = 1
 DEBUG_BUILD = 0
 BUILD_BENCH = 0
-FORCE_DCHECK = 1
+FORCE_DCHECK = 0
 
 ifneq ("$(wildcard config.mk)","")
 include config.mk

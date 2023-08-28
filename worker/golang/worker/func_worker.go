@@ -806,7 +806,7 @@ func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
 		var err error
 		auxData, err = snappy.Decode(nil, rawAuxData)
 		if err != nil {
-			panic(errors.Wrapf(err, "snappy decode failed: %v", rawAuxData))
+			panic(errors.Wrapf(err, "snappy decode failed: %v:[%v]", rawAuxData, string(rawAuxData)))
 		}
 	}
 	return &types.LogEntry{
