@@ -41,6 +41,7 @@ func init() {
 
 const (
 	LOG_NormalOp = iota
+	LOG_NormalOpSync
 	LOG_TxnBegin
 	LOG_TxnAbort
 	LOG_TxnCommit
@@ -533,6 +534,24 @@ func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
 	return nil
 }
 
+func (obj *ObjectRef) appendNormalOpSyncLog() (uint64, error) {
+	logEntry := &ObjectLogEntry{
+		LogType: LOG_NormalOpSync,
+	}
+	encoded, err := json.Marshal(logEntry)
+	if err != nil {
+		panic(err)
+	}
+	tags := []uint64{common.ObjectIdLogTag}
+	seqNum, err := obj.env.faasEnv.SharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
+	if err != nil {
+		return 0, newRuntimeError(err.Error())
+	} else {
+		// log.Printf("[DEBUG] Append OpSync log: seqNum=%#016x", seqNum)
+		return seqNum, nil
+	}
+}
+
 func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (uint64 /* seqNum */, error) {
 	if len(ops) == 0 {
 		panic("Empty Ops for NormalOp log")
@@ -564,7 +583,7 @@ func (env *envImpl) appendTxnBeginLog() (uint64 /* seqNum */, error) {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{common.TxnMetaLogTag}
+	tags := []uint64{common.TxnIdLogTag}
 	seqNum, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
 	if err != nil {
 		return 0, newRuntimeError(err.Error())
@@ -588,9 +607,10 @@ func (env *envImpl) setLogAuxData(seqNum uint64, data interface{}) error {
 		}
 		return nil
 	}
-	// log.Println("[DEBUG] SharedLogSetAuxData overall")
 	err = env.faasEnv.SharedLogSetAuxData(env.faasCtx, seqNum, compressed)
 	if err != nil {
+		// DEBUG
+		log.Println(string(encoded))
 		return newRuntimeError(err.Error())
 	} else {
 		// log.Printf("[DEBUG] Set AuxData for log (seqNum=%#016x): contents=%s", seqNum, string(encoded))

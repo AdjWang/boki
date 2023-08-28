@@ -33,20 +33,36 @@ func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 
 func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 	env := CreateEnv(ctx, faasEnv).(*envImpl)
-	if tail, err := faasEnv.SharedLogCheckTail(ctx, 0 /* tag */); err == nil {
-		seqNum := uint64(0)
-		if tail != nil {
-			seqNum = tail.SeqNum + 1
+	if env.consistency == SEQUENTIAL_CONSISTENCY {
+		if tail, err := faasEnv.SharedLogCheckTail(ctx, 0 /* tag */); err == nil {
+			seqNum := uint64(0)
+			if tail != nil {
+				seqNum = tail.SeqNum + 1
+			}
+			env.txnCtx = &txnContext{
+				active:   true,
+				readonly: true,
+				id:       seqNum,
+				ops:      nil,
+			}
+			return env, nil
+		} else {
+			return nil, err
 		}
-		env.txnCtx = &txnContext{
-			active:   true,
-			readonly: true,
-			id:       seqNum,
-			ops:      nil,
+	} else if env.consistency == STRONG_CONSISTENCY {
+		if seqNum, err := env.appendTxnBeginLog(); err == nil {
+			env.txnCtx = &txnContext{
+				active:   true,
+				readonly: true,
+				id:       seqNum,
+				ops:      nil,
+			}
+			return env, nil
+		} else {
+			return nil, err
 		}
-		return env, nil
 	} else {
-		return nil, err
+		panic("unreachable")
 	}
 }
 
@@ -68,7 +84,7 @@ func (env *envImpl) TxnAbort() error {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{common.TxnMetaLogTag, txnHistoryLogTag(ctx.id)}
+	tags := []uint64{common.TxnIdLogTag, txnHistoryLogTag(ctx.id)}
 	if _, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData(encoded)); err == nil {
 		return nil
 	} else {
@@ -96,7 +112,7 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 	if err != nil {
 		panic(err)
 	}
-	tags := []uint64{common.TxnMetaLogTag, txnHistoryLogTag(ctx.id)}
+	tags := []uint64{common.TxnIdLogTag, txnHistoryLogTag(ctx.id)}
 	for _, op := range ctx.ops {
 		tags = append(tags, objectLogTag(common.NameHash(op.ObjName)))
 	}

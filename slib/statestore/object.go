@@ -53,23 +53,35 @@ func (objView *ObjectView) Clone() *ObjectView {
 	}
 }
 
-func (obj *ObjectRef) EnsureView() error {
-	if obj.view == nil {
-		tailSeqNum := protocol.MaxLogSeqnum
-		if obj.txnCtx != nil {
-			tailSeqNum = obj.txnCtx.id
+func (obj *ObjectRef) ensureView() error {
+	if obj.env.consistency == SEQUENTIAL_CONSISTENCY {
+		if obj.view == nil {
+			tailSeqNum := protocol.MaxLogSeqnum
+			if obj.txnCtx != nil {
+				tailSeqNum = obj.txnCtx.id
+			}
+			return obj.syncTo(tailSeqNum)
+		} else {
+			return nil
 		}
-		return obj.syncTo(tailSeqNum)
+	} else if obj.env.consistency == STRONG_CONSISTENCY {
+		if obj.txnCtx != nil {
+			if obj.view == nil {
+				tailSeqNum := obj.txnCtx.id
+				return obj.syncTo(tailSeqNum)
+			} else {
+				return nil
+			}
+		} else {
+			seqNum, err := obj.appendNormalOpSyncLog()
+			if err != nil {
+				return err
+			}
+			return obj.syncTo(seqNum)
+		}
 	} else {
-		return nil
+		panic("unreachable")
 	}
-}
-
-func (obj *ObjectRef) Sync() error {
-	if obj.txnCtx != nil {
-		panic("Cannot Sync() objects within a transaction context")
-	}
-	return obj.syncTo(protocol.MaxLogSeqnum)
 }
 
 func (obj *ObjectRef) Get(path string) (Value, error) {
@@ -79,7 +91,7 @@ func (obj *ObjectRef) Get(path string) (Value, error) {
 	if obj.txnCtx != nil && !obj.txnCtx.active {
 		panic("Cannot call Get within inactive transaction!")
 	}
-	if err := obj.EnsureView(); err != nil {
+	if err := obj.ensureView(); err != nil {
 		return NullValue(), err
 	}
 	resolved := obj.view.contents.Path(path)

@@ -73,28 +73,37 @@ func (objView *ObjectView) Clone() *ObjectView {
 }
 
 func (obj *ObjectRef) ensureView() error {
-	if obj.view == nil {
-		tailLogIndex := types.LogEntryIndex{
-			LocalId: protocol.InvalidLogLocalId,
-			SeqNum:  protocol.MaxLogSeqnum,
+	if obj.env.consistency == SEQUENTIAL_CONSISTENCY {
+		if obj.view == nil {
+			tailLogIndex := types.LogEntryIndex{
+				LocalId: protocol.InvalidLogLocalId,
+				SeqNum:  protocol.MaxLogSeqnum,
+			}
+			if obj.txnCtx != nil {
+				tailLogIndex = obj.txnCtx.idFuture.GetLogEntryIndex()
+			}
+			return obj.syncTo(tailLogIndex)
+		} else {
+			return nil
 		}
+	} else if obj.env.consistency == STRONG_CONSISTENCY {
 		if obj.txnCtx != nil {
-			tailLogIndex = obj.txnCtx.idFuture.GetLogEntryIndex()
+			if obj.view == nil {
+				tailLogIndex := obj.txnCtx.idFuture.GetLogEntryIndex()
+				return obj.syncTo(tailLogIndex)
+			} else {
+				return nil
+			}
+		} else {
+			future, err := obj.appendNormalOpSyncLog()
+			if err != nil {
+				return err
+			}
+			return obj.syncTo(future.GetLogEntryIndex())
 		}
-		return obj.syncTo(tailLogIndex)
 	} else {
-		return nil
+		panic("unreachable")
 	}
-}
-
-func (obj *ObjectRef) Sync() error {
-	if obj.txnCtx != nil {
-		panic("Cannot Sync() objects within a transaction context")
-	}
-	return obj.syncTo(types.LogEntryIndex{
-		LocalId: protocol.InvalidLogLocalId,
-		SeqNum:  protocol.MaxLogSeqnum,
-	})
 }
 
 func (obj *ObjectRef) Get(path string) (Value, error) {

@@ -13,7 +13,6 @@ import (
 type txnContext struct {
 	active   bool
 	readonly bool
-	// id       uint64 // TxnId is the seqnum of TxnBegin log
 	idFuture types.Future[uint64]
 	ops      []*WriteOp
 }
@@ -35,34 +34,38 @@ func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 
 func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 	env := CreateEnv(ctx, faasEnv).(*envImpl)
-	if tail, err := faasEnv.AsyncSharedLogCheckTail(ctx, 0 /* tag */); err == nil {
-		seqNum := uint64(0)
-		if tail != nil {
-			seqNum = tail.SeqNum + 1
+	if env.consistency == SEQUENTIAL_CONSISTENCY {
+		if tail, err := faasEnv.AsyncSharedLogCheckTail(ctx, 0 /* tag */); err == nil {
+			seqNum := uint64(0)
+			if tail != nil {
+				seqNum = tail.SeqNum + 1
+			}
+			env.txnCtx = &txnContext{
+				active:   true,
+				readonly: true,
+				idFuture: types.NewDummyFuture(tail.LocalId, tail.SeqNum,
+					func() (uint64, error) { return seqNum, nil }),
+				ops: nil,
+			}
+			return env, nil
+		} else {
+			return nil, err
 		}
-		env.txnCtx = &txnContext{
-			active:   true,
-			readonly: true,
-			idFuture: types.NewDummyFuture(tail.LocalId, tail.SeqNum,
-				func() (uint64, error) { return seqNum, nil }),
-			ops: nil,
+	} else if env.consistency == STRONG_CONSISTENCY {
+		if future, err := env.appendTxnBeginLog(); err == nil {
+			env.txnCtx = &txnContext{
+				active:   true,
+				readonly: true,
+				idFuture: future,
+				ops:      nil,
+			}
+			return env, nil
+		} else {
+			return nil, err
 		}
-		return env, nil
 	} else {
-		return nil, err
+		panic("unreachable")
 	}
-
-	// if future, err := env.appendTxnBeginLog(); err == nil {
-	// 	env.txnCtx = &txnContext{
-	// 		active:   true,
-	// 		readonly: true,
-	// 		idFuture: future,
-	// 		ops:      nil,
-	// 	}
-	// 	return env, nil
-	// } else {
-	// 	return nil, err
-	// }
 }
 
 func (env *envImpl) TxnAbort() error {
@@ -88,7 +91,7 @@ func (env *envImpl) TxnAbort() error {
 		panic(err)
 	}
 	tags := []types.Tag{
-		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
+		{StreamType: common.FsmType_TxnIdLog, StreamId: common.TxnIdLogTag},
 		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(txnId)},
 	}
 	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.idFuture.GetLocalId()}); err == nil {
@@ -124,7 +127,7 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 		panic(err)
 	}
 	tags := []types.Tag{
-		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
+		{StreamType: common.FsmType_TxnIdLog, StreamId: common.TxnIdLogTag},
 		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(txnId)},
 	}
 	for _, op := range ctx.ops {

@@ -510,9 +510,22 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             if (aux_entry_data.size() > 0) {
                 std::string compressed_aux_data;
                 snappy::Compress(aux_entry.data.data(), aux_entry.data.size(), &compressed_aux_data);
-                auto aux_data = STRING_AS_SPAN(compressed_aux_data);
-                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(compressed_aux_data.size());
-                MessageHelper::AppendInlineData(&response, aux_data);
+                size_t full_size = log_data.size()
+                                    + user_tags.size() * sizeof(uint64_t)
+                                    + compressed_aux_data.size();
+                if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
+                    auto aux_data = STRING_AS_SPAN(compressed_aux_data);
+                    response.log_aux_data_size = gsl::narrow_cast<uint16_t>(compressed_aux_data.size());
+                    MessageHelper::AppendInlineData(&response, aux_data);
+                } else {
+                    // DEBUG
+                    HLOG_F(WARNING, "{}", aux_entry.data);
+                    HLOG_F(WARNING, "Inline buffer of message not large enough "
+                                    "for auxiliary data of log (seqnum {}): "
+                                    "log_size={} num_tags={} compressed_aux_data_size={}",
+                            bits::HexStr0x(seqnum), log_data.size(),
+                            user_tags.size(), compressed_aux_data.size());
+                }
             }
             SendLocalOpWithResponse(
                 op, &response, message.user_metalog_progress,
@@ -664,6 +677,8 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
                 aux_data = STRING_AS_SPAN(compressed_aux_data);
             } else {
+                // DEBUG
+                HLOG_F(WARNING, "{}", cached_aux_data);
                 HLOG_F(WARNING, "Inline buffer of message not large enough "
                                 "for auxiliary data of log (seqnum {}): "
                                 "log_size={} num_tags={} compressed_aux_data_size={}",

@@ -40,6 +40,7 @@ func init() {
 
 const (
 	LOG_NormalOp = iota
+	LOG_NormalOpSync
 	LOG_TxnBegin
 	LOG_TxnAbort
 	LOG_TxnCommit
@@ -401,6 +402,25 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 	return nil
 }
 
+func (obj *ObjectRef) appendNormalOpSyncLog() (types.Future[uint64], error) {
+	logEntry := &ObjectLogEntry{
+		LogType: LOG_NormalOpSync,
+	}
+	encoded, err := json.Marshal(logEntry)
+	if err != nil {
+		panic(err)
+	}
+	tags := []types.Tag{
+		{StreamType: common.FsmType_ObjectIdLog, StreamId: common.ObjectIdLogTag},
+	}
+	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
+	if err != nil {
+		return nil, newRuntimeError(err.Error())
+	} else {
+		return future, nil
+	}
+}
+
 func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (types.Future[uint64], error) {
 	if len(ops) == 0 {
 		panic("Empty Ops for NormalOp log")
@@ -435,7 +455,7 @@ func (env *envImpl) appendTxnBeginLog() (types.Future[uint64], error) {
 		panic(err)
 	}
 	tags := []types.Tag{
-		{StreamType: common.FsmType_TxnMetaLog, StreamId: common.TxnMetaLogTag},
+		{StreamType: common.FsmType_TxnIdLog, StreamId: common.TxnIdLogTag},
 	}
 	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
 	if err != nil {

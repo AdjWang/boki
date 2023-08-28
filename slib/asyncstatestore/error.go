@@ -43,7 +43,7 @@ func (e *Error) Error() string {
 }
 
 func newRuntimeError(message string) error {
-	log.Fatalf("[FATAL] RuntimeError: %s", message)
+	log.Fatalf("[FATAL] RuntimeError: %s\n%s", message, string(debug.Stack()))
 	return &Error{code: ERROR_Runtime, message: message, callstack: string(debug.Stack())}
 }
 
