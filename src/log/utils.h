@@ -5,6 +5,11 @@
 #include "log/view_watcher.h"
 #include "utils/lockable_ptr.h"
 
+__BEGIN_THIRD_PARTY_HEADERS
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
+__END_THIRD_PARTY_HEADERS
+
 namespace faas {
 namespace log_utils {
 
@@ -96,11 +101,21 @@ void PopulateMetaDataToMessage(const log::LogEntryProto& log_entry,
                                protocol::SharedLogMessage* message);
 
 // encode/decode AuxMetaData+AuxEntry
+namespace serializable {
+struct AuxMetaData {
+    uint64_t seqnum;
+    uint64_t data_size;
+};
+// struct AuxEntry {
+//     AuxMetaData metadata;
+//     std::string data;
+// };
+}
 inline std::string EncodeAuxEntry(const log::AuxEntry& aux_entry) {
     uint64_t seqnum = aux_entry.metadata.seqnum;
-    std::string aux_data = aux_entry.data;
+    std::string aux_data = aux_entry.data.dump();
 
-    size_t total_size = aux_data.size() + sizeof(log::AuxMetaData);
+    size_t total_size = aux_data.size() + sizeof(serializable::AuxMetaData);
     std::string encoded;
     encoded.resize(total_size);
     char* ptr = encoded.data();
@@ -109,24 +124,53 @@ inline std::string EncodeAuxEntry(const log::AuxEntry& aux_entry) {
     memcpy(ptr, aux_data.data(), aux_data.size());
     ptr += aux_data.size();
 
-    log::AuxMetaData aux_metadata = {
+    serializable::AuxMetaData aux_metadata = {
         .seqnum = seqnum,
         .data_size = aux_data.size(),
     };
-    memcpy(ptr, &aux_metadata, sizeof(log::AuxMetaData));
+    memcpy(ptr, &aux_metadata, sizeof(serializable::AuxMetaData));
     return encoded;
 }
 inline void DecodeAuxEntry(std::string encoded, log::AuxEntry* aux_entry) {
-    DCHECK_GT(encoded.size(), sizeof(log::AuxMetaData));
-    log::AuxMetaData& metadata = aux_entry->metadata;
+    DCHECK_GT(encoded.size(), sizeof(serializable::AuxMetaData));
+    serializable::AuxMetaData metadata;
     memcpy(&metadata,
-           encoded.data() + encoded.size() - sizeof(log::AuxMetaData),
-           sizeof(log::AuxMetaData));
+           encoded.data() + encoded.size() - sizeof(serializable::AuxMetaData),
+           sizeof(serializable::AuxMetaData));
     size_t total_size = metadata.data_size
-                      + sizeof(log::AuxMetaData);
+                      + sizeof(serializable::AuxMetaData);
     DCHECK_EQ(total_size, encoded.size());
     encoded.resize(metadata.data_size);
-    aux_entry->data = std::move(encoded);
+    DCHECK(aux_entry != nullptr);
+    log::AuxMetaData aux_metadata = {
+        .seqnum = metadata.seqnum,
+    };
+    aux_entry->metadata = aux_metadata;
+    try {
+        aux_entry->data = json::parse(encoded);
+    } catch (const json::parse_error& e) {
+        LOG(ERROR) << "Failed to parse json: " << e.what() << " " << encoded;
+    }
+}
+inline void UpdateTagSet(log::AuxEntry* log_entry, const log::UserTagVec& tags) {
+    if (tags.size() == 0) {
+        // all tags are returned
+        return;
+    }
+    DCHECK(log_entry != nullptr);
+    json data = log_entry->data;
+    if (data.empty()) {
+        return;
+    }
+    json result;
+    for (uint64_t tag : tags) {
+        std::string tag_str = fmt::format("{}", tag);
+        const auto& it = data.find(tag_str);
+        if (it.key() == tag_str) {
+            result[tag_str] = it.value();
+        }
+    }
+    log_entry->data = result;
 }
 
 // encode/decode LogMetaData+LogEntry 

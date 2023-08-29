@@ -12,7 +12,7 @@ COMPILE_FLAGS = -std=c++17 -march=haswell -D__FAAS_SRC \
 # Additional release-specific flags
 RCOMPILE_FLAGS = -DNDEBUG -O3
 # Additional debug-specific flags
-DCOMPILE_FLAGS = -DDEBUG -g
+DCOMPILE_FLAGS = -DDEBUG -g -fstack-protector -fstack-check
 # Add additional include paths
 INCLUDES = -I$(SRC_PATH) -I./include -I./deps/out/include \
 	-I./deps/fmt/include \
@@ -41,7 +41,7 @@ DLINK_FLAGS =
 DISABLE_STAT = 1
 DEBUG_BUILD = 0
 BUILD_BENCH = 0
-FORCE_DCHECK = 0
+FORCE_DCHECK = 1
 
 ifneq ("$(wildcard config.mk)","")
 include config.mk

@@ -181,7 +181,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 		logStream := env.faasEnv.AsyncSharedLogReadNextUntil(env.faasCtx, tag, txnCommitLog.TxnId, types.LogEntryIndex{
 			LocalId: txnCommitLog.localId,
 			SeqNum:  txnCommitLog.seqNum,
-		}, false /*fromCached*/)
+		}, types.ReadOptions{FromCached: false, AuxTags: []uint64{common.KeyCommitResult}})
 		go func(ctx context.Context) {
 			opCommitResult := true
 			for {
@@ -360,7 +360,8 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			contents:   gabs.New(),
 		}
 	}
-	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, view.nextSeqNum, logIndex, true /*fromCached*/)
+	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, view.nextSeqNum, logIndex,
+		types.ReadOptions{FromCached: true, AuxTags: []uint64{tag, common.KeyCommitResult}})
 	for {
 		logStreamEntry := logStream.BlockingDequeue()
 		logEntry := logStreamEntry.LogEntry

@@ -465,6 +465,30 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
 #undef IGNORE_IF_FROM_PAST_VIEW
 
+static std::string GetAuxDataToReturn(log::AuxEntry& aux_entry,
+                                      std::optional<UserTagVec> query_tag_set=std::nullopt) {
+    if (query_tag_set.has_value()) {
+        log_utils::UpdateTagSet(&aux_entry, query_tag_set.value());
+    }
+    if (aux_entry.data.empty()) {
+        return "";
+    }
+    const std::string& cached_aux_data(aux_entry.data.dump());
+    // std::string compressed_aux_data;
+    // snappy::Compress(cached_aux_data.data(), cached_aux_data.size(), &compressed_aux_data);
+    // return compressed_aux_data;
+    return cached_aux_data;
+}
+// DEBUG
+static std::string VecToString(const UserTagVec& vec) {
+    std::string result("[");
+    for (uint64_t tag : vec) {
+        result.append(fmt::format("{} ", tag));
+    }
+    result.append("]");
+    return result;
+}
+
 void Engine::OnRecvResponse(const SharedLogMessage& message,
                             std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::RESPONSE);
@@ -508,23 +532,26 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 UNREACHABLE();
             }
             if (aux_entry_data.size() > 0) {
-                std::string compressed_aux_data;
-                snappy::Compress(aux_entry.data.data(), aux_entry.data.size(), &compressed_aux_data);
+                const std::string& cached_aux_data = GetAuxDataToReturn(aux_entry, op->user_tags);
                 size_t full_size = log_data.size()
                                     + user_tags.size() * sizeof(uint64_t)
-                                    + compressed_aux_data.size();
+                                    + cached_aux_data.size();
                 if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
-                    auto aux_data = STRING_AS_SPAN(compressed_aux_data);
-                    response.log_aux_data_size = gsl::narrow_cast<uint16_t>(compressed_aux_data.size());
+                    auto aux_data = STRING_AS_SPAN(cached_aux_data);
+                    response.log_aux_data_size = gsl::narrow_cast<uint16_t>(cached_aux_data.size());
                     MessageHelper::AppendInlineData(&response, aux_data);
                 } else {
                     // DEBUG
-                    HLOG_F(WARNING, "{}", aux_entry.data);
+                    HLOG_F(WARNING, "op={} {} aux_data={} aux_tags={}", op->client_data, op->type, cached_aux_data, VecToString(op->user_tags));
                     HLOG_F(WARNING, "Inline buffer of message not large enough "
                                     "for auxiliary data of log (seqnum {}): "
-                                    "log_size={} num_tags={} compressed_aux_data_size={}",
+                                    "log_size={} num_tags={} cached_aux_data_size={}",
                             bits::HexStr0x(seqnum), log_data.size(),
-                            user_tags.size(), compressed_aux_data.size());
+                            user_tags.size(), cached_aux_data.size());
+                    // DEBUG
+                    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                        HLOG(FATAL) << "unable to progress at syncto aux hole";
+                    }
                 }
             }
             SendLocalOpWithResponse(
@@ -666,26 +693,6 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         } else {
             cached_aux_entry = LogCacheGetAuxData(seqnum);
         }
-        std::span<const char> aux_data;
-        if (cached_aux_entry.has_value()) {
-            const std::string& cached_aux_data(cached_aux_entry->data);
-            std::string compressed_aux_data;
-            snappy::Compress(cached_aux_data.data(), cached_aux_data.size(), &compressed_aux_data);
-            size_t full_size = log_entry.data.size()
-                                + log_entry.user_tags.size() * sizeof(uint64_t)
-                                + compressed_aux_data.size();
-            if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
-                aux_data = STRING_AS_SPAN(compressed_aux_data);
-            } else {
-                // DEBUG
-                HLOG_F(WARNING, "{}", cached_aux_data);
-                HLOG_F(WARNING, "Inline buffer of message not large enough "
-                                "for auxiliary data of log (seqnum {}): "
-                                "log_size={} num_tags={} compressed_aux_data_size={}",
-                        bits::HexStr0x(seqnum), log_entry.data.size(),
-                        log_entry.user_tags.size(), compressed_aux_data.size());
-            }
-        }
         if (local_request) {
             Message response;
             if (query.type == IndexQuery::kAsync) {
@@ -700,10 +707,32 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                     response = BuildLocalReadOKResponseWithData(query_result.id, log_entry);
                 }
             }
+            LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
+            std::span<const char> aux_data;
+            if (cached_aux_entry.has_value()) {
+                const std::string& cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value(), op->user_tags);
+                size_t full_size = log_entry.data.size()
+                                    + log_entry.user_tags.size() * sizeof(uint64_t)
+                                    + cached_aux_data.size();
+                if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
+                    aux_data = STRING_AS_SPAN(cached_aux_data);
+                } else {
+                    // DEBUG
+                    HLOG_F(WARNING, "op={} {} query={} {} aux_data={} aux_tags={}",
+                        op->client_data, op->type, query.type, query.direction, cached_aux_data, VecToString(op->user_tags));
+                    HLOG_F(WARNING, "Inline buffer of message not large enough "
+                                    "for auxiliary data of log (seqnum {}): "
+                                    "log_size={} num_tags={} cached_aux_data_size={}",
+                            bits::HexStr0x(seqnum), log_entry.data.size(),
+                            log_entry.user_tags.size(), cached_aux_data.size());
+                    // DEBUG
+                    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                        HLOG(FATAL) << "unable to progress at syncto aux hole";
+                    }
+                }
+            }
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
-
-            LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
             SendLocalOpWithResponse(
                 op, &response, query_result.metalog_progress,
                 [this, query] /*on_finished*/ () {
@@ -722,6 +751,11 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             }
             log_utils::PopulateMetaDataToMessage(log_entry.metadata, &response);
             response.user_metalog_progress = query_result.metalog_progress;
+            std::span<const char> aux_data;
+            if (cached_aux_entry.has_value()) {
+                const std::string& cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value());
+                aux_data = STRING_AS_SPAN(cached_aux_data);
+            }
             response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             SendReadResponse(query, &response,
                              VECTOR_AS_CHAR_SPAN(log_entry.user_tags),
@@ -1052,6 +1086,8 @@ IndexQuery Engine::UpdateQueryWithAux(IndexQuery& query) {
                 LogCacheGetAuxDataPrev(query.user_tag, target_seqnum);
             if (aux_entry.has_value() && aux_entry->metadata.seqnum >= query.query_start_seqnum) {
                 query.promised_auxdata = aux_entry;
+            } else {
+                query.promised_auxdata = std::nullopt;
             }
             // HVLOG_F(1, "query kReadNextU flags={:04X} tag={} seqfrom={:016X} seqnum={:016X} found={}",
             //             query.flags, query.user_tag, query.query_start_seqnum, query.query_seqnum, query.promised_auxdata.has_value());
@@ -1156,10 +1192,12 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
         query.metalog_progress = result.metalog_progress;
         query.prev_found_result = result.found_result;
         return UpdateQueryWithAux(query);
-    } else {
+    } else {    // kAuxContinue
         IndexQuery query = result.original_query;
         query.metalog_progress = result.metalog_progress;
         query.flags &= ~IndexQuery::kReadLocalIdFlag;
+        query.promised_auxdata = std::nullopt;
+        // new target seqnum
         query.query_seqnum = result.found_result.seqnum;
         return UpdateQueryWithAux(query);
     }

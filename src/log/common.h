@@ -6,6 +6,9 @@
 __BEGIN_THIRD_PARTY_HEADERS
 #include "proto/shared_log.pb.h"
 #include "snappy.h"
+
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
 __END_THIRD_PARTY_HEADERS
 
 namespace faas {
@@ -54,12 +57,11 @@ struct LogEntry {
 
 struct AuxMetaData {
     uint64_t seqnum;
-    size_t data_size;
 };
 
 struct AuxEntry {
     AuxMetaData metadata;
-    std::string data;
+    json        data;
 };
 
 }  // namespace log

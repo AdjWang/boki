@@ -163,6 +163,7 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
 
 void EngineBase::PopulateLogTagsAndData(const Message& message, LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type) ||
+           op->type == SharedLogOpType::READ_SYNCTO ||
            op->type == SharedLogOpType::SET_AUXDATA);
     DCHECK_EQ(message.log_aux_data_size, 0U);
     std::span<const char> data = MessageHelper::GetInlineData(message);
@@ -244,6 +245,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->seqnum = message.log_query_seqnum;
         break;
     case SharedLogOpType::READ_SYNCTO:
+        // get aux tags to grab
+        PopulateLogTagsAndData(message, op);
+        // get query infos
         op->query_tag = message.log_tag;
         if (message.log_query_start_seqnum != protocol::kInvalidLogSeqNum) {
             op->query_start_seqnum = message.log_query_start_seqnum;

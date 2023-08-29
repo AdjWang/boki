@@ -261,7 +261,7 @@ std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) ABSL_NO_THR
 
 void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
     uint64_t seqnum = aux_entry.metadata.seqnum;
-    json aux_entry_data = json::parse(aux_entry.data);
+    json aux_entry_data = aux_entry.data;
     {
         absl::MutexLock cache_lk_(&cache_mu_);
         for (auto& [tag_str, aux_data] : aux_entry_data.items()) {
@@ -310,11 +310,10 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) {
         std::string aux_data_str = aux_entry.dump();
         AuxMetaData aux_metadata = {
             .seqnum = seqnum,
-            .data_size = aux_data_str.size(),
         };
         return AuxEntry {
             .metadata = aux_metadata,
-            .data = aux_data_str,
+            .data = aux_entry,
         };
     }
 }
@@ -338,15 +337,13 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataChecked(uint64_t seqnum, uint
     }
     DCHECK(contains_tag);
     DCHECK(!aux_entry.empty());
-    std::string aux_data_str = aux_entry.dump();
-    HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_data_str);
+    HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_entry.dump());
     AuxMetaData aux_metadata = {
         .seqnum = seqnum,
-        .data_size = aux_data_str.size(),
     };
     return AuxEntry {
         .metadata = aux_metadata,
-        .data = aux_data_str,
+        .data = aux_entry,
     };
 }
 
@@ -354,11 +351,11 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataPrev(uint64_t tag, uint64_t s
     absl::ReaderMutexLock cache_rlk_(&cache_mu_);
     uint64_t result_seqnum;
     // DEBUG
-    {
-        bool found = aux_index_->FindPrev(seqnum, tag, &result_seqnum);
-        HVLOG_F(1, "ShardedLRUCache::GetAuxDataPrev tag={}, seqnum={:016X}, found={}:{:016X}\n{}",
-                    tag, seqnum, found, result_seqnum, aux_index_->Inspect());
-    }
+    // {
+    //     bool found = aux_index_->FindPrev(seqnum, tag, &result_seqnum);
+    //     HVLOG_F(1, "ShardedLRUCache::GetAuxDataPrev tag={}, seqnum={:016X}, found={}:{:016X}\n{}",
+    //                 tag, seqnum, found, result_seqnum, aux_index_->Inspect());
+    // }
     if (aux_index_->FindPrev(seqnum, tag, &result_seqnum)) {
         std::optional<AuxEntry> aux_entry = GetAuxDataChecked(result_seqnum, tag);
         DCHECK(aux_entry.has_value());

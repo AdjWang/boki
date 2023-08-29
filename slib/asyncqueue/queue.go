@@ -212,7 +212,8 @@ func (s syncToInspector) String() string {
 
 func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 	tag := queueLogTag(q.nameHash)
-	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, tag, q.nextSeqNum, logIndex, true /*fromCached*/)
+	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, tag, q.nextSeqNum, logIndex,
+		types.ReadOptions{FromCached: true, AuxTags: []uint64{tag}})
 	for {
 		logStreamEntry := logStream.BlockingDequeue()
 		logEntry := logStreamEntry.LogEntry

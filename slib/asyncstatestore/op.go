@@ -355,6 +355,8 @@ func applyArrayPushBackOp(parent *gabs.Container, lastSeg string, value interfac
 func applyArrayPushBackWithLimitOp(parent *gabs.Container, lastSeg string, value interface{}, sizeLimit int) (Value /* oldValue */, error) {
 	current := parent.Search(lastSeg)
 	if current == nil {
+		// DEBUG
+		// log.Println(parent.Data())
 		return NullValue(), newPathNotExistError(lastSeg)
 	}
 	if arr, ok := current.Data().([]interface{}); ok {

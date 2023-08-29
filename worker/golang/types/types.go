@@ -43,7 +43,10 @@ type LogEntryIndex struct {
 	SeqNum  uint64
 }
 
-var InvalidLogEntryIndex = LogEntryIndex{LocalId: protocol.InvalidLogLocalId, SeqNum: protocol.InvalidLogSeqNum}
+var InvalidLogEntryIndex = LogEntryIndex {
+	LocalId: protocol.InvalidLogLocalId,
+	SeqNum: protocol.InvalidLogSeqNum,
+}
 
 // DEBUG
 func (l LogEntryIndex) String() string {
@@ -76,6 +79,10 @@ type DataWrapper struct {
 	Data []byte `json:"data"`
 }
 
+type ReadOptions struct {
+	FromCached bool
+	AuxTags    []uint64
+}
 type Environment interface {
 	InvokeFunc(ctx context.Context, funcName string, input []byte) ( /* output */ []byte, error)
 	InvokeFuncAsync(ctx context.Context, funcName string, input []byte) error
@@ -99,8 +106,8 @@ type Environment interface {
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
 	SharedLogSetAuxDataWithShards(ctx context.Context, seqNum uint64, key uint64, auxData []byte) error
 	// Batch read for range [seqNum, target)
-	SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, fromCached bool) *Queue[LogStreamEntry[LogEntry]]
-	AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, fromCached bool) *Queue[LogStreamEntry[LogEntryWithMeta]]
+	SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) *Queue[LogStreamEntry[LogEntry]]
+	AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) *Queue[LogStreamEntry[LogEntryWithMeta]]
 
 	AsyncSharedLogAppend(ctx context.Context, tags []Tag, data []byte) (Future[uint64], error)
 	AsyncSharedLogAppendWithDeps(ctx context.Context, tags []Tag, data []byte, deps []uint64) (Future[uint64], error)

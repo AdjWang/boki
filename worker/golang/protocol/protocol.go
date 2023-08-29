@@ -300,12 +300,15 @@ func NewAsyncSharedLogAppendMessage(currentCallId uint64, myClientId uint16, num
 	return buffer
 }
 
-func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint64, fromSeqNum uint64, logIndex uint64, useLocalId bool, clientData uint64, fromCached bool) []byte {
+func NewSharedLogSyncToMessage(currentCallId uint64, myClientId uint16, tag uint64, fromSeqNum uint64, logIndex uint64, useLocalId bool,
+	clientData uint64, fromCached bool, auxTags []uint64) []byte {
+
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
 	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_READ_SYNCTO)
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
+	binary.LittleEndian.PutUint16(buffer[36:38], uint16(len(auxTags)))
 	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[56:64], fromSeqNum)

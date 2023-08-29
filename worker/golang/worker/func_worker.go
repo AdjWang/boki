@@ -20,7 +20,6 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
-	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 )
 
@@ -594,13 +593,13 @@ func (w *FuncWorker) GrpcCall(ctx context.Context, service string, method string
 	return w.newFuncCallCommon(funcCall, request, false /* async */)
 }
 
-func checkAndDuplicateTags(tags []uint64) ([]uint64, error) {
+func checkAndDuplicateTags(tags []uint64, allowInvalidTag bool) ([]uint64, error) {
 	if len(tags) == 0 {
 		return nil, nil
 	}
 	tagSet := make(map[uint64]bool)
 	for _, tag := range tags {
-		if tag == 0 || ^tag == 0 {
+		if !allowInvalidTag && (tag == 0 || ^tag == 0) {
 			return nil, fmt.Errorf("Invalid tag: %v", tag)
 		}
 		tagSet[tag] = true
@@ -636,7 +635,7 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 	if len(data) == 0 {
 		return 0, fmt.Errorf("data cannot be empty")
 	}
-	tags, err := checkAndDuplicateTags(tags)
+	tags, err := checkAndDuplicateTags(tags, false /*allowInvalidTag*/)
 	if err != nil {
 		return 0, err
 	}
@@ -802,13 +801,13 @@ func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
 
 	rawAuxData := responseData[logDataStart+logDataSize:]
 	auxData := rawAuxData
-	if len(rawAuxData) > 0 {
-		var err error
-		auxData, err = snappy.Decode(nil, rawAuxData)
-		if err != nil {
-			panic(errors.Wrapf(err, "snappy decode failed: %v:[%v]", rawAuxData, string(rawAuxData)))
-		}
-	}
+	// if len(rawAuxData) > 0 {
+	// 	var err error
+	// 	auxData, err = snappy.Decode(nil, rawAuxData)
+	// 	if err != nil {
+	// 		panic(errors.Wrapf(err, "snappy decode failed: %v:[%v]", rawAuxData, string(rawAuxData)))
+	// 	}
+	// }
 	return &types.LogEntry{
 		LocalId: localId,
 		SeqNum:  seqNum,
@@ -960,7 +959,7 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
-func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, fromCached bool) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
+func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, opts types.ReadOptions) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -968,9 +967,26 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seq
 	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
 		panic("unreachable")
 	} else if target.SeqNum != protocol.InvalidLogSeqNum {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id, fromCached)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id, opts.FromCached, opts.AuxTags)
 	} else {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id, fromCached)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id, opts.FromCached, opts.AuxTags)
+	}
+
+	if len(opts.AuxTags) > 0 {
+		tags, err := checkAndDuplicateTags(opts.AuxTags, true /*allowInvalidTag*/)
+		if err != nil {
+			results := types.NewQueue[types.LogStreamEntry[types.LogEntry]](1)
+			results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: err})
+			return results
+		}
+		if len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
+			err := fmt.Errorf("data too larger (num_tags=%d), expect no more than %d bytes", len(tags), protocol.MessageInlineDataSize)
+			results := types.NewQueue[types.LogStreamEntry[types.LogEntry]](1)
+			results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: err})
+			return results
+		}
+		tagBuffer := protocol.BuildLogTagsBuffer(tags)
+		protocol.FillInlineDataInMessage(message, tagBuffer)
 	}
 
 	w.mux.Lock()
@@ -1020,7 +1036,7 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seq
 	return results
 }
 
-func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, fromCached bool) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
+func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, opts types.ReadOptions) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -1028,9 +1044,26 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 	if target.LocalId == protocol.InvalidLogLocalId && target.SeqNum == protocol.InvalidLogSeqNum {
 		panic("unreachable")
 	} else if target.SeqNum != protocol.InvalidLogSeqNum {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id, fromCached)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.SeqNum, false /* useLogIndex */, id, opts.FromCached, opts.AuxTags)
 	} else {
-		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id, fromCached)
+		message = protocol.NewSharedLogSyncToMessage(currentCallId, w.clientId, tag, seqNum, target.LocalId, true /* useLogIndex */, id, opts.FromCached, opts.AuxTags)
+	}
+
+	if len(opts.AuxTags) > 0 {
+		tags, err := checkAndDuplicateTags(opts.AuxTags, true /*allowInvalidTag*/)
+		if err != nil {
+			results := types.NewQueue[types.LogStreamEntry[types.LogEntryWithMeta]](1)
+			results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: err})
+			return results
+		}
+		if len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
+			err := fmt.Errorf("data too larger (num_tags=%d), expect no more than %d bytes", len(tags), protocol.MessageInlineDataSize)
+			results := types.NewQueue[types.LogStreamEntry[types.LogEntryWithMeta]](1)
+			results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: err})
+			return results
+		}
+		tagBuffer := protocol.BuildLogTagsBuffer(tags)
+		protocol.FillInlineDataInMessage(message, tagBuffer)
 	}
 
 	w.mux.Lock()
