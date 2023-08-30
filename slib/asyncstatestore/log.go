@@ -282,8 +282,7 @@ func (l *ObjectLogEntry) hasCachedObjectView(objName string) bool {
 	return false
 }
 
-// DEBUG: remove objRef
-func (l *ObjectLogEntry) loadCachedObjectView(objName string, objRef *ObjectRef) *ObjectView {
+func (l *ObjectLogEntry) loadCachedObjectView(objName string) *ObjectView {
 	if l.auxData == nil {
 		return nil
 	}
@@ -362,10 +361,6 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			contents:   gabs.New(),
 		}
 	}
-	// DEBUG
-	startSeqNum := view.nextSeqNum
-	seqNums := make([]uint64, 0)
-	aux := make([]int, 0)
 	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, view.nextSeqNum, logIndex,
 		types.ReadOptions{FromCached: true, AuxTags: []uint64{tag, common.KeyCommitResult}})
 	for {
@@ -382,10 +377,7 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 		if !objectLog.withinWriteSet(obj.name) {
 			continue
 		}
-		// DEBUG
-		seqNums = append(seqNums, logEntry.SeqNum)
-		aux = append(aux, len(logEntry.AuxData))
-		if cachedView := objectLog.loadCachedObjectView(obj.name, obj); cachedView != nil {
+		if cachedView := objectLog.loadCachedObjectView(obj.name); cachedView != nil {
 			view = cachedView
 			continue
 		}
@@ -401,44 +393,14 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
 		}
 		view.nextSeqNum = objectLog.seqNum + 1
-		// DEBUG
-		if obj.name == "timeline" {
-			log.Printf("[DEBUG] obj=%p view before=%+v seqnum=%016X", obj, view.contents.Data(), logEntry.SeqNum)
-		}
-		ops := make([]string, 0)
 		for _, op := range objectLog.Ops {
 			if op.ObjName == obj.name {
-				ops = append(ops, fmt.Sprint(op))
 				view.applyWriteOp(op)
-			}
-		}
-		// DEBUG
-		if obj.name == "timeline" {
-			log.Printf("[DEBUG] obj=%p ops=%v view after=%+v seqnum=%016X", obj, ops, view.contents.Data(), logEntry.SeqNum)
-			if objectLog.auxData == nil {
-				encoded, err := json.Marshal(view.contents.Data())
-				if err != nil {
-					panic(err)
-				}
-				// DEBUG
-				if string(encoded) == "{}" {
-					log.Printf("[DEBUG] obj=%p view tag:name=%v:%v from=%v seqnums=%v:%v", obj, tag, view.name, startSeqNum, seqNums, aux)
-					panic(fmt.Errorf("invalid aux data for seqnum=%016X key=%v", logEntry.SeqNum, tag))
-				}
 			}
 		}
 		objectLog.cacheObjectView(env, view)
 	}
-	// DEBUG
-	// if (startSeqNum == 0 && len(aux) > 0 && aux[0] == 0) ||
-	// 	(len(seqNums) > 0 && startSeqNum == seqNums[0] && aux[0] == 0) {
-	// 	panic(fmt.Errorf("invalid aux data from obj=%p view=%+v from=%v seqnums=%v:%v", obj, view.contents.Data(), startSeqNum, seqNums, aux))
-	// }
 	obj.view = view
-	// DEBUG
-	if obj.name == "timeline" {
-		log.Printf("[DEBUG] obj=%p final view=%+v from=%v seqnums=%v:%v", obj, view.contents.Data(), startSeqNum, seqNums, aux)
-	}
 	return nil
 }
 

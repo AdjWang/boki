@@ -357,14 +357,8 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
     }
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
-    HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={} resp_flags={:08X} seqnum={:016X} aux_size={}",
-        op->id, response->response_id, op->client_data, response->flags, response->log_seqnum, response->log_aux_data_size);
-    // DEBUG
-    if (op->type == protocol::SharedLogOpType::READ_SYNCTO &&
-        (response->flags & protocol::kLogResponseContinueFlag) != 0 &&
-        response->response_id == 0) {
-        HVLOG(1) << utils::DumpStackTrace();
-    }
+    // HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={} resp_flags={:08X} seqnum={:016X} aux_size={}",
+    //     op->id, response->response_id, op->client_data, response->flags, response->log_seqnum, response->log_aux_data_size);
 
     bool finished;
     if ((response->flags & protocol::kLogResponseContinueFlag) != 0) {

@@ -2,7 +2,6 @@ package asyncstatestore
 
 import (
 	"fmt"
-	"log"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
 	gabs "github.com/Jeffail/gabs/v2"
@@ -322,9 +321,6 @@ func applyNumberFetchAddOp(parent *gabs.Container, lastSeg string, delta float64
 		if _, err := parent.Set(delta, lastSeg); err == nil {
 			return NumberValue(0), nil
 		} else {
-			// DEBUG
-			log.Printf("[DEBUG] gabs=%v lastSet=%v delta=%v", parent.Data(), lastSeg, delta)
-
 			return NullValue(), newGabsError(err)
 		}
 	}
@@ -360,10 +356,6 @@ func applyArrayPushBackOp(parent *gabs.Container, lastSeg string, value interfac
 func applyArrayPushBackWithLimitOp(parent *gabs.Container, lastSeg string, value interface{}, sizeLimit int) (Value /* oldValue */, error) {
 	current := parent.Search(lastSeg)
 	if current == nil {
-		// DEBUG
-		if lastSeg == "posts" {
-			log.Printf("[DEBUG] gabs data=[%v]", parent.Data())
-		}
 		return NullValue(), newPathNotExistError(lastSeg)
 	}
 	if arr, ok := current.Data().([]interface{}); ok {

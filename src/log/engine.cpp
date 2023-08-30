@@ -480,23 +480,6 @@ static std::string GetAuxDataToReturn(const log::AuxEntry& aux_entry,
     // return compressed_aux_data;
     return cached_aux_data;
 }
-// DEBUG
-static std::string VecToString(const UserTagVec& vec) {
-    std::string result("[");
-    for (uint64_t tag : vec) {
-        result.append(fmt::format("{} ", tag));
-    }
-    result.append("]");
-    return result;
-}
-// static std::string SpanToString(std::span<const char> vec) {
-//     std::string result("[");
-//     for (char tag : vec) {
-//         result.append(fmt::format("{} ", tag));
-//     }
-//     result.append("]");
-//     return result;
-// }
 
 void Engine::OnRecvResponse(const SharedLogMessage& message,
                             std::span<const char> payload) {
@@ -554,11 +537,6 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                                     "log_size={} num_tags={} cached_aux_data_size={}",
                             bits::HexStr0x(seqnum), log_data.size(),
                             user_tags.size(), cached_aux_data.size());
-                    // DEBUG
-                    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
-                        HLOG_F(FATAL, "op={} {} aux_data={} aux_tags={}",
-                            op->client_data, op->type, cached_aux_data, VecToString(op->user_tags));
-                    }
                 }
             }
             SendLocalOpWithResponse(
@@ -573,14 +551,6 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 // would merge to local rather than overwrite to null
                 LogCachePutAuxData(aux_entry);
             }
-            // DEBUG
-            // if (aux_entry_data.size()) {
-            //     std::string original_aux_data = GetAuxDataToReturn(aux_entry);
-            //     std::string filtered_aux_data = GetAuxDataToReturn(aux_entry, op->user_tags);
-            //     std::string tags_str = VecToString(op->user_tags);
-            //     HVLOG_F(1, "Response op_id={} seqnum={:016X} ori_aux={} aux={} tags={}",
-            //                 op->id, seqnum, original_aux_data.size(), filtered_aux_data.size(), tags_str);
-            // }
         } else {
             HVLOG_F(1, "Receive remote read EOF response for log (seqnum {})", bits::HexStr0x(seqnum));
             // EOF
@@ -739,11 +709,6 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                                     "log_size={} num_tags={} cached_aux_data_size={}",
                             bits::HexStr0x(seqnum), log_entry.data.size(),
                             log_entry.user_tags.size(), cached_aux_data.size());
-                    // DEBUG
-                    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
-                        HLOG_F(FATAL, "op={} {} query={} {} aux_data={} aux_tags={}",
-                            op->client_data, op->type, query.type, query.direction, cached_aux_data, VecToString(op->user_tags));
-                    }
                 }
             }
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
@@ -753,12 +718,6 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                 [this, query] /*on_finished*/ () {
                     ongoing_local_reads_.RemoveChecked(query.client_data);
                 });
-            // DEBUG
-            // if (cached_aux_entry.has_value()) {
-            //     std::string original_aux_data = GetAuxDataToReturn(cached_aux_entry.value());
-            //     std::string filtered_aux_data = GetAuxDataToReturn(cached_aux_entry.value(), op->user_tags);
-            //     HVLOG_F(1, "Response seqnum={:016X} ori_aux={} aux={}", seqnum, original_aux_data.size(), filtered_aux_data.size());
-            // }
         } else {
             SharedLogMessage response;
             if (query.type == IndexQuery::kAsync) {
@@ -775,13 +734,6 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             std::span<const char> aux_data;
             if (cached_aux_entry.has_value()) {
                 const std::string& cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value());
-                DCHECK(cached_aux_data != "");
-                // DEBUG: check not empty
-                for (auto& [_, value] : cached_aux_entry.value().data.items()) {
-                    if (value.dump() == R"("{}")") {
-                        HLOG_F(FATAL, "invalid aux_data={} seqnum={:016X}", cached_aux_entry.value().data.dump(), seqnum);
-                    }
-                }
                 aux_data = STRING_AS_SPAN(cached_aux_data);
             }
             response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
