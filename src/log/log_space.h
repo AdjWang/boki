@@ -89,7 +89,7 @@ public:
 
     bool Store(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
                std::span<const char> log_data);
-    void ReadAt(const protocol::SharedLogMessage& request);
+    void ReadAt(const protocol::SharedLogMessage& request, std::span<const char> payload);
 
     bool GrabLogEntriesForPersistence(
             std::vector<std::shared_ptr<const LogEntry>>* log_entries,
@@ -101,6 +101,7 @@ public:
         Status status;
         std::shared_ptr<const LogEntry> log_entry;
         protocol::SharedLogMessage original_request;
+        std::span<const char> payload;
     };
     using ReadResultVec = absl::InlinedVector<ReadResult, 4>;
     void PollReadResults(ReadResultVec* results);
@@ -125,8 +126,10 @@ private:
                         std::unique_ptr<LogEntry>>
         pending_log_entries_;
 
+    // std::multimap</* seqnum */ uint64_t,
+    //               protocol::SharedLogMessage> pending_read_requests_;
     std::multimap</* seqnum */ uint64_t,
-                  protocol::SharedLogMessage> pending_read_requests_;
+                  SharedLogRequest> pending_read_requests_;
     ReadResultVec pending_read_results_;
 
     IndexDataProto index_data_;

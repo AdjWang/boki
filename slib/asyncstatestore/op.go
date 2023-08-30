@@ -1,6 +1,7 @@
 package asyncstatestore
 
 import (
+	"fmt"
 	"log"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -24,6 +25,10 @@ type WriteOp struct {
 	Path     string `json:"p"`
 	Value    Value  `json:"v"`
 	IntParam int    `json:"i"`
+}
+
+func (op *WriteOp) String() string {
+	return fmt.Sprintf("{type=%v name=%v path=%v}", op.OpType, op.ObjName, op.Path)
 }
 
 type WriteResult struct {
@@ -356,7 +361,9 @@ func applyArrayPushBackWithLimitOp(parent *gabs.Container, lastSeg string, value
 	current := parent.Search(lastSeg)
 	if current == nil {
 		// DEBUG
-		// log.Println(parent.Data())
+		if lastSeg == "posts" {
+			log.Printf("[DEBUG] gabs data=[%v]", parent.Data())
+		}
 		return NullValue(), newPathNotExistError(lastSeg)
 	}
 	if arr, ok := current.Data().([]interface{}); ok {

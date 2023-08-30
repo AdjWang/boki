@@ -129,7 +129,7 @@ void Storage::OnViewFinalized(const FinalizedView* finalized_view) {
         }                                                           \
     } while (0)
 
-void Storage::HandleReadAtRequest(const SharedLogMessage& request) {
+void Storage::HandleReadAtRequest(const SharedLogMessage& request, std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(request) == SharedLogOpType::READ_AT);
     LockablePtr<LogStorage> storage_ptr;
     {
@@ -138,13 +138,13 @@ void Storage::HandleReadAtRequest(const SharedLogMessage& request) {
         storage_ptr = storage_collection_.GetLogSpace(request.logspace_id);
     }
     if (storage_ptr == nullptr) {
-        ProcessReadFromDB(request);
+        ProcessReadFromDB(request, payload);
         return;
     }
     LogStorage::ReadResultVec results;
     {
         auto locked_storage = storage_ptr.Lock();
-        locked_storage->ReadAt(request);
+        locked_storage->ReadAt(request, payload);
         locked_storage->PollReadResults(&results);
     }
     ProcessReadResults(results);
@@ -227,10 +227,11 @@ void Storage::ProcessReadResults(const LogStorage::ReadResultVec& results) {
             response.user_metalog_progress = request.user_metalog_progress;
             SendEngineLogResult(request, &response,
                                 VECTOR_AS_CHAR_SPAN(result.log_entry->user_tags),
-                                STRING_AS_SPAN(result.log_entry->data));
+                                STRING_AS_SPAN(result.log_entry->data),
+                                result.payload);
             break;
         case LogStorage::ReadResult::kLookupDB:
-            ProcessReadFromDB(request);
+            ProcessReadFromDB(request, result.payload);
             break;
         case LogStorage::ReadResult::kFailed:
             HLOG_F(ERROR, "Failed to read log data (seqnum={})",
@@ -244,7 +245,7 @@ void Storage::ProcessReadResults(const LogStorage::ReadResultVec& results) {
     }
 }
 
-void Storage::ProcessReadFromDB(const SharedLogMessage& request) {
+void Storage::ProcessReadFromDB(const SharedLogMessage& request, std::span<const char> payload) {
     uint64_t seqnum = bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf);
     LogEntryProto log_entry;
     if (auto tmp = GetLogEntryFromDB(seqnum); tmp.has_value()) {
@@ -264,7 +265,7 @@ void Storage::ProcessReadFromDB(const SharedLogMessage& request) {
         reinterpret_cast<const char*>(log_entry.user_tags().data()),
         static_cast<size_t>(log_entry.user_tags().size()) * sizeof(uint64_t));
     SendEngineLogResult(request, &response, user_tags_data,
-                        STRING_AS_SPAN(log_entry.data()));
+                        STRING_AS_SPAN(log_entry.data()), payload);
 }
 
 void Storage::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
@@ -276,12 +277,15 @@ void Storage::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
 void Storage::SendEngineLogResult(const protocol::SharedLogMessage& request,
                                   protocol::SharedLogMessage* response,
                                   std::span<const char> tags_data,
-                                  std::span<const char> log_data) {
+                                  std::span<const char> log_data,
+                                  std::span<const char> promised_aux_data) {
     uint64_t seqnum = bits::JoinTwo32(response->logspace_id, response->seqnum_lowhalf);
-    std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
-    std::span<const char> aux_data;
-    if (cached_aux_data.has_value()) {
-        aux_data = STRING_AS_SPAN(*cached_aux_data);
+    std::span<const char> aux_data = promised_aux_data;
+    if (aux_data.size() == 0) {
+        std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
+        if (cached_aux_data.has_value()) {
+            aux_data = STRING_AS_SPAN(*cached_aux_data);
+        }
     }
     response->aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
     SendEngineResponse(request, response, tags_data, log_data, aux_data);

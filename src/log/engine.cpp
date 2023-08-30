@@ -328,13 +328,13 @@ void Engine::HandleLocalRead(LocalOp* op) {
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
     uint64_t seqnum = op->seqnum;
     uint64_t tag = op->query_tag;
+    HVLOG_F(1, "HandleLocalSetAuxData op_id={} seqnum={:016X} tag={}", op->id, seqnum, tag);
     LogCachePutAuxData(seqnum, tag, op->data.to_span());
     // localid and seqnum are useless here, set any value
     Message response = MessageHelper::NewSharedLogOpSucceeded(
         SharedLogResultType::AUXDATA_OK, protocol::kInvalidLogLocalId, seqnum);
     SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
     response.response_id = 0;
-    HVLOG_F(1, "HandleLocalSetAuxData op_id={}, seqnum={:016X}", op->id, seqnum);
     SendLocalOpWithResponse(op, &response, /*metalog_progress*/0);
     if (!absl::GetFlag(FLAGS_slog_engine_propagate_auxdata)) {
         return;
@@ -465,15 +465,16 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
 #undef IGNORE_IF_FROM_PAST_VIEW
 
-static std::string GetAuxDataToReturn(log::AuxEntry& aux_entry,
+static std::string GetAuxDataToReturn(const log::AuxEntry& aux_entry,
                                       std::optional<UserTagVec> query_tag_set=std::nullopt) {
+    json aux_data = aux_entry.data;
     if (query_tag_set.has_value()) {
-        log_utils::UpdateTagSet(&aux_entry, query_tag_set.value());
+        aux_data = log_utils::GetByTags(aux_entry, query_tag_set.value());
     }
-    if (aux_entry.data.empty()) {
+    if (aux_data.empty()) {
         return "";
     }
-    const std::string& cached_aux_data(aux_entry.data.dump());
+    const std::string& cached_aux_data(aux_data.dump());
     // std::string compressed_aux_data;
     // snappy::Compress(cached_aux_data.data(), cached_aux_data.size(), &compressed_aux_data);
     // return compressed_aux_data;
@@ -488,6 +489,14 @@ static std::string VecToString(const UserTagVec& vec) {
     result.append("]");
     return result;
 }
+// static std::string SpanToString(std::span<const char> vec) {
+//     std::string result("[");
+//     for (char tag : vec) {
+//         result.append(fmt::format("{} ", tag));
+//     }
+//     result.append("]");
+//     return result;
+// }
 
 void Engine::OnRecvResponse(const SharedLogMessage& message,
                             std::span<const char> payload) {
@@ -510,8 +519,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             // decode aux entry
             AuxEntry aux_entry;
             if (aux_entry_data.size() > 0) {
-                std::string str_aux_entry_data(aux_entry_data.begin(), aux_entry_data.end());
-                log_utils::DecodeAuxEntry(str_aux_entry_data, &aux_entry);
+                log_utils::DecodeAuxEntry(SPAN_AS_STRING(aux_entry_data), &aux_entry);
             }
             // make response message
             if (result == SharedLogResultType::ASYNC_READ_OK) {
@@ -531,7 +539,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             } else {
                 UNREACHABLE();
             }
-            if (aux_entry_data.size() > 0) {
+            if (!aux_entry.data.empty()) {
                 const std::string& cached_aux_data = GetAuxDataToReturn(aux_entry, op->user_tags);
                 size_t full_size = log_data.size()
                                     + user_tags.size() * sizeof(uint64_t)
@@ -541,8 +549,6 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                     response.log_aux_data_size = gsl::narrow_cast<uint16_t>(cached_aux_data.size());
                     MessageHelper::AppendInlineData(&response, aux_data);
                 } else {
-                    // DEBUG
-                    HLOG_F(WARNING, "op={} {} aux_data={} aux_tags={}", op->client_data, op->type, cached_aux_data, VecToString(op->user_tags));
                     HLOG_F(WARNING, "Inline buffer of message not large enough "
                                     "for auxiliary data of log (seqnum {}): "
                                     "log_size={} num_tags={} cached_aux_data_size={}",
@@ -550,7 +556,8 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                             user_tags.size(), cached_aux_data.size());
                     // DEBUG
                     if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
-                        HLOG(FATAL) << "unable to progress at syncto aux hole";
+                        HLOG_F(FATAL, "op={} {} aux_data={} aux_tags={}",
+                            op->client_data, op->type, cached_aux_data, VecToString(op->user_tags));
                     }
                 }
             }
@@ -563,8 +570,17 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
             LogCachePut(log_metadata, user_tags, log_data);
             if (aux_entry_data.size() > 0) {
+                // would merge to local rather than overwrite to null
                 LogCachePutAuxData(aux_entry);
             }
+            // DEBUG
+            // if (aux_entry_data.size()) {
+            //     std::string original_aux_data = GetAuxDataToReturn(aux_entry);
+            //     std::string filtered_aux_data = GetAuxDataToReturn(aux_entry, op->user_tags);
+            //     std::string tags_str = VecToString(op->user_tags);
+            //     HVLOG_F(1, "Response op_id={} seqnum={:016X} ori_aux={} aux={} tags={}",
+            //                 op->id, seqnum, original_aux_data.size(), filtered_aux_data.size(), tags_str);
+            // }
         } else {
             HVLOG_F(1, "Receive remote read EOF response for log (seqnum {})", bits::HexStr0x(seqnum));
             // EOF
@@ -678,6 +694,13 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     bool local_request = (query.origin_node_id == my_node_id());
     uint64_t seqnum = query_result.found_result.seqnum;
     uint64_t localid = query_result.found_result.localid;
+    // aux data
+    std::optional<AuxEntry> cached_aux_entry = std::nullopt;
+    if (query.promised_auxdata.has_value() && seqnum == query.promised_auxdata->metadata.seqnum) {
+        cached_aux_entry = query.promised_auxdata;
+    } else {
+        cached_aux_entry = LogCacheGetAuxData(seqnum);
+    }
     // async read response when found && sync read response
     // For async requests:
     // if the log is cached: return ONCE as an async response with kLogDataCachedFlag set.
@@ -687,12 +710,6 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
         const LogEntry& log_entry = cached_log_entry.value();
         DCHECK_EQ(log_entry.metadata.localid, localid);
-        std::optional<AuxEntry> cached_aux_entry = std::nullopt;
-        if (query.promised_auxdata.has_value() && seqnum == query.promised_auxdata->metadata.seqnum) {
-            cached_aux_entry = query.promised_auxdata;
-        } else {
-            cached_aux_entry = LogCacheGetAuxData(seqnum);
-        }
         if (local_request) {
             Message response;
             if (query.type == IndexQuery::kAsync) {
@@ -717,9 +734,6 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                 if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
                     aux_data = STRING_AS_SPAN(cached_aux_data);
                 } else {
-                    // DEBUG
-                    HLOG_F(WARNING, "op={} {} query={} {} aux_data={} aux_tags={}",
-                        op->client_data, op->type, query.type, query.direction, cached_aux_data, VecToString(op->user_tags));
                     HLOG_F(WARNING, "Inline buffer of message not large enough "
                                     "for auxiliary data of log (seqnum {}): "
                                     "log_size={} num_tags={} cached_aux_data_size={}",
@@ -727,7 +741,8 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                             log_entry.user_tags.size(), cached_aux_data.size());
                     // DEBUG
                     if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
-                        HLOG(FATAL) << "unable to progress at syncto aux hole";
+                        HLOG_F(FATAL, "op={} {} query={} {} aux_data={} aux_tags={}",
+                            op->client_data, op->type, query.type, query.direction, cached_aux_data, VecToString(op->user_tags));
                     }
                 }
             }
@@ -738,6 +753,12 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                 [this, query] /*on_finished*/ () {
                     ongoing_local_reads_.RemoveChecked(query.client_data);
                 });
+            // DEBUG
+            // if (cached_aux_entry.has_value()) {
+            //     std::string original_aux_data = GetAuxDataToReturn(cached_aux_entry.value());
+            //     std::string filtered_aux_data = GetAuxDataToReturn(cached_aux_entry.value(), op->user_tags);
+            //     HVLOG_F(1, "Response seqnum={:016X} ori_aux={} aux={}", seqnum, original_aux_data.size(), filtered_aux_data.size());
+            // }
         } else {
             SharedLogMessage response;
             if (query.type == IndexQuery::kAsync) {
@@ -754,6 +775,13 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             std::span<const char> aux_data;
             if (cached_aux_entry.has_value()) {
                 const std::string& cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value());
+                DCHECK(cached_aux_data != "");
+                // DEBUG: check not empty
+                for (auto& [_, value] : cached_aux_entry.value().data.items()) {
+                    if (value.dump() == R"("{}")") {
+                        HLOG_F(FATAL, "invalid aux_data={} seqnum={:016X}", cached_aux_entry.value().data.dump(), seqnum);
+                    }
+                }
                 aux_data = STRING_AS_SPAN(cached_aux_data);
             }
             response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
@@ -795,7 +823,14 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
             op->response_counter.BufferRequestId(seqnum, query_result.id);
         }
-        bool success = SendStorageReadRequest(query_result, engine_node);
+        // aux_data on storage node maybe stale, so protagate aux_data and
+        // loopback to read response
+        std::span<const char> aux_data;
+        if (cached_aux_entry.has_value()) {
+            std::string aux_entry_data = log_utils::EncodeAuxEntry(cached_aux_entry.value());
+            aux_data = STRING_AS_SPAN(aux_entry_data);
+        }
+        bool success = SendStorageReadRequest(query_result, engine_node, aux_data);
         if (!success) {
             HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
             if (local_request) {

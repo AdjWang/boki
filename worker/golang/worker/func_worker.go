@@ -1107,6 +1107,8 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 					Deps:        metadata.Deps,
 					Identifiers: types.CombineTags(metadata.StreamTypes, logEntry.Tags),
 				}
+				// DEBUG
+				log.Printf("[DEBUG] cid=%v seqnum=%016X aux_size=%v", id, logEntry.SeqNum, len(logEntry.AuxData))
 				results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: logEntryWithMeta, Err: nil})
 			} else if result == protocol.SharedLogResultType_EMPTY {
 				results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil})

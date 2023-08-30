@@ -236,17 +236,18 @@ bool LogStorage::Store(const LogMetaData& log_metadata, std::span<const uint64_t
     return true;
 }
 
-void LogStorage::ReadAt(const protocol::SharedLogMessage& request) {
+void LogStorage::ReadAt(const protocol::SharedLogMessage& request, std::span<const char> payload) {
     DCHECK_EQ(request.logspace_id, identifier());
     uint64_t seqnum = bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf);
     if (seqnum >= seqnum_position()) {
-        pending_read_requests_.insert(std::make_pair(seqnum, request));
+        pending_read_requests_.insert(std::make_pair(seqnum, SharedLogRequest(request, payload)));
         return;
     }
     ReadResult result = {
         .status = ReadResult::kFailed,
         .log_entry = nullptr,
-        .original_request = request
+        .original_request = request,
+        .payload = payload,
     };
     if (live_log_entries_.contains(seqnum)) {
         result.status = ReadResult::kOK;
@@ -322,7 +323,8 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
         pending_read_results_.push_back(ReadResult {
             .status = ReadResult::kFailed,
             .log_entry = nullptr,
-            .original_request = iter->second
+            .original_request = iter->second.message,
+            .payload = iter->second.payload,
         });
         iter = pending_read_requests_.erase(iter);
     }
@@ -359,7 +361,8 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
             pending_read_results_.push_back(ReadResult {
                 .status = ReadResult::kOK,
                 .log_entry = log_entry_ptr,
-                .original_request = iter->second
+                .original_request = iter->second.message,
+                .payload = iter->second.payload,
             });
             iter = pending_read_requests_.erase(iter);
         }

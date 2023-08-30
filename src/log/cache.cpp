@@ -269,11 +269,12 @@ void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
             uint64_t tag = std::strtoul(tag_str.c_str(), nullptr, 16);
             // update index for addings
             aux_index_->Add(seqnum, tag);
-            HVLOG_F(1, "ShardedLRUCache::PutAuxData from entry seqnum={:016X} tag={}",
-                        seqnum, tag);
             // update data
             std::string idx_key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
-            dbm_->Set(idx_key_str, aux_data.get<std::string>(), /* overwrite= */ true);
+            std::string data = aux_data.get<std::string>();
+            HVLOG_F(1, "ShardedLRUCache::PutAuxData from entry seqnum={:016X} tag={}",
+                        seqnum, tag);
+            dbm_->Set(idx_key_str, data, /* overwrite= */ true);
         }
         // update index for potential removes, add twice is ok
         UpdateCacheIndex();
@@ -285,9 +286,10 @@ void ShardedLRUCache::PutAuxData(uint64_t seqnum, uint64_t tag,
     absl::MutexLock cache_lk_(&cache_mu_);
     // update index for addings
     aux_index_->Add(seqnum, tag);
-    HVLOG_F(1, "ShardedLRUCache::PutAuxData seqnum={:016X} tag={}", seqnum, tag);
     std::string idx_key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
-    dbm_->Set(idx_key_str, SPAN_AS_STRING(aux_data), /* overwrite= */ true);
+    std::string data(aux_data.data(), aux_data.size());
+    HVLOG_F(1, "ShardedLRUCache::PutAuxData seqnum={:016X} tag={}", seqnum, tag);
+    dbm_->Set(idx_key_str, data, /* overwrite= */ true);
     // update index for potential removes, add twice is ok
     UpdateCacheIndex();
 }
@@ -300,9 +302,8 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) {
         std::string key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
         std::string data;
         auto status = dbm_->Get(key_str, &data);
-        if (status.IsOK()) {
-            aux_entry[fmt::format("{}", tag)] = data;
-        }
+        DCHECK(status.IsOK());
+        aux_entry[fmt::format("{}", tag)] = data;
     }
     if (aux_entry.empty()) {
         return std::nullopt;
@@ -338,6 +339,17 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataChecked(uint64_t seqnum, uint
     DCHECK(contains_tag);
     DCHECK(!aux_entry.empty());
     HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_entry.dump());
+    // DEBUG: check not empty
+    for (auto& [tag_str, value] : aux_entry.items()) {
+        if (value.dump() == R"("{}")") {
+            uint64_t dbg_tag = std::strtoul(tag_str.data(), nullptr, 10);
+            std::string key_str = MakeAuxCacheKeyWithIndex(seqnum, dbg_tag);
+            std::string data;
+            auto status = dbm_->Get(key_str, &data);
+            DCHECK(status.IsOK());
+            HLOG_F(FATAL, "invalid aux_data={} {} seqnum={:016X}", aux_entry.dump(), data, seqnum);
+        }
+    }
     AuxMetaData aux_metadata = {
         .seqnum = seqnum,
     };

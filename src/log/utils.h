@@ -152,15 +152,14 @@ inline void DecodeAuxEntry(std::string encoded, log::AuxEntry* aux_entry) {
         LOG(ERROR) << "Failed to parse json: " << e.what() << " " << encoded;
     }
 }
-inline void UpdateTagSet(log::AuxEntry* log_entry, const log::UserTagVec& tags) {
+inline json GetByTags(const log::AuxEntry& log_entry, const log::UserTagVec& tags) {
+    json data = log_entry.data;
     if (tags.size() == 0) {
         // all tags are returned
-        return;
+        return data;
     }
-    DCHECK(log_entry != nullptr);
-    json data = log_entry->data;
     if (data.empty()) {
-        return;
+        return data;
     }
     json result;
     for (uint64_t tag : tags) {
@@ -170,7 +169,7 @@ inline void UpdateTagSet(log::AuxEntry* log_entry, const log::UserTagVec& tags) 
             result[tag_str] = it.value();
         }
     }
-    log_entry->data = result;
+    return result;
 }
 
 // encode/decode LogMetaData+LogEntry 

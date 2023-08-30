@@ -26,7 +26,8 @@ private:
     void OnViewCreated(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
-    void HandleReadAtRequest(const protocol::SharedLogMessage& request) override;
+    void HandleReadAtRequest(const protocol::SharedLogMessage& request,
+                             std::span<const char> payload) override;
     void HandleReplicateRequest(const protocol::SharedLogMessage& message,
                                 std::span<const char> payload) override;
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
@@ -35,13 +36,15 @@ private:
                           std::span<const char> payload) override;
 
     void ProcessReadResults(const LogStorage::ReadResultVec& results);
-    void ProcessReadFromDB(const protocol::SharedLogMessage& request);
+    void ProcessReadFromDB(const protocol::SharedLogMessage& request,
+                           std::span<const char> payload);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void SendEngineLogResult(const protocol::SharedLogMessage& request,
                              protocol::SharedLogMessage* response,
                              std::span<const char> tags_data,
-                             std::span<const char> log_data);
+                             std::span<const char> log_data,
+                             std::span<const char> promised_aux_data);
 
     void BackgroundThreadMain() override;
     void SendShardProgressIfNeeded() override;

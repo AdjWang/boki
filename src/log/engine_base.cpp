@@ -356,9 +356,15 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
         }
     }
     response->log_client_data = op->client_data;
-    HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={} resp_flags={:08X}",
-        op->id, response->response_id, op->client_data, response->flags);
     engine_->SendFuncWorkerMessage(op->client_id, response);
+    HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={} resp_flags={:08X} seqnum={:016X} aux_size={}",
+        op->id, response->response_id, op->client_data, response->flags, response->log_seqnum, response->log_aux_data_size);
+    // DEBUG
+    if (op->type == protocol::SharedLogOpType::READ_SYNCTO &&
+        (response->flags & protocol::kLogResponseContinueFlag) != 0 &&
+        response->response_id == 0) {
+        HVLOG(1) << utils::DumpStackTrace();
+    }
 
     bool finished;
     if ((response->flags & protocol::kLogResponseContinueFlag) != 0) {
@@ -400,7 +406,8 @@ bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,
 }
 
 bool EngineBase::SendStorageReadRequest(const IndexQueryResult& result,
-                                        const View::Engine* engine_node) {
+                                        const View::Engine* engine_node,
+                                        std::span<const char> promised_aux_data) {
     static constexpr int kMaxRetries = 3;
     DCHECK(result.state == IndexQueryResult::kFound);
 
@@ -411,10 +418,11 @@ bool EngineBase::SendStorageReadRequest(const IndexQueryResult& result,
     request.origin_node_id = result.original_query.origin_node_id;
     request.hop_times = result.original_query.hop_times + 1;
     request.client_data = result.original_query.client_data;
+    request.payload_size = gsl::narrow_cast<uint32_t>(promised_aux_data.size());
     for (int i = 0; i < kMaxRetries; i++) {
         uint16_t storage_id = engine_node->PickStorageNode();
         bool success = engine_->SendSharedLogMessage(
-            protocol::ConnType::ENGINE_TO_STORAGE, storage_id, request);
+            protocol::ConnType::ENGINE_TO_STORAGE, storage_id, request, promised_aux_data);
         if (success) {
             return true;
         }

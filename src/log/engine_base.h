@@ -107,7 +107,8 @@ protected:
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);
     bool SendStorageReadRequest(const IndexQueryResult& result,
-                                const View::Engine* engine_node);
+                                const View::Engine* engine_node,
+                                std::span<const char> promised_aux_data);
     void SendReadResponse(const IndexQuery& query,
                           protocol::SharedLogMessage* response,
                           std::span<const char> user_tags_payload = EMPTY_CHAR_SPAN,

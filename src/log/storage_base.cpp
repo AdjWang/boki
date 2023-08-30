@@ -86,7 +86,7 @@ void StorageBase::MessageHandler(const SharedLogMessage& message,
                                  std::span<const char> payload) {
     switch (SharedLogMessageHelper::GetOpType(message)) {
     case SharedLogOpType::READ_AT:
-        HandleReadAtRequest(message);
+        HandleReadAtRequest(message, payload);
         break;
     case SharedLogOpType::REPLICATE:
         HandleReplicateRequest(message, payload);
