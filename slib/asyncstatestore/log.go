@@ -151,7 +151,7 @@ func (l *ObjectLogEntry) withinWriteSet(objName string) bool {
 	return exists
 }
 
-func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, error) {
+func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqNum func() (uint64, error)) (bool, error) {
 	if txnCommitLog.LogType != LOG_TxnCommit {
 		panic("Wrong log type")
 	}
@@ -210,7 +210,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 					opCommitResult = false
 					break
 				} else if objectLog.LogType == LOG_TxnCommit {
-					if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+					if committed, err := objectLog.checkTxnCommitResult(env, nil /*awaitSeqNum*/); err != nil {
 						errCh <- err
 						return
 					} else if committed {
@@ -247,7 +247,17 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl) (bool, er
 	}
 	txnCommitLog.auxData[common.KeyCommitResult] = commitResultStr
 	if !FLAGS_DisableAuxData {
-		// BUG: txnCommitLog.seqNum maybe invalid here, from txn.go:objectLog.seqNum = protocol.InvalidLogSeqNum
+		// txnCommitLog.seqNum maybe invalid here from txn.go:objectLog.seqNum = protocol.InvalidLogSeqNum
+		if txnCommitLog.seqNum == protocol.InvalidLogSeqNum {
+			if awaitSeqNum == nil {
+				panic("unreachable")
+			}
+			seqNum, err := awaitSeqNum()
+			if err != nil {
+				return false, err
+			}
+			txnCommitLog.seqNum = seqNum
+		}
 		env.setLogAuxData(txnCommitLog.seqNum, common.KeyCommitResult, commitResultStr)
 	}
 	return commitResult, nil
@@ -382,7 +392,7 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			continue
 		}
 		if objectLog.LogType == LOG_TxnCommit {
-			if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+			if committed, err := objectLog.checkTxnCommitResult(env, nil /*awaitSeqNum*/); err != nil {
 				return err
 			} else if !committed {
 				continue

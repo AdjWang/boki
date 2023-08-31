@@ -280,9 +280,10 @@ void Storage::SendEngineLogResult(const protocol::SharedLogMessage& request,
                                   std::span<const char> log_data,
                                   std::span<const char> promised_aux_data) {
     uint64_t seqnum = bits::JoinTwo32(response->logspace_id, response->seqnum_lowhalf);
+    std::optional<std::string> cached_aux_data;
     std::span<const char> aux_data = promised_aux_data;
     if (aux_data.size() == 0) {
-        std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
+        cached_aux_data = LogCacheGetAuxData(seqnum);
         if (cached_aux_data.has_value()) {
             aux_data = STRING_AS_SPAN(*cached_aux_data);
         }

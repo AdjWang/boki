@@ -1227,6 +1227,9 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	if len(auxData) > protocol.MessageInlineDataSize {
 		return fmt.Errorf("Auxiliary data too larger (size=%d), expect no more than %d bytes", len(auxData), protocol.MessageInlineDataSize)
 	}
+	if seqNum == protocol.InvalidLogSeqNum {
+		return fmt.Errorf("Invalid seqnum")
+	}
 
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
@@ -1259,6 +1262,9 @@ func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, seqNum u
 	if len(auxData) > protocol.MessageInlineDataSize {
 		return fmt.Errorf("auxiliary data too larger (size=%d), expect no more than %d bytes",
 			len(auxData), protocol.MessageInlineDataSize)
+	}
+	if seqNum == protocol.InvalidLogSeqNum {
+		return fmt.Errorf("Invalid seqnum")
 	}
 
 	id := atomic.AddUint64(&w.nextLogOpId, 1)

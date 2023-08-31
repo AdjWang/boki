@@ -9,9 +9,6 @@ using gsl::span;
 
 #define EMPTY_CHAR_SPAN std::span<const char>()
 
-#define SPAN_AS_STRING(SPAN_VAR)                                  \
-    std::string((SPAN_VAR).data(), (SPAN_VAR).size())
-
 #define STRING_AS_SPAN(STR_VAR)                                   \
     std::span<const char>((STR_VAR).data(), (STR_VAR).length())
 

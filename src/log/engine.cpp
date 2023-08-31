@@ -502,7 +502,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             // decode aux entry
             AuxEntry aux_entry;
             if (aux_entry_data.size() > 0) {
-                log_utils::DecodeAuxEntry(SPAN_AS_STRING(aux_entry_data), &aux_entry);
+                log_utils::DecodeAuxEntry(aux_entry_data, &aux_entry);
             }
             // make response message
             if (result == SharedLogResultType::ASYNC_READ_OK) {
