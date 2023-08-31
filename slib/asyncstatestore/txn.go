@@ -145,7 +145,9 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 	objectLog.localId = future.GetLocalId()
 	objectLog.seqNum = protocol.InvalidLogSeqNum
 	// Check for status
-	if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+	if committed, err := objectLog.checkTxnCommitResult(env, func() (uint64, error) {
+		return future.GetResult(common.AsyncWaitTimeout)
+	}); err != nil {
 		return false, err
 	} else {
 		return committed, nil

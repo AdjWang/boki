@@ -801,6 +801,11 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                 SendReadResponseWithoutData(query, SharedLogResultType::DATA_LOST);
             }
         }
+        // DEBUG
+        if (aux_data.size() > 0) {
+            AuxEntry aux_entry;
+            log_utils::DecodeAuxEntry(SPAN_AS_STRING(aux_data), &aux_entry);
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 #include "log/log_space.h"
 
 #include "log/flags.h"
+// DEBUG
+#include "log/utils.h"
 
 namespace faas {
 namespace log {
@@ -258,6 +260,11 @@ void LogStorage::ReadAt(const protocol::SharedLogMessage& request, std::span<con
         HLOG_F(WARNING, "Failed to locate seqnum {}", bits::HexStr0x(seqnum));
     }
     pending_read_results_.push_back(std::move(result));
+    // DEBUG
+    if (payload.size() > 0) {
+        AuxEntry aux_entry;
+        log_utils::DecodeAuxEntry(SPAN_AS_STRING(payload), &aux_entry);
+    }
 }
 
 bool LogStorage::GrabLogEntriesForPersistence(
@@ -326,6 +333,12 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
             .original_request = iter->second.message,
             .payload = iter->second.payload,
         });
+        // DEBUG
+        std::span<const char> payload = iter->second.payload;
+        if (payload.size() > 0) {
+            AuxEntry aux_entry;
+            log_utils::DecodeAuxEntry(SPAN_AS_STRING(payload), &aux_entry);
+        }
         iter = pending_read_requests_.erase(iter);
     }
     for (size_t i = 0; i < delta; i++) {
@@ -364,6 +377,12 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
                 .original_request = iter->second.message,
                 .payload = iter->second.payload,
             });
+            // DEBUG
+            std::span<const char> payload = iter->second.payload;
+            if (payload.size() > 0) {
+                AuxEntry aux_entry;
+                log_utils::DecodeAuxEntry(SPAN_AS_STRING(payload), &aux_entry);
+            }
             iter = pending_read_requests_.erase(iter);
         }
     }

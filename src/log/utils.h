@@ -131,6 +131,15 @@ inline std::string EncodeAuxEntry(const log::AuxEntry& aux_entry) {
     memcpy(ptr, &aux_metadata, sizeof(serializable::AuxMetaData));
     return encoded;
 }
+// DEBUG
+inline std::string StringToBytesStr(std::string str) {
+    std::string result("[");
+    for (const char c : str) {
+        result.append(fmt::format("{:02X} ", (uint8_t)c));
+    }
+    result.append("]");
+    return result;
+}
 inline void DecodeAuxEntry(std::string encoded, log::AuxEntry* aux_entry) {
     DCHECK_GT(encoded.size(), sizeof(serializable::AuxMetaData));
     serializable::AuxMetaData metadata;
@@ -139,7 +148,13 @@ inline void DecodeAuxEntry(std::string encoded, log::AuxEntry* aux_entry) {
            sizeof(serializable::AuxMetaData));
     size_t total_size = metadata.data_size
                       + sizeof(serializable::AuxMetaData);
-    DCHECK_EQ(total_size, encoded.size());
+    // DCHECK_EQ(total_size, encoded.size()) << StringToBytesStr(encoded);
+    // BUG: a strange bug at low ratio would leak data on the stack
+    // example encoded data:
+    // [00 5C 6E 00 00 00 00 00 FF FF FF FF 00 00 00 00 60 73 B0 36 DA 7F 00 00 00 00 00 00 00 00 00 00 74 86 21 34 DA 7F 00 00 10 00 00 00 00 00 00 00 FF FF FF FF FF FF FF FF]
+    // [00 90 6E 00 00 00 00 00 FF FF FF FF 00 00 00 00 A0 65 70 A3 44 7F 00 00 00 00 00 00 00 00 00 00 F4 63 41 A0 44 7F 00 00 10 00 00 00 00 00 00 00 FF FF FF FF FF FF FF FF]
+    // [49 30 38 33 31 20 30 39 00 00 00 00 35 39 2E 33 60 E9 3F A0 44 7F 00 00 60 E9 3F A0 44 7F 00 00 60 E9 3F A0 44 7F 00 00 01 00 00 00 00 00 00 00 C8 CF 40 A0 44 7F 00 00]
+    CHECK_EQ(total_size, encoded.size()) << StringToBytesStr(encoded);
     encoded.resize(metadata.data_size);
     DCHECK(aux_entry != nullptr);
     log::AuxMetaData aux_metadata = {

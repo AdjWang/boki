@@ -145,6 +145,11 @@ void Storage::HandleReadAtRequest(const SharedLogMessage& request, std::span<con
     {
         auto locked_storage = storage_ptr.Lock();
         locked_storage->ReadAt(request, payload);
+        // DEBUG
+        if (payload.size() > 0) {
+            AuxEntry aux_entry;
+            log_utils::DecodeAuxEntry(SPAN_AS_STRING(payload), &aux_entry);
+        }
         locked_storage->PollReadResults(&results);
     }
     ProcessReadResults(results);
@@ -220,6 +225,11 @@ void Storage::ProcessReadResults(const LogStorage::ReadResultVec& results) {
         SharedLogMessage response;
         switch (result.status) {
         case LogStorage::ReadResult::kOK:
+            // DEBUG
+            if (result.payload.size() > 0) {
+                AuxEntry aux_entry;
+                log_utils::DecodeAuxEntry(SPAN_AS_STRING(result.payload), &aux_entry);
+            }
             response = SharedLogMessageHelper::NewReadOkResponse();
             log_utils::PopulateMetaDataToMessage(result.log_entry->metadata, &response);
             DCHECK_EQ(response.logspace_id, request.logspace_id);
@@ -284,11 +294,36 @@ void Storage::SendEngineLogResult(const protocol::SharedLogMessage& request,
     if (aux_data.size() == 0) {
         std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
         if (cached_aux_data.has_value()) {
-            aux_data = STRING_AS_SPAN(*cached_aux_data);
+            aux_data = STRING_AS_SPAN(cached_aux_data.value());
+            // DEBUG
+            HLOG(WARNING) << "from cache";
+            if (aux_data.size() > 0) {
+                AuxEntry aux_entry;
+                log_utils::DecodeAuxEntry(SPAN_AS_STRING(aux_data), &aux_entry);
+            }
+        }
+    } else {
+        // DEBUG
+        HLOG(WARNING) << "from loopback";
+        if (aux_data.size() > 0) {
+            AuxEntry aux_entry;
+            log_utils::DecodeAuxEntry(SPAN_AS_STRING(aux_data), &aux_entry);
         }
     }
     response->aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+    // DEBUG
+    HLOG(WARNING) << "before send";
+    if (aux_data.size() > 0) {
+        AuxEntry aux_entry;
+        log_utils::DecodeAuxEntry(SPAN_AS_STRING(aux_data), &aux_entry);
+    }
     SendEngineResponse(request, response, tags_data, log_data, aux_data);
+    // DEBUG
+    HLOG(WARNING) << "after send";
+    if (aux_data.size() > 0) {
+        AuxEntry aux_entry;
+        log_utils::DecodeAuxEntry(SPAN_AS_STRING(aux_data), &aux_entry);
+    }
 }
 
 void Storage::BackgroundThreadMain() {

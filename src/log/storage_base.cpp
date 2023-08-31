@@ -3,6 +3,9 @@
 #include "log/flags.h"
 #include "server/constants.h"
 #include "utils/fs.h"
+// DEBUG
+#include "log/utils.h"
+#include "base/std_span.h"
 
 #define log_header_ "StorageBase: "
 
@@ -86,6 +89,11 @@ void StorageBase::MessageHandler(const SharedLogMessage& message,
                                  std::span<const char> payload) {
     switch (SharedLogMessageHelper::GetOpType(message)) {
     case SharedLogOpType::READ_AT:
+        // DEBUG
+        if (payload.size() > 0) {
+            AuxEntry aux_entry;
+            log_utils::DecodeAuxEntry(SPAN_AS_STRING(payload), &aux_entry);
+        }
         HandleReadAtRequest(message, payload);
         break;
     case SharedLogOpType::REPLICATE:
