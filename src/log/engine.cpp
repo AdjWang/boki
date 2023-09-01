@@ -695,9 +695,10 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                 }
             }
             LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
+            std::string cached_aux_data;
             std::span<const char> aux_data;
             if (cached_aux_entry.has_value()) {
-                const std::string& cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value(), op->user_tags);
+                cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value(), op->user_tags);
                 size_t full_size = log_entry.data.size()
                                     + log_entry.user_tags.size() * sizeof(uint64_t)
                                     + cached_aux_data.size();
@@ -731,9 +732,10 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             }
             log_utils::PopulateMetaDataToMessage(log_entry.metadata, &response);
             response.user_metalog_progress = query_result.metalog_progress;
+            std::string cached_aux_data;
             std::span<const char> aux_data;
             if (cached_aux_entry.has_value()) {
-                const std::string& cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value());
+                cached_aux_data = GetAuxDataToReturn(cached_aux_entry.value());
                 aux_data = STRING_AS_SPAN(cached_aux_data);
             }
             response.aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
@@ -777,9 +779,10 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
         // aux_data on storage node maybe stale, so protagate aux_data and
         // loopback to read response
+        std::string aux_entry_data;
         std::span<const char> aux_data;
         if (cached_aux_entry.has_value()) {
-            std::string aux_entry_data = log_utils::EncodeAuxEntry(cached_aux_entry.value());
+            aux_entry_data = log_utils::EncodeAuxEntry(cached_aux_entry.value());
             aux_data = STRING_AS_SPAN(aux_entry_data);
         }
         bool success = SendStorageReadRequest(query_result, engine_node, aux_data);

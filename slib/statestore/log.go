@@ -76,7 +76,7 @@ func (l *ObjectLogEntry) fillWriteSet() {
 }
 
 func decodeLogEntry(logEntry *types.LogEntry) *ObjectLogEntry {
-	rawObjectLog, err := common.DecompressData(logEntry.Data)
+	rawObjectLog, err := common.DecompressData1(logEntry.Data)
 	if err != nil {
 		panic(err)
 	}
@@ -105,7 +105,7 @@ func decodeLogEntry(logEntry *types.LogEntry) *ObjectLogEntry {
 			panic(err)
 		}
 		shardedAuxData := rawAuxData[0 /*defaultKey*/]
-		decompressedAuxData, err := common.DecompressData([]byte(shardedAuxData))
+		decompressedAuxData, err := common.DecompressData1([]byte(shardedAuxData))
 		if err != nil {
 			panic(err)
 		}
@@ -543,7 +543,7 @@ func (obj *ObjectRef) appendNormalOpSyncLog() (uint64, error) {
 		panic(err)
 	}
 	tags := []uint64{common.ObjectIdLogTag}
-	seqNum, err := obj.env.faasEnv.SharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
+	seqNum, err := obj.env.faasEnv.SharedLogAppend(obj.env.faasCtx, tags, common.CompressData1(encoded))
 	if err != nil {
 		return 0, newRuntimeError(err.Error())
 	} else {
@@ -565,7 +565,7 @@ func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (uint64 /* seqNum */, er
 		panic(err)
 	}
 	tags := []uint64{objectLogTag(obj.nameHash)}
-	seqNum, err := obj.env.faasEnv.SharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
+	seqNum, err := obj.env.faasEnv.SharedLogAppend(obj.env.faasCtx, tags, common.CompressData1(encoded))
 	if err != nil {
 		return 0, newRuntimeError(err.Error())
 	} else {
@@ -584,7 +584,7 @@ func (env *envImpl) appendTxnBeginLog() (uint64 /* seqNum */, error) {
 		panic(err)
 	}
 	tags := []uint64{common.TxnIdLogTag}
-	seqNum, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
+	seqNum, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData1(encoded))
 	if err != nil {
 		return 0, newRuntimeError(err.Error())
 	} else {
@@ -598,7 +598,7 @@ func (env *envImpl) setLogAuxData(seqNum uint64, data interface{}) error {
 	if err != nil {
 		panic(err)
 	}
-	compressed := common.CompressData(encoded)
+	compressed := common.CompressData1(encoded)
 	if FLAGS_RedisForAuxData {
 		key := fmt.Sprintf("%#016x", seqNum)
 		result := redisClient.Set(context.Background(), key, compressed, 0)

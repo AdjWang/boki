@@ -85,7 +85,7 @@ func (env *envImpl) TxnAbort() error {
 		panic(err)
 	}
 	tags := []uint64{common.TxnIdLogTag, txnHistoryLogTag(ctx.id)}
-	if _, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData(encoded)); err == nil {
+	if _, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData1(encoded)); err == nil {
 		return nil
 	} else {
 		return newRuntimeError(err.Error())
@@ -116,7 +116,7 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 	for _, op := range ctx.ops {
 		tags = append(tags, objectLogTag(common.NameHash(op.ObjName)))
 	}
-	seqNum, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
+	seqNum, err := env.faasEnv.SharedLogAppend(env.faasCtx, tags, common.CompressData1(encoded))
 	if err != nil {
 		return false, newRuntimeError(err.Error())
 	}

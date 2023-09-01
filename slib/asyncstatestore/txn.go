@@ -94,7 +94,7 @@ func (env *envImpl) TxnAbort() error {
 		{StreamType: common.FsmType_TxnIdLog, StreamId: common.TxnIdLogTag},
 		{StreamType: common.FsmType_TxnHistoryLog, StreamId: txnHistoryLogTag(txnId)},
 	}
-	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.idFuture.GetLocalId()}); err == nil {
+	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData2(encoded), []uint64{ctx.idFuture.GetLocalId()}); err == nil {
 		// ensure durability
 		return future.Await(common.AsyncWaitTimeout)
 	} else {
@@ -136,7 +136,7 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 			StreamId:   objectLogTag(common.NameHash(op.ObjName)),
 		})
 	}
-	future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData(encoded), []uint64{ctx.idFuture.GetLocalId()})
+	future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData2(encoded), []uint64{ctx.idFuture.GetLocalId()})
 	if err != nil {
 		return false, newRuntimeError(err.Error())
 	}

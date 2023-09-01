@@ -99,7 +99,7 @@ func (l *ObjectLogEntry) fillWriteSet() {
 }
 
 func decodeLogEntry(logEntry *types.LogEntryWithMeta) *ObjectLogEntry {
-	rawObjectLog, err := common.DecompressData(logEntry.Data)
+	rawObjectLog, err := common.DecompressData2(logEntry.Data)
 	if err != nil {
 		panic(err)
 	}
@@ -157,7 +157,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqN
 	}
 	if txnCommitLog.auxData != nil {
 		if v, exists := txnCommitLog.auxData[common.KeyCommitResult]; exists {
-			commitResult, err := common.DecompressData([]byte(v))
+			commitResult, err := common.DecompressData2([]byte(v))
 			if err != nil {
 				panic(err)
 			}
@@ -299,7 +299,7 @@ func (l *ObjectLogEntry) loadCachedObjectView(objName string) *ObjectView {
 	key := objectLogTag(common.NameHash(objName))
 	if l.LogType == LOG_NormalOp || l.LogType == LOG_TxnCommit {
 		if data, exists := l.auxData[key]; exists {
-			decompressedData, err := common.DecompressData([]byte(data))
+			decompressedData, err := common.DecompressData2([]byte(data))
 			if err != nil {
 				panic(err)
 			}
@@ -425,7 +425,7 @@ func (obj *ObjectRef) appendNormalOpSyncLog() (types.Future[uint64], error) {
 	tags := []types.Tag{
 		{StreamType: common.FsmType_ObjectIdLog, StreamId: common.ObjectIdLogTag},
 	}
-	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
+	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, common.CompressData2(encoded))
 	if err != nil {
 		return nil, newRuntimeError(err.Error())
 	} else {
@@ -448,7 +448,7 @@ func (obj *ObjectRef) appendNormalOpLog(ops []*WriteOp) (types.Future[uint64], e
 	tags := []types.Tag{
 		{StreamType: common.FsmType_ObjectLog, StreamId: objectLogTag(obj.nameHash)},
 	}
-	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, common.CompressData(encoded))
+	future, err := obj.env.faasEnv.AsyncSharedLogAppend(obj.env.faasCtx, tags, common.CompressData2(encoded))
 	if err != nil {
 		return nil, newRuntimeError(err.Error())
 	} else {
@@ -469,7 +469,7 @@ func (env *envImpl) appendTxnBeginLog() (types.Future[uint64], error) {
 	tags := []types.Tag{
 		{StreamType: common.FsmType_TxnIdLog, StreamId: common.TxnIdLogTag},
 	}
-	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, common.CompressData(encoded))
+	future, err := env.faasEnv.AsyncSharedLogAppend(env.faasCtx, tags, common.CompressData2(encoded))
 	if err != nil {
 		return nil, newRuntimeError(err.Error())
 	} else {
@@ -482,7 +482,7 @@ func (env *envImpl) setLogAuxData(seqNum uint64, key uint64, data interface{}) e
 	if err != nil {
 		panic(err)
 	}
-	compressed := common.CompressData(encoded)
+	compressed := common.CompressData2(encoded)
 	if FLAGS_RedisForAuxData {
 		panic("not implemented")
 		// key := fmt.Sprintf("%#016x", seqNum)
