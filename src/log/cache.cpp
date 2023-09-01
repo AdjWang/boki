@@ -338,18 +338,7 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataChecked(uint64_t seqnum, uint
     }
     DCHECK(contains_tag);
     DCHECK(!aux_entry.empty());
-    HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_entry.dump());
-    // DEBUG: check not empty
-    for (auto& [tag_str, value] : aux_entry.items()) {
-        if (value.dump() == R"("{}")") {
-            uint64_t dbg_tag = std::strtoul(tag_str.data(), nullptr, 10);
-            std::string key_str = MakeAuxCacheKeyWithIndex(seqnum, dbg_tag);
-            std::string data;
-            auto status = dbm_->Get(key_str, &data);
-            DCHECK(status.IsOK());
-            HLOG_F(FATAL, "invalid aux_data={} {} seqnum={:016X}", aux_entry.dump(), data, seqnum);
-        }
-    }
+    // HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_entry.dump());
     AuxMetaData aux_metadata = {
         .seqnum = seqnum,
     };
