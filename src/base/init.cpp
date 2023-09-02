@@ -111,6 +111,8 @@ void InitMain(int argc, char* argv[],
               "Failed to set SIGTERM handler");
     RAW_CHECK(sigaction(SIGINT, &act, nullptr) == 0,
               "Failed to set SIGINT handler");
+    RAW_CHECK(sigaction(SIGSEGV, &act, nullptr) == 0,
+              "Failed to set SIGSEGV handler");
 
     absl::FailureSignalHandlerOptions options;
     options.call_previous_handler = true;

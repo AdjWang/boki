@@ -475,10 +475,10 @@ static std::string GetAuxDataToReturn(const log::AuxEntry& aux_entry,
         return "";
     }
     const std::string& cached_aux_data(aux_data.dump());
-    // std::string compressed_aux_data;
-    // snappy::Compress(cached_aux_data.data(), cached_aux_data.size(), &compressed_aux_data);
-    // return compressed_aux_data;
-    return cached_aux_data;
+    std::string compressed_aux_data;
+    snappy::Compress(cached_aux_data.data(), cached_aux_data.size(), &compressed_aux_data);
+    return compressed_aux_data;
+    // return cached_aux_data;
 }
 
 void Engine::OnRecvResponse(const SharedLogMessage& message,
@@ -537,6 +537,9 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                                     "log_size={} num_tags={} cached_aux_data_size={}",
                             bits::HexStr0x(seqnum), log_data.size(),
                             user_tags.size(), cached_aux_data.size());
+                    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                        HLOG(FATAL) << "Unable to return aux_data for syncto";
+                    }
                 }
             }
             SendLocalOpWithResponse(
@@ -710,6 +713,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                                     "log_size={} num_tags={} cached_aux_data_size={}",
                             bits::HexStr0x(seqnum), log_entry.data.size(),
                             log_entry.user_tags.size(), cached_aux_data.size());
+                    if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+                        HLOG(FATAL) << "Unable to return aux_data for syncto";
+                    }
                 }
             }
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
@@ -850,6 +856,13 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
 }
 
 void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
+    Index::QueryResultVec query_results = results;
+    while (!query_results.empty()) {
+        // avoid recursive on the stack
+        query_results = DoProcessIndexQueryResults(query_results);
+    }
+}
+Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResultVec& results) {
     Index::QueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
         const IndexQuery& query = result.original_query;
@@ -909,9 +922,10 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
             UNREACHABLE();
         }
     }
-    if (!more_results.empty()) {
-        ProcessIndexQueryResults(more_results);
-    }
+    // if (!more_results.empty()) {
+    //     ProcessIndexQueryResults(more_results);
+    // }
+    return more_results;
 }
 
 void Engine::ProcessRequests(const std::vector<SharedLogRequest>& requests) {

@@ -799,7 +799,7 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
             if (localid == target_localid) {
                 sync_continue = false;
                 HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid=0x{:016X}", localid);
-                return true;    // stop
+                return true;    // stop early
             }
             pending_query_results_.push_back(
                 BuildFoundResult(query, view_->id(), seqnum, engine_id, localid, result_id++));
@@ -808,7 +808,7 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
             end_engine_id = engine_id;
             end_localid = localid;
             HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid={:016X} seqnum=0x{:016X}", localid, seqnum);
-            return false;   // stop
+            return false;   // continue
         });
     if (sync_continue) {
         pending_syncto_queries_.push_back(BuildContinueQuery(

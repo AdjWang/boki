@@ -20,6 +20,7 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
+	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 )
 
@@ -801,13 +802,13 @@ func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
 
 	rawAuxData := responseData[logDataStart+logDataSize:]
 	auxData := rawAuxData
-	// if len(rawAuxData) > 0 {
-	// 	var err error
-	// 	auxData, err = snappy.Decode(nil, rawAuxData)
-	// 	if err != nil {
-	// 		panic(errors.Wrapf(err, "snappy decode failed: %v:[%v]", rawAuxData, string(rawAuxData)))
-	// 	}
-	// }
+	if len(rawAuxData) > 0 {
+		var err error
+		auxData, err = snappy.Decode(nil, rawAuxData)
+		if err != nil {
+			panic(errors.Wrapf(err, "snappy decode failed: %v:[%v]", rawAuxData, string(rawAuxData)))
+		}
+	}
 	return &types.LogEntry{
 		LocalId: localId,
 		SeqNum:  seqNum,

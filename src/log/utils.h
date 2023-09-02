@@ -166,7 +166,8 @@ inline json GetByTags(const log::AuxEntry& log_entry, const log::UserTagVec& tag
     for (uint64_t tag : tags) {
         std::string tag_str = fmt::format("{}", tag);
         const auto& it = data.find(tag_str);
-        if (it.key() == tag_str) {
+        if (it != data.end()) {
+            DCHECK(it.key() == tag_str);
             result[tag_str] = it.value();
         }
     }

@@ -169,9 +169,6 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqN
 	}
 	commitResult := true
 	checkedTag := make(map[uint64]bool)
-	doneCh := make(chan bool)
-	errCh := make(chan error)
-	ctx, cancel := context.WithCancel(context.Background())
 	for _, op := range txnCommitLog.Ops {
 		tag := objectLogTag(common.NameHash(op.ObjName))
 		if _, exists := checkedTag[tag]; exists {
@@ -182,64 +179,37 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqN
 			LocalId: txnCommitLog.localId,
 			SeqNum:  txnCommitLog.seqNum,
 		}, types.ReadOptions{FromCached: false, AuxTags: []uint64{common.KeyCommitResult}})
-		go func(ctx context.Context) {
-			opCommitResult := true
-			for {
-				var logEntry *types.LogEntryWithMeta
-				select {
-				case <-ctx.Done():
-					errCh <- ctx.Err()
-					return
-				default:
-					logStreamEntry := logStream.BlockingDequeue()
-					logEntry = logStreamEntry.LogEntry
-					err := logStreamEntry.Err
-					if err != nil {
-						errCh <- ctx.Err()
-						return
-					}
-				}
-				if logEntry == nil {
-					break
-				}
-				objectLog := decodeLogEntry(logEntry)
-				if !txnCommitLog.writeSetOverlapped(objectLog) {
-					continue
-				}
-				if objectLog.LogType == LOG_NormalOp {
-					opCommitResult = false
-					break
-				} else if objectLog.LogType == LOG_TxnCommit {
-					if committed, err := objectLog.checkTxnCommitResult(env, nil /*awaitSeqNum*/); err != nil {
-						errCh <- err
-						return
-					} else if committed {
-						opCommitResult = false
-						break
-					}
-				}
+		for {
+			logStreamEntry := logStream.BlockingDequeue()
+			logEntry := logStreamEntry.LogEntry
+			err := logStreamEntry.Err
+			if err != nil {
+				return false, err
 			}
-			doneCh <- opCommitResult
-		}(ctx)
-		checkedTag[tag] = true
-	}
-	for range checkedTag {
-		select {
-		case committed := <-doneCh:
-			if !committed {
-				commitResult = false
+			if logEntry == nil {
 				break
 			}
-		case err := <-errCh:
-			cancel()
-			close(doneCh)
-			close(errCh)
-			return false, err
+			objectLog := decodeLogEntry(logEntry)
+			if !txnCommitLog.writeSetOverlapped(objectLog) {
+				continue
+			}
+			if objectLog.LogType == LOG_NormalOp {
+				commitResult = false
+				break
+			} else if objectLog.LogType == LOG_TxnCommit {
+				if committed, err := objectLog.checkTxnCommitResult(env, nil /*awaitSeqNum*/); err != nil {
+					return false, err
+				} else if committed {
+					commitResult = false
+					break
+				}
+			}
 		}
+		if !commitResult {
+			break
+		}
+		checkedTag[tag] = true
 	}
-	cancel()
-	close(doneCh)
-	close(errCh)
 
 	commitResultStr := "f"
 	if commitResult {

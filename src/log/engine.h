@@ -56,6 +56,7 @@ private:
 
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);
+    Index::QueryResultVec DoProcessIndexQueryResults(const Index::QueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void ProcessIndexFoundResult(const IndexQueryResult& query_result);
