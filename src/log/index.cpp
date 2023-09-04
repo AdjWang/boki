@@ -430,6 +430,7 @@ void Index::OnFinalized(uint32_t metalog_position) {
 }
 
 void Index::AdvanceIndexProgress() {
+    bool index_updated = false;
     while (!cuts_.empty()) {
         uint32_t end_seqnum = cuts_.front().second;
         if (data_received_seqnum_position_ < end_seqnum) {
@@ -449,7 +450,6 @@ void Index::AdvanceIndexProgress() {
             uint32_t localid_lowhalf = bits::LowHalf64(index_data.localid);
             GetOrCreateIndex(index_data.user_logspace)->Add(
                 seqnum, engine_id, localid_lowhalf, index_data.user_tags);
-
             // update index map, to serve async log query
             DCHECK(log_index_map_.find(index_data.localid) == log_index_map_.end())
                 << "Duplicate index_data.localid for log_index_map_";
@@ -457,7 +457,7 @@ void Index::AdvanceIndexProgress() {
                 .seqnum = bits::JoinTwo32(identifier(), seqnum),
                 .user_tags = index_data.user_tags,
             };
-
+            index_updated = true;
             iter = received_data_.erase(iter);
         }
         DCHECK_GT(end_seqnum, indexed_seqnum_position_);
@@ -502,12 +502,21 @@ void Index::AdvanceIndexProgress() {
         iter = pending_queries_.erase(iter);
     }
     // handle pending syncto queries
-    if (!pending_syncto_queries_.empty()) {
-        std::vector<IndexQuery> unfinished(std::move(pending_syncto_queries_));
+    if (index_updated && !pending_syncto_queries_.empty()) {
+        // pending_syncto_queries_ is modified in ProcessQuery, so use another box
+        std::multimap</*localid*/ uint64_t, IndexQuery> temp(std::move(pending_syncto_queries_));
         pending_syncto_queries_.clear();
-        for (const IndexQuery& query : unfinished) {
-            ProcessQuery(query);
+        auto iter = temp.begin();
+        while (iter != temp.end()) {
+            if (log_index_map_.contains(iter->first)) {
+                ProcessQuery(iter->second);
+                iter = temp.erase(iter);
+            } else {
+                ++iter;
+            }
         }
+        // push back unfinished
+        pending_syncto_queries_.merge(temp);
     }
 }
 
@@ -760,8 +769,10 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
     }
 
     if (sync_continue) {
-        pending_syncto_queries_.push_back(BuildContinueQuery(
-            query, end_index_found, end_index, end_seqnum, end_engine_id, end_localid, result_id));
+        pending_syncto_queries_.insert(std::make_pair(
+            query.query_localid,
+            BuildContinueQuery(query, end_index_found, end_index, end_seqnum,
+                               end_engine_id, end_localid, result_id)));
         if (end_index_found) {
             HVLOG_F(1, "ProcessReadNextU: ContinueQuery last localid={:016X} seqnum={:016X} id={}",
                 end_localid, end_seqnum, result_id);
@@ -811,8 +822,11 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
             return false;   // continue
         });
     if (sync_continue) {
-        pending_syncto_queries_.push_back(BuildContinueQuery(
-            query, /*end_index_found*/ n > 0, end_index, end_seqnum, end_engine_id, end_localid, result_id));
+        pending_syncto_queries_.insert(std::make_pair(
+            target_localid,
+            BuildContinueQuery(query, /*end_index_found*/ n > 0, end_index,
+                               end_seqnum, end_engine_id, end_localid,
+                               result_id)));
         if (n > 0) {
             HVLOG_F(1, "ProcessReadNextU Continue: ContinueQuery last localid={:016X} seqnum={:016X} id={}",
                 end_localid, end_seqnum, result_id);

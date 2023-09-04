@@ -127,7 +127,7 @@ private:
     uint32_t data_received_seqnum_position_;
     uint32_t indexed_seqnum_position_;
 
-    std::vector<IndexQuery> pending_syncto_queries_;
+    std::multimap</*localid*/ uint64_t, IndexQuery> pending_syncto_queries_;
     // updated when receiving an index, used to serve async log query
     struct AsyncIndexData {
         uint64_t seqnum;
