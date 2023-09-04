@@ -129,11 +129,11 @@ private:
 
     std::multimap</*localid*/ uint64_t, IndexQuery> pending_syncto_queries_;
     // updated when receiving an index, used to serve async log query
-    struct AsyncIndexData {
-        uint64_t seqnum;
-        UserTagVec user_tags;
+    struct LogIndexMapHash {
+        size_t operator()(const uint64_t obj) const { return obj; }
     };
-    absl::flat_hash_map</* localid */ uint64_t, AsyncIndexData> log_index_map_;
+    absl::flat_hash_map</*localid*/ uint64_t, /*seqnum*/ uint64_t,
+                        LogIndexMapHash> log_index_map_;
 
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);

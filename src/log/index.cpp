@@ -451,12 +451,9 @@ void Index::AdvanceIndexProgress() {
             GetOrCreateIndex(index_data.user_logspace)->Add(
                 seqnum, engine_id, localid_lowhalf, index_data.user_tags);
             // update index map, to serve async log query
-            DCHECK(log_index_map_.find(index_data.localid) == log_index_map_.end())
+            DCHECK(!log_index_map_.contains(index_data.localid))
                 << "Duplicate index_data.localid for log_index_map_";
-            log_index_map_[index_data.localid] = AsyncIndexData{
-                .seqnum = bits::JoinTwo32(identifier(), seqnum),
-                .user_tags = index_data.user_tags,
-            };
+            log_index_map_[index_data.localid] = bits::JoinTwo32(identifier(), seqnum);
             index_updated = true;
             iter = received_data_.erase(iter);
         }
@@ -544,15 +541,14 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
     // metalog_position_ is old.
 
     uint64_t localid = query.query_localid;
-    if (log_index_map_.find(localid) == log_index_map_.end()) {
+    if (log_index_map_.contains(localid)) {
         // not found
         // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed localid: 0x{:016X}",
         //         localid);
         return false;
     } else {
         // found
-        AsyncIndexData index_data = log_index_map_[localid];
-        uint64_t seqnum = index_data.seqnum;
+        uint64_t seqnum = log_index_map_[localid];
         // HVLOG_F(1, "ProcessQuery: found async map from localid=0x{:016X} to seqnum=0x{:016X}",
         //         localid, seqnum);
         // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
@@ -669,9 +665,10 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
                 query.hop_times, query.query_seqnum, query.user_logspace, tag, syncto_seqnum, sync_continue);
     } else {
         // query use localid
-        if (log_index_map_.contains(query.query_localid)) {
+        const auto& it = log_index_map_.find(query.query_localid);
+        if (it != log_index_map_.end()) {
             // syncto future
-            syncto_seqnum = log_index_map_.at(query.query_localid).seqnum;
+            syncto_seqnum = it->second;
             if (syncto_seqnum == 0) {
                 pending_query_results_.push_back(BuildResolvedResult(query, result_id));
                 HVLOG(1) << "ProcessReadNextU: ResolvedResult no preceding logs need to be synced";
