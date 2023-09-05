@@ -388,12 +388,13 @@ func NewSharedLogSetAuxDataMessage(currentCallId uint64, myClientId uint16, seqN
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint16(buffer[36:38], 0 /*numTags*/)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	binary.LittleEndian.PutUint64(buffer[56:64], InvalidLogLocalId)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
 	binary.LittleEndian.PutUint64(buffer[40:48], 0 /*tag*/)
 	return buffer
 }
 
-func NewSharedLogSetAuxDataMessageWithShards(currentCallId uint64, myClientId uint16, seqNum uint64, tag uint64, clientData uint64) []byte {
+func NewSharedLogSetAuxDataMessageWithShards(currentCallId uint64, myClientId uint16, seqNum uint64, localid uint64, tag uint64, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -401,6 +402,7 @@ func NewSharedLogSetAuxDataMessageWithShards(currentCallId uint64, myClientId ui
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint16(buffer[36:38], 0 /*numTags*/)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	binary.LittleEndian.PutUint64(buffer[56:64], localid)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
 	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	return buffer

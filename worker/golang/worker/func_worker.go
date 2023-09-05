@@ -1186,6 +1186,9 @@ func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, se
 // Implement types.Environment
 // TODO: delete this and move to async read
 func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, localId uint64) (*types.LogEntryWithMeta, error) {
+	if localId == protocol.InvalidLogLocalId {
+		panic("Invalid localid")
+	}
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, localId, id)
@@ -1256,7 +1259,7 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 }
 
 // Implement types.Environment
-func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, seqNum uint64, tag uint64, auxData []byte) error {
+func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, bucket types.LogEntryIndex, tag uint64, auxData []byte) error {
 	if len(auxData) == 0 {
 		return fmt.Errorf("auxiliary data cannot be empty")
 	}
@@ -1264,13 +1267,13 @@ func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, seqNum u
 		return fmt.Errorf("auxiliary data too larger (size=%d), expect no more than %d bytes",
 			len(auxData), protocol.MessageInlineDataSize)
 	}
-	if seqNum == protocol.InvalidLogSeqNum {
+	if bucket.SeqNum == protocol.InvalidLogSeqNum {
 		return fmt.Errorf("Invalid seqnum")
 	}
 
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogSetAuxDataMessageWithShards(currentCallId, w.clientId, seqNum, tag, id)
+	message := protocol.NewSharedLogSetAuxDataMessageWithShards(currentCallId, w.clientId, bucket.SeqNum, bucket.LocalId, tag, id)
 	protocol.FillInlineDataInMessage(message, auxData)
 
 	w.mux.Lock()
@@ -1287,6 +1290,6 @@ func (w *FuncWorker) SharedLogSetAuxDataWithShards(ctx context.Context, seqNum u
 	if result == protocol.SharedLogResultType_AUXDATA_OK {
 		return nil
 	} else {
-		return fmt.Errorf("failed to set auxiliary data for log (seqnum %#016x)", seqNum)
+		return fmt.Errorf("failed to set auxiliary data for log (seqnum %#016x)", bucket.SeqNum)
 	}
 }

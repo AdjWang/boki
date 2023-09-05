@@ -57,6 +57,8 @@ struct LogEntry {
 
 struct AuxMetaData {
     uint64_t seqnum;
+    // used by syncto to replace original log index
+    uint64_t localid;
 };
 
 struct AuxEntry {

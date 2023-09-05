@@ -92,11 +92,12 @@ public:
     explicit AuxIndex() {}
     virtual ~AuxIndex() {}
 
-    void Add(uint64_t seqnum, uint64_t tag);
+    void Add(uint64_t seqnum, uint64_t localid, uint64_t tag);
     void Remove(uint64_t seqnum, uint64_t tag);
     bool Contains(uint64_t seqnum) const;
     bool Contains(uint64_t seqnum, uint64_t tag) const;
     UserTagVec GetTags(uint64_t seqnum) const;
+    uint64_t GetLocalid(uint64_t seqnum) const;
 
     bool FindPrev(uint64_t query_seqnum, uint64_t aux_tag,
                   uint64_t* seqnum) const;
@@ -109,6 +110,9 @@ public:
    private:
     absl::flat_hash_map</* tag */ uint64_t, absl::btree_set<uint64_t>> seqnums_by_tag_;
     absl::flat_hash_map</* seqnum */ uint64_t, absl::btree_set<uint64_t>> tags_by_seqnum_;
+
+    absl::flat_hash_map</*seqnum*/ uint64_t, /*local*/ uint64_t,
+                        absl::Hash<uint64_t>> localid_by_seqnum_;
 
     bool FindPrev(const absl::btree_set<uint64_t>& seqnums, uint64_t query_seqnum,
                   uint64_t* result_seqnum) const;
@@ -129,7 +133,7 @@ public:
     std::optional<LogEntry> GetLogData(uint64_t seqnum) ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
     void PutAuxData(const AuxEntry& aux_entry);
-    void PutAuxData(uint64_t seqnum, uint64_t tag,
+    void PutAuxData(uint64_t seqnum, uint64_t localid, uint64_t tag,
                     std::span<const char> aux_data);
     std::optional<AuxEntry> GetAuxData(uint64_t seqnum);
     std::optional<AuxEntry> GetAuxDataPrev(uint64_t tag, uint64_t seqnum);

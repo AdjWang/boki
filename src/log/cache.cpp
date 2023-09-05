@@ -103,14 +103,18 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
     }
 }
 
-void AuxIndex::Add(uint64_t seqnum, uint64_t tag) {
+void AuxIndex::Add(uint64_t seqnum, uint64_t localid, uint64_t tag) {
     seqnums_by_tag_[tag].emplace(seqnum);
     tags_by_seqnum_[seqnum].emplace(tag);
+    localid_by_seqnum_[seqnum] = localid;
 }
 
 void AuxIndex::Remove(uint64_t seqnum, uint64_t tag) {
     seqnums_by_tag_[tag].erase(seqnum);
     tags_by_seqnum_[seqnum].erase(tag);
+    if (tags_by_seqnum_.at(seqnum).empty()) {
+        localid_by_seqnum_.erase(seqnum);
+    }
 }
 
 bool AuxIndex::Contains(uint64_t seqnum) const {
@@ -126,11 +130,22 @@ bool AuxIndex::Contains(uint64_t seqnum, uint64_t tag) const {
 }
 
 UserTagVec AuxIndex::GetTags(uint64_t seqnum) const {
-    if (!tags_by_seqnum_.contains(seqnum)) {
+    const auto& it = tags_by_seqnum_.find(seqnum);
+    if (it != tags_by_seqnum_.end()) {
+        auto tag_set = it->second;
+        return UserTagVec(tag_set.begin(), tag_set.end());
+    } else {
         return UserTagVec();
     }
-    auto tag_set = tags_by_seqnum_.at(seqnum);
-    return UserTagVec(tag_set.begin(), tag_set.end());
+}
+
+uint64_t AuxIndex::GetLocalid(uint64_t seqnum) const {
+    const auto& it = localid_by_seqnum_.find(seqnum);
+    if (it != localid_by_seqnum_.end()) {
+        return it->second;
+    } else {
+        return protocol::kInvalidLogLocalId;
+    }
 }
 
 bool AuxIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
@@ -261,6 +276,7 @@ std::optional<LogEntry> ShardedLRUCache::GetLogData(uint64_t seqnum) ABSL_NO_THR
 
 void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
     uint64_t seqnum = aux_entry.metadata.seqnum;
+    uint64_t localid = aux_entry.metadata.localid;
     json aux_entry_data = aux_entry.data;
     {
         absl::MutexLock cache_lk_(&cache_mu_);
@@ -268,7 +284,7 @@ void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
             DCHECK(!aux_data.empty());
             uint64_t tag = std::strtoul(tag_str.c_str(), nullptr, 16);
             // update index for addings
-            aux_index_->Add(seqnum, tag);
+            aux_index_->Add(seqnum, localid, tag);
             // update data
             std::string idx_key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
             std::string data = aux_data.get<std::string>();
@@ -281,11 +297,11 @@ void ShardedLRUCache::PutAuxData(const AuxEntry& aux_entry) {
     }
 }
 
-void ShardedLRUCache::PutAuxData(uint64_t seqnum, uint64_t tag,
+void ShardedLRUCache::PutAuxData(uint64_t seqnum, uint64_t localid, uint64_t tag,
                                  std::span<const char> aux_data) {
     absl::MutexLock cache_lk_(&cache_mu_);
     // update index for addings
-    aux_index_->Add(seqnum, tag);
+    aux_index_->Add(seqnum, localid, tag);
     std::string idx_key_str = MakeAuxCacheKeyWithIndex(seqnum, tag);
     std::string data(aux_data.data(), aux_data.size());
     HVLOG_F(1, "ShardedLRUCache::PutAuxData seqnum={:016X} tag={}", seqnum, tag);
@@ -311,6 +327,7 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxData(uint64_t seqnum) {
         std::string aux_data_str = aux_entry.dump();
         AuxMetaData aux_metadata = {
             .seqnum = seqnum,
+            .localid = aux_index_->GetLocalid(seqnum),
         };
         return AuxEntry {
             .metadata = aux_metadata,
@@ -341,6 +358,7 @@ std::optional<AuxEntry> ShardedLRUCache::GetAuxDataChecked(uint64_t seqnum, uint
     // HVLOG_F(1, "GetAuxData seqnum={:016X} aux_data={}", seqnum, aux_entry.dump());
     AuxMetaData aux_metadata = {
         .seqnum = seqnum,
+        .localid = aux_index_->GetLocalid(seqnum),
     };
     return AuxEntry {
         .metadata = aux_metadata,

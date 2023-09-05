@@ -78,6 +78,7 @@ public:
     void Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
              uint32_t localid_lowhalf, const UserTagVec& user_tags);
 
+    bool ContainsTag(uint64_t user_tag) const;
     bool FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint64_t* seqnum,
                   uint16_t* engine_id, uint64_t* localid,
                   size_t* index = nullptr) const;
@@ -122,6 +123,10 @@ void Index::PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
         DCHECK_NE(user_tag, kEmptyLogTag);
         seqnums_by_tag_[user_tag].push_back(seqnum_lowhalf);
     }
+}
+
+bool Index::PerSpaceIndex::ContainsTag(uint64_t user_tag) const {
+    return user_tag == kEmptyLogTag || seqnums_by_tag_.contains(user_tag);
 }
 
 bool Index::PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
@@ -353,7 +358,6 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
 }
 
 void Index::MakeQuery(const IndexQuery& query) {
-    // int64_t start_timestamp = GetMonotonicNanoTimestamp();
     if (query.initial) {
         HVLOG(1) << "Receive initial query";
         uint16_t view_id = log_utils::GetViewId(query.metalog_progress);
@@ -388,9 +392,6 @@ void Index::MakeQuery(const IndexQuery& query) {
             pending_queries_.insert(std::make_pair(kMaxMetalogPosition, query));
         }
     }
-    // int64_t end_timestamp = GetMonotonicNanoTimestamp();
-    // HLOG_F(INFO, "[PROF] MakeQuery dir={} hop_times={} elapsed={}ns",
-    //         query.direction, query.hop_times, end_timestamp - start_timestamp);
 }
 
 void Index::PollQueryResults(QueryResultVec* results) {
@@ -453,7 +454,10 @@ void Index::AdvanceIndexProgress() {
             // update index map, to serve async log query
             DCHECK(!log_index_map_.contains(index_data.localid))
                 << "Duplicate index_data.localid for log_index_map_";
-            log_index_map_[index_data.localid] = bits::JoinTwo32(identifier(), seqnum);
+            uint64_t full_seqnum = bits::JoinTwo32(identifier(), seqnum);
+            log_index_map_[index_data.localid] = full_seqnum;
+            // DEBUG
+            HVLOG_F(1, "AdvanceIndexProgress apply localid={:016X} seqnum={:016X}", index_data.localid, full_seqnum);
             index_updated = true;
             iter = received_data_.erase(iter);
         }
@@ -480,6 +484,8 @@ void Index::AdvanceIndexProgress() {
                     unfinished.push_back(std::make_pair(start_timestamp, query));
                 } else {
                     pending_query_results_.push_back(BuildNotFoundResult(query));
+                    HVLOG_F(1, "AdvanceIndexProgress query timeout dir={} target={:016X}",
+                                query.direction, query.query_seqnum);
                 }
             }
         }
@@ -541,20 +547,23 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
     // metalog_position_ is old.
 
     uint64_t localid = query.query_localid;
-    if (log_index_map_.contains(localid)) {
+    DCHECK_NE(localid, protocol::kInvalidLogLocalId);
+    const auto& it = log_index_map_.find(localid);
+    if (it == log_index_map_.end()) {
         // not found
-        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed localid: 0x{:016X}",
+        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed localid={:016X}",
         //         localid);
         return false;
     } else {
         // found
-        uint64_t seqnum = log_index_map_[localid];
-        // HVLOG_F(1, "ProcessQuery: found async map from localid=0x{:016X} to seqnum=0x{:016X}",
+        uint64_t seqnum = it->second;
+        // HVLOG_F(1, "ProcessQuery: found async map from localid={:016X} to seqnum={:016X}",
         //         localid, seqnum);
         // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
         // causing functions failed to send back the query result to the target engine node.
         DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
 
+        DCHECK_NE(seqnum, protocol::kInvalidLogSeqNum);
         uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
         auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id, localid);
         pending_query_results_.push_back(result);
@@ -838,10 +847,95 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
 }
 
 void Index::ProcessReadNextUntil(const IndexQuery& query) {
-    if (query.initial) {
-        ProcessReadNextUntilInitial(query);
+    // if (query.initial) {
+    //     ProcessReadNextUntilInitial(query);
+    // } else {
+    //     ProcessReadNextUntilContinue(query);
+    // }
+
+    DCHECK(query.direction == IndexQuery::kReadNextU);
+    uint64_t result_id = query.next_result_id;
+    HVLOG_F(1, "ProcessReadNextUntil query_start_seqnum={:016X} "
+               "target=f{}:{:016X} logspace={} tag={} initial={} hop_times={} id={}",
+               query.query_start_seqnum, query.flags, query.query_seqnum,
+               query.user_logspace, query.user_tag, query.initial,
+               query.hop_times, result_id);
+    // TODO: remove this if check after integrating view to localid
+    if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+        uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
+        if (query_view_id < view_->id()) {
+            pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
+            HVLOG(1) << "ProcessReadNextU: ViewContinueResult";
+            return;
+        }
+    }
+    // not necessary but to make the progress more clear
+    if (!GetOrCreateIndex(query.user_logspace)->ContainsTag(query.user_tag)) {
+        if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+            // perform as normal ReadNext
+            pending_query_results_.push_back(BuildNotFoundResult(query, result_id++));
+            HVLOG_F(1, "ProcessReadNextUntil not found tag={}. seqnum={:016X} logspace={}",
+                    query.user_tag, query.query_start_seqnum, query.user_logspace);
+        } else {
+            DCHECK(!log_index_map_.contains(query.query_localid));
+            pending_syncto_queries_.insert(std::make_pair(
+                query.query_localid,
+                BuildContinueQuery(query, /*end_index_found*/ false, /*index*/ 0,
+                                /*seqnum*/ 0, /*engine_id*/ 0, /*localid*/ 0, /*result_id*/ 0)));
+        }
+        return;
+    }
+    uint64_t start_seqnum = query.query_start_seqnum;
+    uint64_t found_start_seqnum;
+    uint16_t start_engine_id;
+    uint64_t start_localid;
+    uint64_t start_index;
+    if (GetOrCreateIndex(query.user_logspace)->FindNext(start_seqnum, query.user_tag,
+        &found_start_seqnum, &start_engine_id, &start_localid, &start_index)) {
+        HVLOG_F(1, "ProcessReadNextUntil find start: query_start_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
+                start_seqnum, found_start_seqnum, query.user_logspace, query.user_tag);
+
+        if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+            // perform as normal ReadNext
+            uint64_t end_seqnum = query.query_seqnum;
+            pending_query_results_.push_back(
+                BuildFoundRangeResult(query, view_->id(), found_start_seqnum, start_engine_id, start_localid,
+                                      end_seqnum, protocol::kInvalidLogLocalId, result_id++));
+        } else {
+            const auto& it = log_index_map_.find(query.query_localid);
+            if (it != log_index_map_.end()) {
+                // syncto not including end_seqnum itself
+                uint64_t end_seqnum = it->second;
+                pending_query_results_.push_back(
+                    BuildFoundRangeResult(query, view_->id(), found_start_seqnum, start_engine_id, start_localid,
+                                          end_seqnum, protocol::kInvalidLogLocalId, result_id++));
+            } else {
+                // get existing last seqnum
+                uint64_t last_seqnum;
+                uint16_t last_engine_id;
+                uint64_t last_localid;
+                // get the last should be fast
+                bool found = GetOrCreateIndex(query.user_logspace)->FindPrev(kMaxLogSeqNum, query.user_tag,
+                                &last_seqnum, &last_engine_id, &last_localid, /*&index*/nullptr);
+                DCHECK(found);  // found start_seqnum -> the stream is not empty
+                pending_query_results_.push_back(
+                    BuildFoundRangeResult(query, view_->id(), found_start_seqnum, start_engine_id, start_localid,
+                                        last_seqnum, query.query_localid, result_id++));
+            }
+        }
     } else {
-        ProcessReadNextUntilContinue(query);
+        if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+            // perform as normal ReadNext
+            pending_query_results_.push_back(BuildNotFoundResult(query, result_id++));
+            HVLOG_F(1, "ProcessReadNextUntil not found seqnum={:016X}. tag={} logspace={}",
+                    query.query_start_seqnum, query.user_tag, query.user_logspace);
+        } else {
+            DCHECK(!log_index_map_.contains(query.query_localid));
+            pending_syncto_queries_.insert(std::make_pair(
+                query.query_localid,
+                BuildContinueQuery(query, /*end_index_found*/ false, /*index*/ 0,
+                                /*seqnum*/ 0, /*engine_id*/ 0, /*localid*/ 0, /*result_id*/ 0)));
+        }
     }
 }
 
@@ -929,6 +1023,30 @@ bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum,
         query.query_seqnum, query.user_tag, seqnum, engine_id, localid);
 }
 
+IndexQueryResult Index::BuildFoundRangeResult(const IndexQuery& query,
+                                              uint16_t view_id, uint64_t seqnum,
+                                              uint16_t engine_id, uint64_t localid,
+                                              uint64_t end_seqnum, uint64_t future_localid,
+                                              uint64_t result_id) {
+    DCHECK(query.direction == IndexQuery::ReadDirection::kReadNextU);
+    return IndexQueryResult {
+        .state = IndexQueryResult::kFoundRange,
+        .metalog_progress = query.initial ? index_metalog_progress()
+                                          : query.metalog_progress,
+        .next_view_id = view_id,
+        .id = result_id,
+        .original_query = query,
+        .found_result = IndexFoundResult {
+            .view_id = view_id,
+            .engine_id = engine_id,
+            .seqnum = seqnum,
+            .localid = localid,
+
+            .end_seqnum = end_seqnum,
+            .future_localid = future_localid,
+        },
+    };
+}
 IndexQueryResult Index::BuildFoundResult(const IndexQuery& query,
                                          uint16_t view_id, uint64_t seqnum,
                                          uint16_t engine_id, uint64_t localid,

@@ -281,6 +281,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         DCHECK(message.log_num_tags == 0);
         PopulateLogTagsAndData(message, op);
         op->seqnum = message.log_seqnum;
+        op->localid = message.log_localid;
         break;
     default:
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;

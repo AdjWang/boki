@@ -94,7 +94,7 @@ public:
     };
 
     const Engine* GetEngineNode(uint16_t node_id) const {
-        DCHECK(engine_nodes_.contains(node_id));
+        DCHECK(engine_nodes_.contains(node_id)) << node_id;
         return engine_nodes_.at(node_id);
     }
 

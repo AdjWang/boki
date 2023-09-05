@@ -11,7 +11,11 @@ struct IndexFoundResult {
     uint16_t engine_id;
     uint64_t seqnum;
     uint64_t localid;
-    size_t log_index;
+    size_t log_index;   // only for Index internal use
+
+    // Used by syncto
+    uint64_t end_seqnum;
+    uint64_t future_localid;
 };
 
 struct IndexQuery {
@@ -57,7 +61,7 @@ struct IndexQuery {
 };
 
 struct IndexQueryResult {
-    enum State { kFound, kEmpty, kViewContinue, kAuxContinue, kEOF };
+    enum State { kFound, kFoundRange, kEmpty, kViewContinue, kAuxContinue, kFoundRangeContinue, kEOF };
     State state;
     uint64_t metalog_progress;
     uint16_t next_view_id;
@@ -67,6 +71,7 @@ struct IndexQueryResult {
 
     IndexQuery       original_query;
     IndexFoundResult found_result;
+    std::optional<AuxEntry> promised_auxdata;
 };
 
 class DebugQueryResultVec final : public absl::InlinedVector<IndexQueryResult, 4> {
@@ -129,11 +134,8 @@ private:
 
     std::multimap</*localid*/ uint64_t, IndexQuery> pending_syncto_queries_;
     // updated when receiving an index, used to serve async log query
-    struct LogIndexMapHash {
-        size_t operator()(const uint64_t obj) const { return obj; }
-    };
     absl::flat_hash_map</*localid*/ uint64_t, /*seqnum*/ uint64_t,
-                        LogIndexMapHash> log_index_map_;
+                        absl::Hash<uint64_t>> log_index_map_;
 
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);
@@ -160,6 +162,9 @@ private:
     IndexQuery BuildContinueQuery(const IndexQuery& query, bool found,
                                   size_t index, uint64_t seqnum, uint16_t engine_id,
                                   uint64_t localid, uint64_t next_result_id);
+    IndexQueryResult BuildFoundRangeResult(const IndexQuery& query, uint16_t view_id,
+                                           uint64_t seqnum, uint16_t engine_id, uint64_t localid,
+                                           uint64_t end_seqnum, uint64_t future_localid, uint64_t result_id=0);
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
                                       uint64_t seqnum, uint16_t engine_id, uint64_t localid, uint64_t result_id=0);
     IndexQueryResult BuildResolvedResult(const IndexQuery& query, uint64_t result_id=0);

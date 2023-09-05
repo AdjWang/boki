@@ -55,6 +55,8 @@ private:
                         std::span<const char> payload) override;
 
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
+    IndexQueryResult UpdateQueryResultWithAux(const IndexQueryResult& result,
+                                              Index::QueryResultVec* more_results);
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);
     Index::QueryResultVec DoProcessIndexQueryResults(const Index::QueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
@@ -68,7 +70,7 @@ private:
                      std::span<const char> log_data);
     std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
     void LogCachePutAuxData(const AuxEntry& aux_entry);
-    void LogCachePutAuxData(uint64_t seqnum, uint64_t tag,
+    void LogCachePutAuxData(uint64_t seqnum, uint64_t localid, uint64_t tag,
                             std::span<const char> aux_data);
     std::optional<AuxEntry> LogCacheGetAuxData(uint64_t seqnum);
     std::optional<AuxEntry> LogCacheGetAuxDataPrev(uint64_t tag, uint64_t seqnum);

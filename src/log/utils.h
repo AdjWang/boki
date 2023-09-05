@@ -131,7 +131,7 @@ inline std::string EncodeAuxEntry(const log::AuxEntry& aux_entry) {
     memcpy(ptr, &aux_metadata, sizeof(serializable::AuxMetaData));
     return encoded;
 }
-inline void DecodeAuxEntry(std::span<const char> encoded, log::AuxEntry* aux_entry) {
+inline uint64_t DecodeAuxEntry(std::span<const char> encoded, uint64_t localid, log::AuxEntry* aux_entry) {
     DCHECK_GT(encoded.size(), sizeof(serializable::AuxMetaData));
     serializable::AuxMetaData metadata;
     memcpy(&metadata,
@@ -144,6 +144,7 @@ inline void DecodeAuxEntry(std::span<const char> encoded, log::AuxEntry* aux_ent
     DCHECK(aux_entry != nullptr);
     log::AuxMetaData aux_metadata = {
         .seqnum = metadata.seqnum,
+        .localid = localid,
     };
     aux_entry->metadata = aux_metadata;
     try {
@@ -152,6 +153,7 @@ inline void DecodeAuxEntry(std::span<const char> encoded, log::AuxEntry* aux_ent
         std::string json_str(aux_data.begin(), aux_data.end());
         LOG(ERROR) << "Failed to parse json: " << e.what() << " " << json_str;
     }
+    return metadata.seqnum;
 }
 inline json GetByTags(const log::AuxEntry& log_entry, const log::UserTagVec& tags) {
     json data = log_entry.data;

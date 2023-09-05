@@ -282,6 +282,11 @@ void IOUring::EventLoopRunOnce(size_t* inflight_ops) {
     if (absl::GetFlag(FLAGS_io_uring_cq_wait_timeout_us) == 0) {
         int64_t start_timestamp = GetMonotonicNanoTimestamp();
         int ret = io_uring_submit_and_wait(&ring_, nr_wait);
+        while (-ret == EINTR) {
+            // Interrupted system call, try again
+            VLOG(2) << "Interrupted system call for io_uring_submit_and_wait";
+            ret = io_uring_submit_and_wait(&ring_, nr_wait);
+        }
         int64_t elasped_time = GetMonotonicNanoTimestamp() - start_timestamp;
         if (ret < 0) {
             LOG(FATAL) << "io_uring_submit_and_wait failed: " << ERRNO_LOGSTR(-ret);

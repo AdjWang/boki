@@ -43,9 +43,9 @@ type LogEntryIndex struct {
 	SeqNum  uint64
 }
 
-var InvalidLogEntryIndex = LogEntryIndex {
+var InvalidLogEntryIndex = LogEntryIndex{
 	LocalId: protocol.InvalidLogLocalId,
-	SeqNum: protocol.InvalidLogSeqNum,
+	SeqNum:  protocol.InvalidLogSeqNum,
 }
 
 // DEBUG
@@ -104,7 +104,7 @@ type Environment interface {
 	SharedLogCheckTail(ctx context.Context, tag uint64) (*LogEntry, error)
 	// Set auxiliary data for log entry of given `seqNum`
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
-	SharedLogSetAuxDataWithShards(ctx context.Context, seqNum uint64, key uint64, auxData []byte) error
+	SharedLogSetAuxDataWithShards(ctx context.Context, bucket LogEntryIndex, key uint64, auxData []byte) error
 	// Batch read for range [seqNum, target)
 	SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) *Queue[LogStreamEntry[LogEntry]]
 	AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) *Queue[LogStreamEntry[LogEntryWithMeta]]
