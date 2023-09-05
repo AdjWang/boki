@@ -1,10 +1,13 @@
 package worker
 
 import (
+	"fmt"
 	"log"
+	"time"
 
 	"cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
+	"github.com/montanaflynn/stats"
 )
 
 // Reorder response by response count
@@ -19,9 +22,10 @@ type ResponseBuffer struct {
 	SignalResolved chan struct{}
 
 	// DEBUG
-	debugIngressRecord      [][]byte
-	debugIntermediateRecord [][]byte
-	debugOutgressRecord     [][]byte
+	deliverTs        map[uint64]time.Time
+	deliverDurations []float64
+	bufferedCount    int
+	totalCount       int
 }
 
 func NewResponseBuffer(reservedCapacity int) *ResponseBuffer {
@@ -36,9 +40,10 @@ func NewResponseBuffer(reservedCapacity int) *ResponseBuffer {
 		SignalResolved: make(chan struct{}, 1),
 
 		// DEBUG
-		debugIngressRecord:      make([][]byte, 0, 20),
-		debugIntermediateRecord: make([][]byte, 0, 20),
-		debugOutgressRecord:     make([][]byte, 0, 20),
+		deliverTs:        make(map[uint64]time.Time),
+		deliverDurations: make([]float64, 0, 100),
+		bufferedCount:    0,
+		totalCount:       0,
 	}
 	go rb.worker()
 	return &rb
@@ -46,19 +51,14 @@ func NewResponseBuffer(reservedCapacity int) *ResponseBuffer {
 
 // DEBUG
 func (rb *ResponseBuffer) Inspect() {
-	log.Println("Ingress")
-	log.Println(rb.debugIngressRecord)
-	for _, message := range rb.debugIngressRecord {
-		log.Println(protocol.InspectMessage(message))
-	}
-	log.Println("Intermediate")
-	for _, message := range rb.debugIntermediateRecord {
-		log.Println(protocol.InspectMessage(message))
-	}
-	log.Println("Outgress")
-	for _, message := range rb.debugOutgressRecord {
-		log.Println(protocol.InspectMessage(message))
-	}
+	p30, _ := stats.Percentile(rb.deliverDurations, 30.0)
+	p50, _ := stats.Percentile(rb.deliverDurations, 50.0)
+	p70, _ := stats.Percentile(rb.deliverDurations, 70.0)
+	p90, _ := stats.Percentile(rb.deliverDurations, 90.0)
+	p99, _ := stats.Percentile(rb.deliverDurations, 99.0)
+	p100, _ := stats.Percentile(rb.deliverDurations, 100.0)
+	log.Printf("[DEBUG] ResponseBuffer buffered=%v total=%v deliver stats=(30:%v 50:%v 70:%v 90:%v 99:%v max:%v)",
+		rb.bufferedCount, rb.totalCount, p30, p50, p70, p90, p99, p100)
 }
 
 func (rb *ResponseBuffer) worker() {
@@ -67,11 +67,12 @@ func (rb *ResponseBuffer) worker() {
 		if !ok {
 			break
 		}
-		// DEBUG
-		rb.debugIngressRecord = append(rb.debugIngressRecord, message)
-
 		responseId := protocol.GetResponseIdFromMessage(message)
 		// log.Printf("[DEBUG] ResponseBuffer received %v", protocol.InspectMessage(message))
+		// DEBUG
+		rb.deliverTs[responseId] = time.Now()
+		rb.totalCount++
+
 		if responseId == rb.responseId {
 			rb.outputMessage(message)
 			rb.responseId++
@@ -85,8 +86,8 @@ func (rb *ResponseBuffer) worker() {
 				}
 			}
 		} else {
-			// log.Printf("[DEBUG] ResponseBuffer buffered %v", protocol.InspectMessage(message))
 			rb.responseBuffer[responseId] = message
+			rb.bufferedCount++
 		}
 	}
 }
@@ -102,6 +103,9 @@ func (rb *ResponseBuffer) checkResolved(message []byte) {
 		// ensure only do once
 		close(rb.SignalResolved)
 		close(rb.ingress)
+
+		// DEBUG: print debug info
+		rb.Inspect()
 	}
 }
 
@@ -109,9 +113,13 @@ func (rb *ResponseBuffer) outputMessage(message []byte) {
 	if rb.resolved {
 		panic("output message after resolved")
 	}
-	// log.Printf("[DEBUG] ResponseBuffer output %v", protocol.InspectMessage(message))
-	// DEBUG
-	rb.debugIntermediateRecord = append(rb.debugIntermediateRecord, message)
+	ts, found := rb.deliverTs[rb.responseId]
+	if !found {
+		panic(fmt.Errorf("respid=%v not found", rb.responseId))
+	}
+	// log.Printf("[DEBUG] ResponseBuffer output id=%v deliverTime=%vus msg=%v",
+	// 	rb.responseId, time.Since(ts).Microseconds(), protocol.InspectMessage(message))
+	rb.deliverDurations = append(rb.deliverDurations, float64(time.Since(ts).Microseconds()))
 
 	rb.outgress.Enqueue(message)
 	rb.checkResolved(message)
@@ -123,9 +131,6 @@ func (rb *ResponseBuffer) Enqueue(message []byte) {
 
 func (rb *ResponseBuffer) Dequeue() []byte {
 	message := rb.outgress.BlockingDequeue()
-	// DEBUG
-	rb.debugOutgressRecord = append(rb.debugOutgressRecord, message)
-
 	// log.Printf("[DEBUG] SharedLogOp output cid=%v %v", rb.cid, protocol.InspectMessage(message))
 	return message
 }
