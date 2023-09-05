@@ -182,20 +182,19 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqN
 			continue
 		}
 
-		logStream := env.faasEnv.AsyncSharedLogReadNextUntil(env.faasCtx, tag, txnCommitLog.TxnId, types.LogEntryIndex{
-			LocalId: txnCommitLog.localId,
-			SeqNum:  txnCommitLog.seqNum,
-		}, types.ReadOptions{FromCached: false, AuxTags: []uint64{common.KeyCommitResult}})
-		for {
-			logStreamEntry := logStream.BlockingDequeue()
-			logEntry := logStreamEntry.LogEntry
-			err := logStreamEntry.Err
+		seqNum := txnCommitLog.TxnId
+		for seqNum < txnCommitLog.seqNum {
+			logEntry, err := env.faasEnv.AsyncSharedLogReadNextUntil(env.faasCtx, tag, txnCommitLog.TxnId, types.LogEntryIndex{
+				LocalId: txnCommitLog.localId,
+				SeqNum:  txnCommitLog.seqNum,
+			}, types.ReadOptions{FromCached: false, AuxTags: []uint64{common.KeyCommitResult}})
 			if err != nil {
 				return false, err
 			}
-			if logEntry == nil {
+			if logEntry == nil || logEntry.LocalId == txnCommitLog.localId || logEntry.SeqNum >= txnCommitLog.seqNum {
 				break
 			}
+			seqNum = logEntry.SeqNum + 1
 			objectLog := decodeLogEntry(logEntry)
 			if !txnCommitLog.writeSetOverlapped(objectLog) {
 				continue
@@ -348,18 +347,17 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 			contents:   gabs.New(),
 		}
 	}
-	logStream := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, view.nextSeqNum, logIndex,
-		types.ReadOptions{FromCached: true, AuxTags: []uint64{tag, common.KeyCommitResult}})
-	for {
-		logStreamEntry := logStream.BlockingDequeue()
-		logEntry := logStreamEntry.LogEntry
-		err := logStreamEntry.Err
+	seqNum := view.nextSeqNum
+	for seqNum < logIndex.SeqNum {
+		logEntry, err := env.faasEnv.AsyncSharedLogReadNextUntil(obj.env.faasCtx, tag, seqNum, logIndex,
+			types.ReadOptions{FromCached: true, AuxTags: []uint64{tag, common.KeyCommitResult}})
 		if err != nil {
 			return err
 		}
-		if logEntry == nil {
+		if logEntry == nil || logEntry.LocalId == logIndex.LocalId || logEntry.SeqNum >= logIndex.SeqNum {
 			break
 		}
+		seqNum = logEntry.SeqNum + 1
 		objectLog := decodeLogEntry(logEntry)
 		if !objectLog.withinWriteSet(obj.name) {
 			continue

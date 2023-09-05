@@ -106,8 +106,8 @@ type Environment interface {
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
 	SharedLogSetAuxDataWithShards(ctx context.Context, bucket LogEntryIndex, key uint64, auxData []byte) error
 	// Batch read for range [seqNum, target)
-	SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) *Queue[LogStreamEntry[LogEntry]]
-	AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) *Queue[LogStreamEntry[LogEntryWithMeta]]
+	SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) (*LogEntry, error)
+	AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target LogEntryIndex, opts ReadOptions) (*LogEntryWithMeta, error)
 
 	AsyncSharedLogAppend(ctx context.Context, tags []Tag, data []byte) (Future[uint64], error)
 	AsyncSharedLogAppendWithDeps(ctx context.Context, tags []Tag, data []byte, deps []uint64) (Future[uint64], error)

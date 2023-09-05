@@ -883,8 +883,7 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
     }
 }
 
-IndexQueryResult Engine::UpdateQueryResultWithAux(const IndexQueryResult& result,
-                                                  Index::QueryResultVec* more_results) {
+IndexQueryResult Engine::UpdateQueryResultWithAux(const IndexQueryResult& result) {
     DCHECK(result.state == IndexQueryResult::kFoundRange);
 
     uint64_t start_seqnum = result.found_result.seqnum;
@@ -905,14 +904,9 @@ IndexQueryResult Engine::UpdateQueryResultWithAux(const IndexQueryResult& result
             HVLOG_F(1, "UpdateQueryResultWithAux produce kEOF id={}", new_result.id);
             return new_result;
         } else if ((start_seqnum + 1) == end_seqnum) {
-            IndexQueryResult next_result = result;
-            next_result.state = IndexQueryResult::kEOF;
-            next_result.id += 1;
-            more_results->push_back(next_result);
-
             IndexQueryResult new_result = result;
             new_result.promised_auxdata = LogCacheGetAuxData(start_seqnum);
-            HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={}; kEOF id={}", new_result.id, next_result.id);
+            HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={}", new_result.id);
             return new_result;
         }
     }
@@ -939,38 +933,15 @@ IndexQueryResult Engine::UpdateQueryResultWithAux(const IndexQueryResult& result
     } else {
         new_result.promised_auxdata = std::nullopt;
     }
-    // recheck after potential result.found_result.seqnum adjustion by aux
-    if (future_localid == protocol::kInvalidLogLocalId) {
-        uint64_t new_start_seqnum = new_result.found_result.seqnum;
-        uint64_t new_end_seqnum = new_result.found_result.end_seqnum;
-        DCHECK_LT(new_start_seqnum, new_end_seqnum);
-        if ((new_start_seqnum + 1) == new_end_seqnum) {
-            IndexQueryResult next_result = new_result;
-            next_result.state = IndexQueryResult::kEOF;
-            next_result.id += 1;
-            more_results->push_back(next_result);
-
-            HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={}; kEOF id={}", new_result.id, next_result.id);
-            return new_result;
-        }
-    }
-    // make next query
-    // future_localid not reach or (new_start_seqnum+1) < new_end_seqnum
-    IndexQueryResult next_result = new_result;
-    next_result.state = IndexQueryResult::kFoundRangeContinue;
-    next_result.id += 1;
-    more_results->push_back(next_result);
-
     // DEBUG
     {
         uint64_t start_seqnum = new_result.found_result.seqnum;
         uint64_t localid = new_result.found_result.localid;
         uint64_t end_seqnum = new_result.found_result.end_seqnum;
         uint64_t future_localid = new_result.found_result.future_localid;
-        HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={} seqnum={:016X} localid={:016X}; "
-                    "kFoundRangeContinue id={} range=({:016X} {:016X} {:016X})",
-                    new_result.id, start_seqnum, localid,
-                    next_result.id, start_seqnum, end_seqnum, future_localid);
+        HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={} seqnum={:016X} localid={:016X} "
+                    "end_seqnum={:016X} future_localid={:016X}",
+                    new_result.id, start_seqnum, localid, end_seqnum, future_localid);
     }
     return new_result;
 }
@@ -987,7 +958,7 @@ Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResul
     for (const IndexQueryResult& original_result : results) {
         IndexQueryResult result = original_result;
         if (original_result.state == IndexQueryResult::kFoundRange) {
-            result = UpdateQueryResultWithAux(result, &more_results);
+            result = UpdateQueryResultWithAux(original_result);
         }
         const IndexQuery& query = result.original_query;
         switch (result.state) {

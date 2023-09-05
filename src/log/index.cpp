@@ -873,6 +873,8 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     uint64_t start_seqnum = query.query_start_seqnum;
     if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
         DCHECK_LT(start_seqnum, query.query_seqnum);
+    } else {
+        DCHECK_NE(query.query_localid, protocol::kInvalidLogLocalId);
     }
     uint64_t found_start_seqnum;
     uint16_t start_engine_id;

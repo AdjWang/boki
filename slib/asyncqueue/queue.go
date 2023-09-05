@@ -212,18 +212,23 @@ func (s syncToInspector) String() string {
 
 func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 	tag := queueLogTag(q.nameHash)
-	logStream := q.env.AsyncSharedLogReadNextUntil(q.ctx, tag, q.nextSeqNum, logIndex,
-		types.ReadOptions{FromCached: true, AuxTags: []uint64{tag}})
-	for {
-		logStreamEntry := logStream.BlockingDequeue()
-		logEntry := logStreamEntry.LogEntry
-		err := logStreamEntry.Err
+	seqNum := q.nextSeqNum
+	targetSeqNum := logIndex.SeqNum
+	for seqNum < targetSeqNum {
+		tempCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		logEntry, err := q.env.AsyncSharedLogReadNextUntil(tempCtx, tag, seqNum, logIndex,
+			types.ReadOptions{FromCached: true, AuxTags: []uint64{tag}})
+		cancel()
 		if err != nil {
-			return err
+			idxLocalId := logIndex.LocalId
+			idxSeqNum := logIndex.SeqNum
+			panic(errors.Wrapf(err, "AsyncSharedLogReadNextUntil queue=%v tag=%v seqNum=%016X index=(localid=%016X seqnum=%016X)",
+				q.name, tag, seqNum, idxLocalId, idxSeqNum))
 		}
-		if logEntry == nil {
+		if logEntry == nil || logEntry.LocalId == logIndex.LocalId {
 			break
 		}
+		seqNum = logEntry.SeqNum + 1
 		queueLog := decodeQueueLogEntry(logEntry)
 		if queueLog.QueueName != q.name {
 			continue

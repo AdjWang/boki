@@ -55,8 +55,7 @@ private:
                         std::span<const char> payload) override;
 
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
-    IndexQueryResult UpdateQueryResultWithAux(const IndexQueryResult& result,
-                                              Index::QueryResultVec* more_results);
+    IndexQueryResult UpdateQueryResultWithAux(const IndexQueryResult& result);
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);
     Index::QueryResultVec DoProcessIndexQueryResults(const Index::QueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);

@@ -960,7 +960,7 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
-func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, opts types.ReadOptions) *types.Queue[types.LogStreamEntry[types.LogEntry]] {
+func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, opts types.ReadOptions) (*types.LogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -976,15 +976,11 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seq
 	if len(opts.AuxTags) > 0 {
 		tags, err := checkAndDuplicateTags(opts.AuxTags, true /*allowInvalidTag*/)
 		if err != nil {
-			results := types.NewQueue[types.LogStreamEntry[types.LogEntry]](1)
-			results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: err})
-			return results
+			return nil, err
 		}
 		if len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
 			err := fmt.Errorf("data too larger (num_tags=%d), expect no more than %d bytes", len(tags), protocol.MessageInlineDataSize)
-			results := types.NewQueue[types.LogStreamEntry[types.LogEntry]](1)
-			results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: err})
-			return results
+			return nil, err
 		}
 		tagBuffer := protocol.BuildLogTagsBuffer(tags)
 		protocol.FillInlineDataInMessage(message, tagBuffer)
@@ -995,49 +991,38 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seq
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
-	results := types.NewQueue[types.LogStreamEntry[types.LogEntry]](QUEUE_RESERVED_CAP)
 	if err != nil {
-		results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: err})
-		return results
+		return nil, err
 	}
 
-	go func() {
-		for {
-			var response []byte
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				response = queue.Dequeue()
-			}
-			result := protocol.GetSharedLogResultTypeFromMessage(response)
-			if result == protocol.SharedLogResultType_READ_OK {
-				flags := protocol.GetFlagsFromMessage(response)
-				if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
-					if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
-						panic("assertion error, should always end with EOF without data")
-					}
-					results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil})
-					return
-				}
-				logEntry := buildLogEntryFromReadResponse(response)
-				results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: logEntry, Err: nil})
-			} else if result == protocol.SharedLogResultType_EMPTY {
-				results.Enqueue(types.LogStreamEntry[types.LogEntry]{LogEntry: nil, Err: nil})
-				return
-			} else {
-				results.Enqueue(
-					types.LogStreamEntry[types.LogEntry]{
-						LogEntry: nil,
-						Err:      fmt.Errorf("failed to read log: 0x%02X", result)})
-				return
-			}
+	for {
+		var response []byte
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			response = queue.Dequeue()
 		}
-	}()
-	return results
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_READ_OK {
+			flags := protocol.GetFlagsFromMessage(response)
+			if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
+				if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
+					panic("assertion error, should always end with EOF without data")
+				}
+				return nil, nil
+			}
+			logEntry := buildLogEntryFromReadResponse(response)
+			return logEntry, nil
+		} else if result == protocol.SharedLogResultType_EMPTY {
+			return nil, nil
+		} else {
+			return nil, fmt.Errorf("failed to read log: 0x%02X", result)
+		}
+	}
 }
 
-func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, opts types.ReadOptions) *types.Queue[types.LogStreamEntry[types.LogEntryWithMeta]] {
+func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64, seqNum uint64, target types.LogEntryIndex, opts types.ReadOptions) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 
@@ -1053,15 +1038,11 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 	if len(opts.AuxTags) > 0 {
 		tags, err := checkAndDuplicateTags(opts.AuxTags, true /*allowInvalidTag*/)
 		if err != nil {
-			results := types.NewQueue[types.LogStreamEntry[types.LogEntryWithMeta]](1)
-			results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: err})
-			return results
+			return nil, err
 		}
 		if len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
 			err := fmt.Errorf("data too larger (num_tags=%d), expect no more than %d bytes", len(tags), protocol.MessageInlineDataSize)
-			results := types.NewQueue[types.LogStreamEntry[types.LogEntryWithMeta]](1)
-			results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: err})
-			return results
+			return nil, err
 		}
 		tagBuffer := protocol.BuildLogTagsBuffer(tags)
 		protocol.FillInlineDataInMessage(message, tagBuffer)
@@ -1072,56 +1053,45 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 	w.outgoingLogOps[id] = queue
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
-	results := types.NewQueue[types.LogStreamEntry[types.LogEntryWithMeta]](QUEUE_RESERVED_CAP)
 	if err != nil {
-		results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: err})
-		return results
+		return nil, err
 	}
 
-	go func() {
-		for {
-			var response []byte
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				response = queue.Dequeue()
-			}
-			result := protocol.GetSharedLogResultTypeFromMessage(response)
-			if result == protocol.SharedLogResultType_READ_OK {
-				flags := protocol.GetFlagsFromMessage(response)
-				if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
-					if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
-						panic("assertion error, should always end with EOF without data")
-					}
-					results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil})
-					return
-				}
-				logEntry := buildLogEntryFromReadResponse(response)
-				metadata, originalData, err := types.UnwrapData(logEntry.Data)
-				if err != nil {
-					panic(errors.Wrapf(err, "unwarp async log data: %v:%v", string(logEntry.Data), logEntry.Data))
-				}
-				logEntry.Data = originalData
-				logEntryWithMeta := &types.LogEntryWithMeta{
-					LogEntry:    *logEntry,
-					Deps:        metadata.Deps,
-					Identifiers: types.CombineTags(metadata.StreamTypes, logEntry.Tags),
-				}
-				results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: logEntryWithMeta, Err: nil})
-			} else if result == protocol.SharedLogResultType_EMPTY {
-				results.Enqueue(types.LogStreamEntry[types.LogEntryWithMeta]{LogEntry: nil, Err: nil})
-				return
-			} else {
-				results.Enqueue(
-					types.LogStreamEntry[types.LogEntryWithMeta]{
-						LogEntry: nil,
-						Err:      fmt.Errorf("failed to read log: 0x%02X", result)})
-				return
-			}
+	for {
+		var response []byte
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			response = queue.Dequeue()
 		}
-	}()
-	return results
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_READ_OK {
+			flags := protocol.GetFlagsFromMessage(response)
+			if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
+				if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
+					panic("assertion error, should always end with EOF without data")
+				}
+				return nil, nil
+			}
+			logEntry := buildLogEntryFromReadResponse(response)
+			metadata, originalData, err := types.UnwrapData(logEntry.Data)
+			if err != nil {
+				panic(errors.Wrapf(err, "unwarp async log data: %v:%v", string(logEntry.Data), logEntry.Data))
+			}
+			logEntry.Data = originalData
+			logEntryWithMeta := &types.LogEntryWithMeta{
+				LogEntry:    *logEntry,
+				Deps:        metadata.Deps,
+				Identifiers: types.CombineTags(metadata.StreamTypes, logEntry.Tags),
+			}
+			return logEntryWithMeta, nil
+		} else if result == protocol.SharedLogResultType_EMPTY {
+			return nil, nil
+		} else {
+			return nil, fmt.Errorf("failed to read log: 0x%02X", result)
+		}
+	}
 }
 
 // Implement types.Environment
