@@ -251,7 +251,10 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 		if err != nil {
 			panic(err)
 		}
-		if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, queueLog.seqNum, tag, encoded); err != nil {
+		if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, types.LogEntryIndex{
+			SeqNum:  logEntry.SeqNum,
+			LocalId: logEntry.LocalId,
+		}, tag, encoded); err != nil {
 			panic(err)
 		}
 	}

@@ -527,5 +527,15 @@ private:
     std::string prof_log_;
 };
 
+// DEBUG
+inline std::string TagsToString(const log::UserTagVec& tags) {
+    std::string result("[");
+    for (const uint64_t tag : tags) {
+        result.append(fmt::format("{} ", tag));
+    }
+    result.append("]");
+    return result;
+}
+
 }  // namespace log_utils
 }  // namespace faas

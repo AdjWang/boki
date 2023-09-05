@@ -89,6 +89,13 @@ func txnHistoryLogTag(txnId uint64) uint64 {
 	return (txnId << common.LogTagReserveBits) + common.TxnHistoryLogTagLowBits
 }
 
+func (l *ObjectLogEntry) getLogIndex() types.LogEntryIndex {
+	return types.LogEntryIndex{
+		SeqNum:  l.seqNum,
+		LocalId: l.localId,
+	}
+}
+
 func (l *ObjectLogEntry) fillWriteSet() {
 	if l.LogType == LOG_NormalOp || l.LogType == LOG_TxnCommit {
 		l.writeSet = make(map[string]bool)
@@ -228,7 +235,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqN
 			}
 			txnCommitLog.seqNum = seqNum
 		}
-		env.setLogAuxData(txnCommitLog.seqNum, common.KeyCommitResult, commitResultStr)
+		env.setLogAuxData(txnCommitLog.getLogIndex(), common.KeyCommitResult, commitResultStr)
 	}
 	return commitResult, nil
 }
@@ -299,14 +306,14 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) {
 	key := objectLogTag(common.NameHash(view.name))
 	if l.LogType == LOG_NormalOp {
 		if l.auxData == nil {
-			env.setLogAuxData(l.seqNum, key, view.contents.Data())
+			env.setLogAuxData(l.getLogIndex(), key, view.contents.Data())
 		}
 	} else if l.LogType == LOG_TxnCommit {
 		if l.auxData == nil {
 			l.auxData = NewAuxData()
 		}
 		if _, exists := l.auxData[key]; !exists {
-			env.setLogAuxData(l.seqNum, key, view.contents.Data())
+			env.setLogAuxData(l.getLogIndex(), key, view.contents.Data())
 		}
 	} else {
 		panic("Wrong log type")
@@ -447,7 +454,7 @@ func (env *envImpl) appendTxnBeginLog() (types.Future[uint64], error) {
 	}
 }
 
-func (env *envImpl) setLogAuxData(seqNum uint64, key uint64, data interface{}) error {
+func (env *envImpl) setLogAuxData(logIndex types.LogEntryIndex, key uint64, data interface{}) error {
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		panic(err)
@@ -462,7 +469,7 @@ func (env *envImpl) setLogAuxData(seqNum uint64, key uint64, data interface{}) e
 		// }
 		// return nil
 	}
-	err = env.faasEnv.SharedLogSetAuxDataWithShards(env.faasCtx, seqNum, key, compressed)
+	err = env.faasEnv.SharedLogSetAuxDataWithShards(env.faasCtx, logIndex, key, compressed)
 	if err != nil {
 		return newRuntimeError(err.Error())
 	} else {

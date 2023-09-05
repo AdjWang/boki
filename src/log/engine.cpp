@@ -221,6 +221,9 @@ void Engine::HandleLocalAppend(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type));
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
+    // DEBUG
+    // HVLOG_F(1, "Handle local append: op_id={}, logspace={}, tags={}, size={}",
+    //         op->id, op->user_logspace, log_utils::TagsToString(op->user_tags), op->data.length());
     const View* view = nullptr;
     LogMetaData log_metadata = MetaDataFromAppendOp(op);
     {
@@ -303,10 +306,6 @@ void Engine::HandleLocalRead(LocalOp* op) {
     if (index_ptr != nullptr && use_local_index) {
         // Use local index
         IndexQuery query = BuildIndexQuery(op);
-        // DEBUG
-        if (query.direction == IndexQuery::ReadDirection::kReadLocalId) {
-            DCHECK_NE(query.query_localid, protocol::kInvalidLogLocalId);
-        }
         Index::QueryResultVec query_results;
         {
             auto locked_index = index_ptr.Lock();
@@ -683,6 +682,10 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     std::optional<AuxEntry> cached_aux_entry = std::nullopt;
     if (query_result.state == IndexQueryResult::kFoundRange) {
         cached_aux_entry = query_result.promised_auxdata;
+        if (cached_aux_entry.has_value()) {
+            DCHECK_EQ(cached_aux_entry->metadata.seqnum, seqnum);
+            DCHECK_EQ(cached_aux_entry->metadata.localid, localid);
+        }
     } else {
         if (query.promised_auxdata.has_value() && seqnum == query.promised_auxdata->metadata.seqnum) {
             cached_aux_entry = query.promised_auxdata;
@@ -895,57 +898,81 @@ IndexQueryResult Engine::UpdateQueryResultWithAux(const IndexQueryResult& result
     DCHECK_NE(end_seqnum, 0u);
     DCHECK_NE(end_seqnum, protocol::kInvalidLogSeqNum);
 
-    if (start_seqnum >= end_seqnum) {
-        IndexQueryResult new_result = result;
-        new_result.state = IndexQueryResult::kEOF;
-        HVLOG_F(1, "UpdateQueryResultWithAux produce kEOF id={}", new_result.id);
-        return new_result;
-    } else if ((start_seqnum + 1) == end_seqnum &&
-               future_localid == protocol::kInvalidLogLocalId) {
-        IndexQueryResult next_result = result;
-        next_result.state = IndexQueryResult::kEOF;
-        next_result.id += 1;
-        more_results->push_back(next_result);
-        HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={}; kEOF id={}", result.id, next_result.id);
-        return result;
-    } else {
-        // make new updated result
-        IndexQueryResult new_result = result;
-        const IndexQuery& query = result.original_query;
-        std::optional<AuxEntry> aux_entry = std::nullopt;
-        if (query.initial && ((query.flags & IndexQuery::kReadFromCachedFlag) != 0)) {
-            // produce new result by aux position
-            aux_entry = LogCacheGetAuxDataPrev(query.user_tag, end_seqnum - 1);
-        } else {
-            aux_entry = LogCacheGetAuxData(new_result.found_result.seqnum);
-        }
-        if (aux_entry.has_value() && aux_entry->metadata.seqnum >= start_seqnum) {
-            new_result.promised_auxdata = aux_entry;
-            // TODO: new_result.end_seqnum and new_result.future_localid are inherited
-            // from result, but what about view_id and engine_id?
-            // They are not used until now but may become diaster in the future.
-            new_result.found_result.seqnum = aux_entry->metadata.seqnum;
-            new_result.found_result.localid = aux_entry->metadata.localid;
-            HVLOG_F(1, "UpdateQueryResultWithAux adjust seqnum={:016X}->{:016X} localid={:016X}->{:016X}",
-                        result.found_result.seqnum, new_result.found_result.seqnum,
-                        result.found_result.localid, new_result.found_result.localid);
-        } else {
-            new_result.promised_auxdata = std::nullopt;
-        }
-        // make next query
-        IndexQueryResult next_result = new_result;
-        next_result.state = IndexQueryResult::kFoundRangeContinue;
-        next_result.id += 1;
-        more_results->push_back(next_result);
+    if (future_localid == protocol::kInvalidLogLocalId) {
+        if (start_seqnum >= end_seqnum) {
+            IndexQueryResult new_result = result;
+            new_result.state = IndexQueryResult::kEOF;
+            HVLOG_F(1, "UpdateQueryResultWithAux produce kEOF id={}", new_result.id);
+            return new_result;
+        } else if ((start_seqnum + 1) == end_seqnum) {
+            IndexQueryResult next_result = result;
+            next_result.state = IndexQueryResult::kEOF;
+            next_result.id += 1;
+            more_results->push_back(next_result);
 
+            IndexQueryResult new_result = result;
+            new_result.promised_auxdata = LogCacheGetAuxData(start_seqnum);
+            HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={}; kEOF id={}", new_result.id, next_result.id);
+            return new_result;
+        }
+    }
+    // make new updated result
+    IndexQueryResult new_result = result;
+    const IndexQuery& query = result.original_query;
+    std::optional<AuxEntry> aux_entry = std::nullopt;
+    if (query.initial && ((query.flags & IndexQuery::kReadFromCachedFlag) != 0)) {
+        // produce new result by aux position
+        aux_entry = LogCacheGetAuxDataPrev(query.user_tag, end_seqnum - 1);
+    } else {
+        aux_entry = LogCacheGetAuxData(new_result.found_result.seqnum);
+    }
+    if (aux_entry.has_value() && aux_entry->metadata.seqnum >= start_seqnum) {
+        new_result.promised_auxdata = aux_entry;
+        // TODO: new_result.end_seqnum and new_result.future_localid are inherited
+        // from result, but what about view_id and engine_id?
+        // They are not used until now but may become diaster in the future.
+        new_result.found_result.seqnum = aux_entry->metadata.seqnum;
+        new_result.found_result.localid = aux_entry->metadata.localid;
+        HVLOG_F(1, "UpdateQueryResultWithAux adjust seqnum={:016X}->{:016X} localid={:016X}->{:016X}",
+                    result.found_result.seqnum, new_result.found_result.seqnum,
+                    result.found_result.localid, new_result.found_result.localid);
+    } else {
+        new_result.promised_auxdata = std::nullopt;
+    }
+    // recheck after potential result.found_result.seqnum adjustion by aux
+    if (future_localid == protocol::kInvalidLogLocalId) {
+        uint64_t new_start_seqnum = new_result.found_result.seqnum;
+        uint64_t new_end_seqnum = new_result.found_result.end_seqnum;
+        DCHECK_LT(new_start_seqnum, new_end_seqnum);
+        if ((new_start_seqnum + 1) == new_end_seqnum) {
+            IndexQueryResult next_result = new_result;
+            next_result.state = IndexQueryResult::kEOF;
+            next_result.id += 1;
+            more_results->push_back(next_result);
+
+            HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={}; kEOF id={}", new_result.id, next_result.id);
+            return new_result;
+        }
+    }
+    // make next query
+    // future_localid not reach or (new_start_seqnum+1) < new_end_seqnum
+    IndexQueryResult next_result = new_result;
+    next_result.state = IndexQueryResult::kFoundRangeContinue;
+    next_result.id += 1;
+    more_results->push_back(next_result);
+
+    // DEBUG
+    {
         uint64_t start_seqnum = new_result.found_result.seqnum;
         uint64_t localid = new_result.found_result.localid;
+        uint64_t end_seqnum = new_result.found_result.end_seqnum;
+        uint64_t future_localid = new_result.found_result.future_localid;
         HVLOG_F(1, "UpdateQueryResultWithAux produce kFoundRange id={} seqnum={:016X} localid={:016X}; "
                     "kFoundRangeContinue id={} range=({:016X} {:016X} {:016X})",
                     new_result.id, start_seqnum, localid,
-                    next_result.id, start_seqnum, new_result.found_result.end_seqnum, new_result.found_result.future_localid);
-        return new_result;
+                    next_result.id, start_seqnum, end_seqnum, future_localid);
     }
+    return new_result;
 }
 
 void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
@@ -1347,7 +1374,7 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
             DCHECK((query.flags & IndexQuery::kReadLocalIdFlag) != 0);
             query.query_localid = future_localid;
         }
-        // DEBUG: faster or not?
+        // only the first one needs to resolve cached
         query.flags &= ~IndexQuery::kReadFromCachedFlag;
 
         query.query_start_seqnum = result.found_result.seqnum + 1;

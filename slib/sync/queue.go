@@ -179,7 +179,9 @@ func (q *Queue) setAuxData(seqNum uint64, auxData *QueueAuxData) error {
 	// DEBUG
 	// return q.env.SharedLogSetAuxData(q.ctx, seqNum, encoded)
 	// log.Printf("[DEBUG] SetAuxData key=%v", queueLogTag(q.nameHash))
-	return q.env.SharedLogSetAuxDataWithShards(q.ctx, seqNum, queueLogTag(q.nameHash), encoded)
+	return q.env.SharedLogSetAuxDataWithShards(q.ctx, types.LogEntryIndex{
+		SeqNum: seqNum, LocalId: protocol.InvalidLogLocalId,
+	}, queueLogTag(q.nameHash), encoded)
 }
 
 func (q *Queue) syncToBackward(tailSeqNum uint64) error {

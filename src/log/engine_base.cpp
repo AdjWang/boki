@@ -404,7 +404,8 @@ bool EngineBase::SendStorageReadRequest(const IndexQueryResult& result,
                                         const View::Engine* engine_node,
                                         std::span<const char> promised_aux_data) {
     static constexpr int kMaxRetries = 3;
-    DCHECK(result.state == IndexQueryResult::kFound);
+    DCHECK(result.state == IndexQueryResult::kFound ||
+           result.state == IndexQueryResult::kFoundRange);
 
     uint64_t seqnum = result.found_result.seqnum;
     SharedLogMessage request = SharedLogMessageHelper::NewReadAtMessage(

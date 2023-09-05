@@ -457,7 +457,8 @@ void Index::AdvanceIndexProgress() {
             uint64_t full_seqnum = bits::JoinTwo32(identifier(), seqnum);
             log_index_map_[index_data.localid] = full_seqnum;
             // DEBUG
-            HVLOG_F(1, "AdvanceIndexProgress apply localid={:016X} seqnum={:016X}", index_data.localid, full_seqnum);
+            HVLOG_F(1, "AdvanceIndexProgress apply localid={:016X} seqnum={:016X} tags={}",
+                        index_data.localid, full_seqnum, log_utils::TagsToString(index_data.user_tags));
             index_updated = true;
             iter = received_data_.erase(iter);
         }
@@ -869,23 +870,10 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
             return;
         }
     }
-    // not necessary but to make the progress more clear
-    if (!GetOrCreateIndex(query.user_logspace)->ContainsTag(query.user_tag)) {
-        if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
-            // perform as normal ReadNext
-            pending_query_results_.push_back(BuildNotFoundResult(query, result_id++));
-            HVLOG_F(1, "ProcessReadNextUntil not found tag={}. seqnum={:016X} logspace={}",
-                    query.user_tag, query.query_start_seqnum, query.user_logspace);
-        } else {
-            DCHECK(!log_index_map_.contains(query.query_localid));
-            pending_syncto_queries_.insert(std::make_pair(
-                query.query_localid,
-                BuildContinueQuery(query, /*end_index_found*/ false, /*index*/ 0,
-                                /*seqnum*/ 0, /*engine_id*/ 0, /*localid*/ 0, /*result_id*/ 0)));
-        }
-        return;
-    }
     uint64_t start_seqnum = query.query_start_seqnum;
+    if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+        DCHECK_LT(start_seqnum, query.query_seqnum);
+    }
     uint64_t found_start_seqnum;
     uint16_t start_engine_id;
     uint64_t start_localid;
@@ -927,14 +915,30 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
         if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
             // perform as normal ReadNext
             pending_query_results_.push_back(BuildNotFoundResult(query, result_id++));
-            HVLOG_F(1, "ProcessReadNextUntil not found seqnum={:016X}. tag={} logspace={}",
-                    query.query_start_seqnum, query.user_tag, query.user_logspace);
+            // not necessary but to make the progress more clear
+            if (GetOrCreateIndex(query.user_logspace)->ContainsTag(query.user_tag)) {
+                HVLOG_F(1, "ProcessReadNextUntil not found seqnum={:016X}. tag={} logspace={}",
+                        query.query_start_seqnum, query.user_tag, query.user_logspace);
+            } else {
+                HVLOG_F(1, "ProcessReadNextUntil not found tag={}. seqnum={:016X} logspace={}",
+                        query.user_tag, query.query_start_seqnum, query.user_logspace);
+            }
         } else {
-            DCHECK(!log_index_map_.contains(query.query_localid));
-            pending_syncto_queries_.insert(std::make_pair(
-                query.query_localid,
-                BuildContinueQuery(query, /*end_index_found*/ false, /*index*/ 0,
-                                /*seqnum*/ 0, /*engine_id*/ 0, /*localid*/ 0, /*result_id*/ 0)));
+            if (!log_index_map_.contains(query.query_localid)) {
+                pending_syncto_queries_.insert(std::make_pair(
+                    query.query_localid,
+                    BuildContinueQuery(query, /*end_index_found*/ false, /*index*/ 0,
+                                    /*seqnum*/ 0, /*engine_id*/ 0, /*localid*/ 0, /*result_id*/ 0)));
+            } else {
+                // If the querying tag is not added but the target log exists,
+                // the target log must be added to a different tag.
+                // In such a scenario later logs to the querying tag must with
+                // a seqnum > target log seqnum, so we can safely ensure that the
+                // syncto operation had reached to the target.
+                pending_query_results_.push_back(BuildResolvedResult(query, result_id++));
+                HVLOG_F(1, "ProcessReadNextUntil resolved tag={}. seqnum={:016X} logspace={}",
+                        query.user_tag, query.query_start_seqnum, query.user_logspace);
+            }
         }
     }
 }
