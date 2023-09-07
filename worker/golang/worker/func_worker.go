@@ -995,21 +995,21 @@ func (w *FuncWorker) SharedLogReadNextUntil(ctx context.Context, tag uint64, seq
 		return nil, err
 	}
 
+	outputCh := queue.DequeueCh()
 	for {
 		var response []byte
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		default:
-			response = queue.Dequeue()
+		case response = <-outputCh:
 		}
 		result := protocol.GetSharedLogResultTypeFromMessage(response)
 		if result == protocol.SharedLogResultType_READ_OK {
 			flags := protocol.GetFlagsFromMessage(response)
-			if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
-				if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
-					panic("assertion error, should always end with EOF without data")
-				}
+			if (flags & protocol.FLAG_kLogResponseContinueFlag) != 0 {
+				panic("assertion error, disallow continue for read now")
+			}
+			if (flags & protocol.FLAG_kLogResponseEOFFlag) != 0 {
 				return nil, nil
 			}
 			logEntry := buildLogEntryFromReadResponse(response)
@@ -1057,21 +1057,21 @@ func (w *FuncWorker) AsyncSharedLogReadNextUntil(ctx context.Context, tag uint64
 		return nil, err
 	}
 
+	outputCh := queue.DequeueCh()
 	for {
 		var response []byte
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		default:
-			response = queue.Dequeue()
+		case response = <-outputCh:
 		}
 		result := protocol.GetSharedLogResultTypeFromMessage(response)
 		if result == protocol.SharedLogResultType_READ_OK {
 			flags := protocol.GetFlagsFromMessage(response)
-			if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
-				if (flags & protocol.FLAG_kLogResponseEOFFlag) == 0 {
-					panic("assertion error, should always end with EOF without data")
-				}
+			if (flags & protocol.FLAG_kLogResponseContinueFlag) != 0 {
+				panic("assertion error, disallow continue for read now")
+			}
+			if (flags & protocol.FLAG_kLogResponseEOFFlag) != 0 {
 				return nil, nil
 			}
 			logEntry := buildLogEntryFromReadResponse(response)

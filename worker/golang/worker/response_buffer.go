@@ -12,8 +12,9 @@ import (
 
 // Reorder response by response count
 type ResponseBuffer struct {
-	ingress  chan []byte
-	outgress *types.Queue[[]byte]
+	ingress    chan []byte
+	outgress   *types.Queue[[]byte]
+	outputChan chan []byte
 
 	responseId     uint64
 	responseBuffer map[uint64][]byte
@@ -30,8 +31,9 @@ type ResponseBuffer struct {
 
 func NewResponseBuffer(reservedCapacity int) *ResponseBuffer {
 	rb := ResponseBuffer{
-		ingress:  make(chan []byte),
-		outgress: types.NewQueue[[]byte](reservedCapacity),
+		ingress:    make(chan []byte),
+		outgress:   types.NewQueue[[]byte](reservedCapacity),
+		outputChan: make(chan []byte),
 
 		responseId:     0,
 		responseBuffer: make(map[uint64][]byte),
@@ -68,8 +70,10 @@ func (rb *ResponseBuffer) worker() {
 			break
 		}
 		responseId := protocol.GetResponseIdFromMessage(message)
-		// log.Printf("[DEBUG] ResponseBuffer received %v", protocol.InspectMessage(message))
 		// DEBUG
+		// if responseId > 0 {
+		// 	log.Printf("[DEBUG] ResponseBuffer received %v", protocol.InspectMessage(message))
+		// }
 		rb.deliverTs[responseId] = time.Now()
 		rb.totalCount++
 
@@ -105,7 +109,7 @@ func (rb *ResponseBuffer) checkResolved(message []byte) {
 		close(rb.ingress)
 
 		// DEBUG: print debug info
-		rb.Inspect()
+		// rb.Inspect()
 	}
 }
 
@@ -131,6 +135,15 @@ func (rb *ResponseBuffer) Enqueue(message []byte) {
 
 func (rb *ResponseBuffer) Dequeue() []byte {
 	message := rb.outgress.BlockingDequeue()
-	// log.Printf("[DEBUG] SharedLogOp output cid=%v %v", rb.cid, protocol.InspectMessage(message))
 	return message
+}
+
+// FIXME: allow call multiple times
+func (rb *ResponseBuffer) DequeueCh() chan []byte {
+	go func() {
+		for {
+			rb.outputChan <- rb.outgress.BlockingDequeue()
+		}
+	}()
+	return rb.outputChan
 }
