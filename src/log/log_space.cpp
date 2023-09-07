@@ -157,7 +157,7 @@ LogProducer::~LogProducer() {}
 
 void LogProducer::LocalAppend(void* caller_data, uint64_t* localid) {
     DCHECK(!pending_appends_.contains(next_localid_));
-    HVLOG_F(1, "LocalAppend with localid {}", bits::HexStr0x(next_localid_));
+    HVLOG_F(1, "LocalAppend with localid={:016X}", next_localid_);
     pending_appends_[next_localid_] = caller_data;
     *localid = next_localid_++;
 }

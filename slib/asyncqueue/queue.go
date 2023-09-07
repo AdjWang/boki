@@ -74,7 +74,8 @@ func (q *QueueAuxData) String() string {
 }
 
 type QueueLogEntry struct {
-	seqNum uint64
+	seqNum  uint64
+	localId uint64
 
 	QueueName string `json:"n"`
 	IsPush    bool   `json:"t"`
@@ -96,6 +97,7 @@ func decodeQueueLogEntry(logEntry *types.LogEntryWithMeta) *QueueLogEntry {
 		panic(errors.Wrapf(err, "decodeQueueLogEntry json unmarshal error: %+v", logEntry))
 	}
 	queueLog.seqNum = logEntry.SeqNum
+	queueLog.localId = logEntry.LocalId
 	return queueLog
 }
 
@@ -110,10 +112,14 @@ func NewQueue(ctx context.Context, env types.Environment, name string, iShard in
 		tail:       0,
 		nextSeqNum: 0,
 	}
-	if err := q.syncTo(types.LogEntryIndex{
-		LocalId: protocol.InvalidLogLocalId,
-		SeqNum:  protocol.MaxLogSeqnum,
-	}); err != nil {
+	// if err := q.syncTo(types.LogEntryIndex{
+	// 	LocalId: protocol.InvalidLogLocalId,
+	// 	SeqNum:  protocol.MaxLogSeqnum,
+	// }); err != nil {
+	// 	return nil, errors.Wrap(err, "initial syncTo")
+	// }
+	// DEBUG
+	if err := q.syncToBackward(protocol.MaxLogSeqnum); err != nil {
 		return nil, errors.Wrap(err, "initial syncTo")
 	}
 	return q, nil
@@ -183,13 +189,23 @@ func (q *Queue) appendPopLogAndSync() error {
 		{StreamType: common.FsmType_QueueLog, StreamId: queueLogTag(q.nameHash)},
 	}
 	future, err := q.env.AsyncSharedLogAppend(q.ctx, tags, encoded)
-	localId := future.GetLocalId()
 	if err != nil {
 		return errors.Wrap(err, "AsyncSharedLogAppend")
 	} else {
+		// localId := future.GetLocalId()
+		// return q.syncTo(types.LogEntryIndex{
+		// 	LocalId: localId,
+		// 	SeqNum:  protocol.InvalidLogSeqNum,
+		// })
+		// DEBUG
+		seqNum, err := future.GetResult(common.AsyncWaitTimeout)
+		if err != nil {
+			return err
+		}
+		// return q.syncToBackward(seqNum)
 		return q.syncTo(types.LogEntryIndex{
-			LocalId: localId,
-			SeqNum:  protocol.InvalidLogSeqNum,
+			SeqNum:  seqNum,
+			LocalId: protocol.InvalidLogLocalId,
 		})
 	}
 }
@@ -259,6 +275,71 @@ func (q *Queue) syncTo(logIndex types.LogEntryIndex) error {
 		if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, types.LogEntryIndex{
 			SeqNum:  logEntry.SeqNum,
 			LocalId: logEntry.LocalId,
+		}, tag, encoded); err != nil {
+			panic(err)
+		}
+	}
+	return nil
+}
+
+func (q *Queue) syncToBackward(tailSeqNum uint64) error {
+	if tailSeqNum < q.nextSeqNum {
+		log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", q.nextSeqNum, tailSeqNum)
+	}
+	if tailSeqNum == q.nextSeqNum {
+		return nil
+	}
+
+	tag := queueLogTag(q.nameHash)
+	queueLogs := make([]*QueueLogEntry, 0, 4)
+
+	seqNum := tailSeqNum
+	for seqNum > q.nextSeqNum {
+		if seqNum != protocol.MaxLogSeqnum {
+			seqNum -= 1
+		}
+		logEntry, err := q.env.AsyncSharedLogReadPrev(q.ctx, tag, seqNum)
+		if err != nil {
+			return err
+		}
+		if logEntry == nil || logEntry.SeqNum < q.nextSeqNum {
+			break
+		}
+		seqNum = logEntry.SeqNum
+		queueLog := decodeQueueLogEntry(logEntry)
+		if queueLog.QueueName != q.name {
+			continue
+		}
+		if len(logEntry.AuxData) > 0 {
+			auxData := DeserializeAuxData(logEntry.AuxData)
+			if viewData, found := auxData[tag]; found {
+				view := QueueAuxData{Consumed: 0, Tail: 0}
+				err := json.Unmarshal([]byte(viewData), &view)
+				if err != nil {
+					panic(errors.Wrapf(err, "auxdata json unmarshal error: %v", viewData))
+				}
+				q.nextSeqNum = logEntry.SeqNum + 1
+				q.consumed = view.Consumed
+				q.tail = view.Tail
+				break
+			}
+		}
+		queueLogs = append(queueLogs, queueLog)
+	}
+	for i := len(queueLogs) - 1; i >= 0; i-- {
+		queueLog := queueLogs[i]
+		q.applyLog(queueLog)
+		auxData := &QueueAuxData{
+			Consumed: q.consumed,
+			Tail:     q.tail,
+		}
+		encoded, err := json.Marshal(auxData)
+		if err != nil {
+			panic(err)
+		}
+		if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, types.LogEntryIndex{
+			SeqNum:  queueLog.seqNum,
+			LocalId: queueLog.localId,
 		}, tag, encoded); err != nil {
 			panic(err)
 		}
@@ -361,10 +442,14 @@ func IsQueueTimeoutError(err error) bool {
 func (q *Queue) Pop() (string /* payload */, error) {
 	// popStart := time.Now()
 	if q.isEmpty() {
-		if err := q.syncTo(types.LogEntryIndex{
-			LocalId: protocol.InvalidLogLocalId,
-			SeqNum:  protocol.MaxLogSeqnum,
-		}); err != nil {
+		// if err := q.syncTo(types.LogEntryIndex{
+		// 	LocalId: protocol.InvalidLogLocalId,
+		// 	SeqNum:  protocol.MaxLogSeqnum,
+		// }); err != nil {
+		// 	return "", errors.Wrap(err, "syncTo")
+		// }
+		// DEBUG
+		if err := q.syncToBackward(protocol.MaxLogSeqnum); err != nil {
 			return "", errors.Wrap(err, "syncTo")
 		}
 		if q.isEmpty() {

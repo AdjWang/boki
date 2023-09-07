@@ -539,6 +539,10 @@ public:
         message.log_result = static_cast<uint16_t>(result);
         message.log_seqnum = log_seqnum;
         message.log_localid = log_localid;
+        // DEBUG: disable multiple return for read for now
+        if (result == SharedLogResultType::READ_OK) {
+            DCHECK((flags & kLogResponseContinueFlag) == 0) << fmt::format("{:02X}", flags);
+        }
         SET_LOG_RESP_FLAG(message.flags, flags);
         return message;
     }

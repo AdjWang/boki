@@ -496,13 +496,14 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
     SharedLogResultType result = SharedLogMessageHelper::GetResultType(message);
     uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
     uint64_t localid = message.localid;
+    HVLOG_F(1, "Receive remote read response result={} seqnum={:016X} localid={:016X} payload_size={}",
+                result, seqnum, localid, message.payload_size);
 
     auto ResponseAndCache = [this, result, localid, seqnum](
                                 LocalOp* op, const SharedLogMessage& message,
                                 std::span<const char> payload) {
         Message response;
         if (message.payload_size > 0) {
-            HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
             std::span<const uint64_t> user_tags;
             std::span<const char> log_data;
             std::span<const char> aux_entry_data;
@@ -520,8 +521,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             } else if (result == SharedLogResultType::READ_OK) {
                 if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
                     uint64_t response_id = op->response_counter.GetBufferedRequestId(seqnum);
-                    response = BuildLocalReadOKResponseWithData(response_id, localid, seqnum, user_tags, log_data,
-                                                                protocol::kLogResponseContinueFlag);
+                    response = BuildLocalReadOKResponseWithData(response_id, localid, seqnum, user_tags, log_data);
                 } else {
                     if (protocol::SharedLogOpTypeHelper::IsAsyncSharedLogOp(op->type)) {
                         response = BuildLocalReadOKResponseWithData(/*response_id*/ 1, localid, seqnum, user_tags, log_data);
@@ -565,7 +565,6 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 LogCachePutAuxData(aux_entry);
             }
         } else {
-            HVLOG_F(1, "Receive remote read EOF response for log (seqnum {})", bits::HexStr0x(seqnum));
             // EOF
             DCHECK(op->type == protocol::SharedLogOpType::READ_SYNCTO);
             uint64_t response_id = op->response_counter.GetBufferedRequestId(seqnum);
@@ -699,7 +698,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     // if the log is not cached: return twice as usual.
     if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
         // Cache hits
-        HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
+        HVLOG_F(1, "Cache hits for log entry (seqnum={:016X})", seqnum);
         const LogEntry& log_entry = cached_log_entry.value();
         DCHECK_EQ(log_entry.metadata.seqnum, seqnum);
         if (localid != protocol::kInvalidLogLocalId) {
@@ -708,16 +707,11 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         if (local_request) {
             Message response;
             if (query.type == IndexQuery::kAsync) {
-                HVLOG_F(1, "Send local async read cached response for log (seqnum {})", bits::HexStr0x(seqnum));
+                HVLOG_F(1, "Send local async read cached response for log (seqnum={:016X})", seqnum);
                 response = BuildLocalAsyncReadCachedOKResponseWithData(query_result.id, log_entry);
             } else {
-                HVLOG_F(1, "Send local read response for log (seqnum {})", bits::HexStr0x(seqnum));
-                if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
-                    // kReadNextU READ_OK with data must be continue, the EOF is handled outside here.
-                    response = BuildLocalReadOKResponseWithData(query_result.id, log_entry, protocol::kLogResponseContinueFlag);
-                } else {
-                    response = BuildLocalReadOKResponseWithData(query_result.id, log_entry);
-                }
+                HVLOG_F(1, "Send local read response for log (seqnum={:016X})", seqnum);
+                response = BuildLocalReadOKResponseWithData(query_result.id, log_entry);
             }
             LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
             std::string cached_aux_data;
@@ -731,9 +725,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                     aux_data = STRING_AS_SPAN(cached_aux_data);
                 } else {
                     HLOG_F(WARNING, "Inline buffer of message not large enough "
-                                    "for auxiliary data of log (seqnum {}): "
+                                    "for auxiliary data of log (seqnum={:016X}): "
                                     "log_size={} num_tags={} cached_aux_data_size={}",
-                            bits::HexStr0x(seqnum), log_entry.data.size(),
+                            seqnum, log_entry.data.size(),
                             log_entry.user_tags.size(), cached_aux_data.size());
                     if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
                         HLOG(FATAL) << "Unable to return aux_data for syncto";
@@ -750,12 +744,12 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         } else {
             SharedLogMessage response;
             if (query.type == IndexQuery::kAsync) {
-                HVLOG_F(1, "Send remote async read cached response for log (seqnum {})", bits::HexStr0x(seqnum));
+                HVLOG_F(1, "Send remote async read cached response for log (seqnum={:016X})", seqnum);
                 // shared log message not using kLogDataCachedFlag now, use payload_size to
                 // check if the log is cached in OnRecvResponse(...)
                 response = SharedLogMessageHelper::NewAsyncReadOkResponse();
             } else {
-                HVLOG_F(1, "Send remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
+                HVLOG_F(1, "Send remote read response for log (seqnum={:016X})", seqnum);
                 response = SharedLogMessageHelper::NewReadOkResponse();
             }
             log_utils::PopulateMetaDataToMessage(log_entry.metadata, &response);
@@ -773,15 +767,16 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
     } else {
         // Cache miss
+        HVLOG_F(1, "Cache miss for log entry (seqnum={:016X})", seqnum);
         // async read first response
         if (query.type == IndexQuery::kAsync) {
             if(local_request) {
-                HVLOG_F(1, "Send local async read response for log (seqnum {})", bits::HexStr0x(seqnum));
+                HVLOG_F(1, "Send local async read response for log (seqnum={:016X})", seqnum);
                 LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
                 Message response = BuildLocalAsyncReadOKResponseWithIndex(/*response_id*/ 0, localid, seqnum);
                 SendLocalOpWithResponse(op, &response, query_result.metalog_progress);
             } else {
-                HVLOG_F(1, "Send remote async read response for log (seqnum {})", bits::HexStr0x(seqnum));
+                HVLOG_F(1, "Send remote async read response for log (seqnum={:016X})", seqnum);
                 SharedLogMessage response = SharedLogMessageHelper::NewAsyncReadOkResponse();
                 response.logspace_id = bits::HighHalf64(seqnum);
                 response.seqnum_lowhalf = bits::LowHalf64(seqnum);
@@ -815,7 +810,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
         bool success = SendStorageReadRequest(query_result, engine_node, aux_data);
         if (!success) {
-            HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
+            HLOG_F(WARNING, "Failed to send read request for seqnum={:016X} ", seqnum);
             if (local_request) {
                 Message response = MessageHelper::NewSharedLogOpWithoutData(SharedLogResultType::DATA_LOST);
                 if (protocol::SharedLogOpTypeHelper::IsAsyncSharedLogOp(op->type)) {
@@ -1041,7 +1036,7 @@ void Engine::LogCachePut(const LogMetaData& log_metadata,
     if (!log_cache_enabled_) {
         return;
     }
-    HVLOG_F(1, "Store cache for log entry (seqnum {})", bits::HexStr0x(log_metadata.seqnum));
+    HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
     log_cache_->PutLogData(log_metadata, user_tags, log_data);
 }
 

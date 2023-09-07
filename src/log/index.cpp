@@ -366,7 +366,7 @@ void Index::MakeQuery(const IndexQuery& query) {
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
         } else if (view_id < view_->id()) {
-            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} "
+            HVLOG_F(1, "MakeQuery Process query type={:02X} seqnum={:016X} "
                         "since pending_query viewid={} smaller than current viewid={}",
                     uint16_t(query.type), query.query_seqnum, view_id, view_->id());
             ProcessQuery(query);
@@ -374,7 +374,7 @@ void Index::MakeQuery(const IndexQuery& query) {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
             if (position <= indexed_metalog_position_) {
-                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} "
+                HVLOG_F(1, "MakeQuery Process query type={:02X} seqnum={:016X} "
                             "since pending_query metalog_position={} not larger than indexed_metalog_position={}",
                         uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
                 ProcessQuery(query);
@@ -385,7 +385,7 @@ void Index::MakeQuery(const IndexQuery& query) {
     } else {
         HVLOG(1) << "Receive continue query";
         if (finalized()) {
-            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} since finalized",
+            HVLOG_F(1, "MakeQuery Process query type={:02X} seqnum={:016X} since finalized",
                     uint16_t(query.type), query.query_seqnum);
             ProcessQuery(query);
         } else {
@@ -437,7 +437,7 @@ void Index::AdvanceIndexProgress() {
         if (data_received_seqnum_position_ < end_seqnum) {
             break;
         }
-        HVLOG_F(1, "Apply IndexData until seqnum {}", bits::HexStr0x(end_seqnum));
+        HVLOG_F(1, "Apply IndexData until seqnum={:08X}", end_seqnum);
         auto iter = received_data_.begin();
         while (iter != received_data_.end()) {
             uint32_t seqnum = iter->first;
@@ -499,7 +499,7 @@ void Index::AdvanceIndexProgress() {
             break;
         }
         const IndexQuery& query = iter->second;
-        HVLOG_F(1, "AdvanceIndexProgress Process query type=0x{:02X} seqnum=0x{:016X} "
+        HVLOG_F(1, "AdvanceIndexProgress Process query type={:02X} seqnum={:016X} "
                     "since pending_query metalog_position={} not larger than indexed_metalog_position={}",
                 uint16_t(query.type), query.query_seqnum, iter->first, indexed_metalog_position_);
         ProcessQuery(query);
@@ -599,8 +599,8 @@ void Index::ProcessQuery(const IndexQuery& query) {
 void Index::ProcessReadNext(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadNext);
     DCHECK((query.flags & IndexQuery::kReadLocalIdFlag) == 0);
-    HVLOG_F(1, "ProcessReadNext: seqnum={}, logspace={}, tag={}",
-            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
+    HVLOG_F(1, "ProcessReadNext: seqnum={:016X}, logspace={}, tag={}",
+            query.query_seqnum, query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id > view_->id()) {
         pending_query_results_.push_back(BuildNotFoundResult(query));
@@ -746,7 +746,7 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
                 [this, query, &result_id](size_t index, uint64_t seqnum, uint16_t engine_id, uint64_t localid) {
                     pending_query_results_.push_back(
                         BuildFoundResult(query, view_->id(), seqnum, engine_id, localid, result_id++));
-                    HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", seqnum);
+                    HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum={:016X}", seqnum);
                     return false;   // stop
                 });
             DCHECK(n > 0);
@@ -754,7 +754,7 @@ void Index::ProcessReadNextUntilInitial(const IndexQuery& query) {
             // proceed only one step
             pending_query_results_.push_back(
                 BuildFoundResult(query, view_->id(), end_seqnum, end_engine_id, end_localid, result_id++));
-            HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
+            HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum={:016X}", end_seqnum);
         } else /* if (start_seqnum > end_seqnum) */ {
             // this may happen when got a query_start_seqnum belongs to
             // (last_seqnum, target_seqnum) of the tag, where end_seqnum = last_seqnum
@@ -816,7 +816,7 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
         (size_t index, uint64_t seqnum, uint16_t engine_id, uint64_t localid) {
             if (localid == target_localid) {
                 sync_continue = false;
-                HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid=0x{:016X}", localid);
+                HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid={:016X}", localid);
                 return true;    // stop early
             }
             pending_query_results_.push_back(
@@ -825,7 +825,7 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
             end_seqnum = seqnum;
             end_engine_id = engine_id;
             end_localid = localid;
-            HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid={:016X} seqnum=0x{:016X}", localid, seqnum);
+            HVLOG_F(1, "ProcessReadNextU Continue: FoundResult: localid={:016X} seqnum={:016X}", localid, seqnum);
             return false;   // continue
         });
     if (sync_continue) {
@@ -882,8 +882,8 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     uint64_t start_index;
     if (GetOrCreateIndex(query.user_logspace)->FindNext(start_seqnum, query.user_tag,
         &found_start_seqnum, &start_engine_id, &start_localid, &start_index)) {
-        HVLOG_F(1, "ProcessReadNextUntil find start: query_start_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
-                start_seqnum, found_start_seqnum, query.user_logspace, query.user_tag);
+        HVLOG_F(1, "ProcessReadNextUntil find start: query_start_seqnum={:016X} seqnum={:016X} localid={:016X} logspace={} tag={}",
+                start_seqnum, found_start_seqnum, start_localid, query.user_logspace, query.user_tag);
 
         if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
             // perform as normal ReadNext
@@ -931,6 +931,8 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
                     query.query_localid,
                     BuildContinueQuery(query, /*end_index_found*/ false, /*index*/ 0,
                                     /*seqnum*/ 0, /*engine_id*/ 0, /*localid*/ 0, /*result_id*/ 0)));
+                HVLOG_F(1, "ProcessReadNextUntil pending tag={} seqnum={:016X} localid={:016X} logspace={}",
+                        query.user_tag, query.query_start_seqnum, query.query_localid, query.user_logspace);
             } else {
                 // If the querying tag is not added but the target log exists,
                 // the target log must be added to a different tag.
@@ -938,8 +940,8 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
                 // a seqnum > target log seqnum, so we can safely ensure that the
                 // syncto operation had reached to the target.
                 pending_query_results_.push_back(BuildResolvedResult(query, result_id++));
-                HVLOG_F(1, "ProcessReadNextUntil resolved tag={}. seqnum={:016X} logspace={}",
-                        query.user_tag, query.query_start_seqnum, query.user_logspace);
+                HVLOG_F(1, "ProcessReadNextUntil resolved tag={} seqnum={:016X} localid={:016X} logspace={}",
+                        query.user_tag, query.query_start_seqnum, query.query_localid, query.user_logspace);
             }
         }
     }
@@ -949,8 +951,8 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadPrev ||
            query.direction == IndexQuery::kReadPrevAux);
     DCHECK((query.flags & IndexQuery::kReadLocalIdFlag) == 0);
-    HVLOG_F(1, "ProcessReadPrev: seqnum={}, logspace={}, tag={}",
-            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
+    HVLOG_F(1, "ProcessReadPrev: seqnum={:016X}, logspace={}, tag={}",
+            query.query_seqnum, query.user_logspace, query.user_tag);
     if (query.direction == IndexQuery::kReadPrevAux && !query.promised_auxdata.has_value()) {
         pending_query_results_.push_back(BuildNotFoundResult(query));
         HVLOG(1) << "ProcessReadPrevAux: NotFoundResult";
@@ -969,7 +971,7 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
     if (found) {
         pending_query_results_.push_back(
             BuildFoundResult(query, view_->id(), seqnum, engine_id, localid));
-        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum=0x{:016X}", seqnum);
+        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={:016X}", seqnum);
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0));
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
