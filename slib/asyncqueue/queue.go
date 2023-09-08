@@ -120,7 +120,7 @@ func NewQueue(ctx context.Context, env types.Environment, name string, iShard in
 	// 	return nil, errors.Wrap(err, "initial syncTo")
 	// }
 	// DEBUG
-	if err := q.syncToBackward(protocol.MaxLogSeqnum, nil); err != nil {
+	if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
 		return nil, errors.Wrap(err, "initial syncTo")
 	}
 	return q, nil
@@ -281,25 +281,26 @@ type Snapshot struct {
 }
 
 func (q *Queue) syncTo(tailSeqNum uint64) error {
-	// return q.syncToForward(tailSeqNum)
-	var snapshot Snapshot
-	if err := q.syncToForward(tailSeqNum, &snapshot); err != nil {
-		panic(err)
-	}
-	return q.syncToBackward(tailSeqNum, &snapshot)
+	return q.syncToForward(tailSeqNum, nil)
+
+	// var snapshot Snapshot
+	// if err := q.syncToForward(tailSeqNum, &snapshot); err != nil {
+	// 	panic(err)
+	// }
+	// return q.syncToBackward(tailSeqNum, &snapshot)
 }
 
 func (q *Queue) syncToForward(tailSeqNum uint64, resSnapshot *Snapshot) error {
-	snapshot := Snapshot{
-		tail:       q.tail,
-		consumed:   q.consumed,
-		nextSeqNum: q.nextSeqNum,
-	}
-	defer func() {
-		q.tail = snapshot.tail
-		q.consumed = snapshot.consumed
-		q.nextSeqNum = snapshot.nextSeqNum
-	}()
+	// snapshot := Snapshot{
+	// 	tail:       q.tail,
+	// 	consumed:   q.consumed,
+	// 	nextSeqNum: q.nextSeqNum,
+	// }
+	// defer func() {
+	// 	q.tail = snapshot.tail
+	// 	q.consumed = snapshot.consumed
+	// 	q.nextSeqNum = snapshot.nextSeqNum
+	// }()
 
 	if tailSeqNum < q.nextSeqNum {
 		log.Panicf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", q.nextSeqNum, tailSeqNum)
@@ -372,45 +373,47 @@ func (q *Queue) syncToForward(tailSeqNum uint64, resSnapshot *Snapshot) error {
 			continue
 		}
 		seqNums = append(seqNums, logEntry.SeqNum)
-		// if len(logEntry.AuxData) > 0 {
-		// 	auxData := DeserializeAuxData(logEntry.AuxData)
-		// 	if viewData, found := auxData[tag]; found {
-		// 		view := QueueAuxData{Consumed: 0, Tail: 0}
-		// 		err := json.Unmarshal([]byte(viewData), &view)
-		// 		if err != nil {
-		// 			panic(errors.Wrapf(err, "auxdata json unmarshal error: %v", viewData))
-		// 		}
-		// 		q.nextSeqNum = logEntry.SeqNum + 1
-		// 		q.consumed = view.Consumed
-		// 		q.tail = view.Tail
-		// 		continue
-		// 	}
-		// }
+		if len(logEntry.AuxData) > 0 {
+			auxData := DeserializeAuxData(logEntry.AuxData)
+			if viewData, found := auxData[tag]; found {
+				view := QueueAuxData{Consumed: 0, Tail: 0}
+				err := json.Unmarshal([]byte(viewData), &view)
+				if err != nil {
+					panic(errors.Wrapf(err, "auxdata json unmarshal error: %v", viewData))
+				}
+				q.nextSeqNum = logEntry.SeqNum + 1
+				q.consumed = view.Consumed
+				q.tail = view.Tail
+				continue
+			}
+		}
 		q.applyLog(queueLog)
-		// auxData := &QueueAuxData{
-		// 	Consumed: q.consumed,
-		// 	Tail:     q.tail,
-		// }
-		// encoded, err := json.Marshal(auxData)
-		// if err != nil {
-		// 	panic(err)
-		// }
-		// if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, types.LogEntryIndex{
-		// 	SeqNum:  logEntry.SeqNum,
-		// 	LocalId: logEntry.LocalId,
-		// }, tag, encoded); err != nil {
-		// 	panic(err)
-		// }
+		auxData := &QueueAuxData{
+			Consumed: q.consumed,
+			Tail:     q.tail,
+		}
+		encoded, err := json.Marshal(auxData)
+		if err != nil {
+			panic(err)
+		}
+		if err := q.env.SharedLogSetAuxDataWithShards(q.ctx, types.LogEntryIndex{
+			SeqNum:  logEntry.SeqNum,
+			LocalId: logEntry.LocalId,
+		}, tag, encoded); err != nil {
+			panic(err)
+		}
 	}
 	// DEBUG
-	// log.Printf("[DEBUG] q=%p:%v:%v Next (%v->%v) cached=%v seqnums=%v all=%v",
-	// 	q, q.name, tag, seqNumFrom, tailSeqNum, fromCached, seqNums, seqNumsAll)
-	log.Printf("[DEBUG] q=%p:%v:%v Next (%v->%v) cached=%v seqnums=%v",
-		q, q.name, tag, seqNumFrom, tailSeqNum, fromCached, len(seqNums))
-	*resSnapshot = Snapshot{
-		tail:       q.tail,
-		consumed:   q.consumed,
-		nextSeqNum: q.nextSeqNum,
+	if resSnapshot != nil {
+		// log.Printf("[DEBUG] q=%p:%v:%v Next (%v->%v) cached=%v seqnums=%v all=%v",
+		// 	q, q.name, tag, seqNumFrom, tailSeqNum, fromCached, seqNums, seqNumsAll)
+		log.Printf("[DEBUG] q=%p:%v:%v Next (%v->%v) cached=%v seqnums=%v",
+			q, q.name, tag, seqNumFrom, tailSeqNum, fromCached, len(seqNums))
+		*resSnapshot = Snapshot{
+			tail:       q.tail,
+			consumed:   q.consumed,
+			nextSeqNum: q.nextSeqNum,
+		}
 	}
 	return nil
 }
@@ -616,7 +619,7 @@ func (q *Queue) Pop() (string /* payload */, error) {
 		// 	return "", errors.Wrap(err, "syncTo")
 		// }
 		// DEBUG
-		if err := q.syncToBackward(protocol.MaxLogSeqnum, nil); err != nil {
+		if err := q.syncTo(protocol.MaxLogSeqnum); err != nil {
 			return "", errors.Wrap(err, "syncTo")
 		}
 		if q.isEmpty() {
