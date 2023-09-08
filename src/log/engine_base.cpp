@@ -24,7 +24,16 @@ using protocol::SharedLogResultType;
 EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
-      next_local_op_id_(0) {}
+      next_local_op_id_(0),
+      readaux_counter_(stat::Counter::StandardReportCallback("log_readaux")),
+      readp_counter_(stat::Counter::StandardReportCallback("log_readp")),
+      readn_counter_(stat::Counter::StandardReportCallback("log_readn")),
+      readaux_delay_stat_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          "log_readaux_delay")),
+      readp_delay_stat_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          "log_readp_delay")),
+      readn_delay_stat_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          "log_readn_delay")) {}
 
 EngineBase::~EngineBase() {}
 
@@ -103,6 +112,74 @@ void EngineBase::OnFuncCallCompleted(const FuncCall& func_call) {
                     << FuncCallHelper::DebugString(func_call);
     }
     fn_call_ctx_.erase(func_call.full_call_id);
+}
+
+void EngineBase::TickCounter(SharedLogOpType op_type) {
+#if !defined(__FAAS_DISABLE_STAT)
+    absl::MutexLock lk(&stat_mu_);
+    switch (op_type) {
+    case SharedLogOpType::APPEND:
+    case SharedLogOpType::ASYNC_APPEND:
+        break;
+    case SharedLogOpType::READ_NEXT:
+    case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_NEXT:
+    case SharedLogOpType::ASYNC_READ_NEXT_B:
+        readn_counter_.Tick();
+        break;
+    case SharedLogOpType::READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV:
+        readp_counter_.Tick();
+        break;
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
+        readaux_counter_.Tick();
+        break;
+    case SharedLogOpType::ASYNC_READ_LOCALID:
+        break;
+    case SharedLogOpType::READ_SYNCTO:
+        break;
+    case SharedLogOpType::TRIM:
+        break;
+    case SharedLogOpType::SET_AUXDATA:
+        break;
+    default:
+        UNREACHABLE();
+    }
+#endif  // !defined(__FAAS_DISABLE_STAT)
+}
+
+void EngineBase::RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay) {
+#if !defined(__FAAS_DISABLE_STAT)
+    absl::MutexLock lk(&stat_mu_);
+    switch (op_type) {
+    case SharedLogOpType::APPEND:
+    case SharedLogOpType::ASYNC_APPEND:
+        break;
+    case SharedLogOpType::READ_NEXT:
+    case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_NEXT:
+    case SharedLogOpType::ASYNC_READ_NEXT_B:
+        readn_delay_stat_.AddSample(delay);
+        break;
+    case SharedLogOpType::READ_PREV:
+    case SharedLogOpType::ASYNC_READ_PREV:
+        readp_delay_stat_.AddSample(delay);
+        break;
+    case SharedLogOpType::ASYNC_READ_PREV_AUX:
+        readaux_delay_stat_.AddSample(delay);
+        break;
+    case SharedLogOpType::ASYNC_READ_LOCALID:
+        break;
+    case SharedLogOpType::READ_SYNCTO:
+        break;
+    case SharedLogOpType::TRIM:
+        break;
+    case SharedLogOpType::SET_AUXDATA:
+        break;
+    default:
+        UNREACHABLE();
+    }
+#endif  // !defined(__FAAS_DISABLE_STAT)
 }
 
 void EngineBase::LocalOpHandler(LocalOp* op) {
@@ -287,6 +364,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
     }
 
+    TickCounter(op->type);
+
     LocalOpHandler(op);
 }
 
@@ -360,6 +439,9 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
     engine_->SendFuncWorkerMessage(op->client_id, response);
     // HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={} resp_flags={:08X} seqnum={:016X} aux_size={}",
     //     op->id, response->response_id, op->client_data, response->flags, response->log_seqnum, response->log_aux_data_size);
+    int32_t op_delay = gsl::narrow_cast<int32_t>(
+        GetMonotonicMicroTimestamp() - op->start_timestamp);
+    RecordOpDelay(op->type, op_delay);
 
     bool finished;
     if ((response->flags & protocol::kLogResponseContinueFlag) != 0) {

@@ -1133,8 +1133,11 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
+func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64, tip string) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	// DEBUG
+	// log.Printf("[DEBUG] Next %v cid=%v tag=%v seqnum=%v", tip, id, tag, seqNum)
+
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
@@ -1149,8 +1152,11 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
+func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64, tip string) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	// DEBUG
+	// log.Printf("[DEBUG] Prev %v cid=%v tag=%v seqnum=%v", tip, id, tag, seqNum)
+
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, false /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
@@ -1207,7 +1213,7 @@ func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, localId uint64
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogCheckTail(ctx context.Context, tag uint64) (*types.LogEntryWithMeta, error) {
-	return w.AsyncSharedLogReadPrev(ctx, tag, protocol.MaxLogSeqnum)
+	return w.AsyncSharedLogReadPrev(ctx, tag, protocol.MaxLogSeqnum, "CheckTail")
 }
 
 // Implement types.Environment
@@ -1216,8 +1222,11 @@ func (w *FuncWorker) SharedLogCheckTail(ctx context.Context, tag uint64) (*types
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadPrevWithAux(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
+func (w *FuncWorker) AsyncSharedLogReadPrevWithAux(ctx context.Context, tag uint64, seqNum uint64, tip string) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	// DEBUG
+	// log.Printf("[DEBUG] PrevAux %v cid=%v tag=%v seqnum=%v", tip, id, tag, seqNum)
+
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, true /*promiseAux*/, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)

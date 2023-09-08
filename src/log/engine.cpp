@@ -274,11 +274,11 @@ void Engine::HandleLocalTrim(LocalOp* op) {
 void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     if ((op->flags & LocalOp::kReadLocalIdFlag) == 0) {
-        HVLOG_F(1, "HandleLocalRead: op_type={} op_id={} logspace={} tag={} from={:016X} seqnum={:016X} flags={:04X}",
-                op->type, op->id, op->user_logspace, op->query_tag, op->query_start_seqnum, op->seqnum, op->flags);
+        HVLOG_F(1, "HandleLocalRead: op_type={} cid={} logspace={} tag={} from={:016X} seqnum={:016X} flags={:04X}",
+                op->type, op->client_data, op->user_logspace, op->query_tag, op->query_start_seqnum, op->seqnum, op->flags);
     } else {
-        HVLOG_F(1, "HandleLocalRead: op_type={} op_id={} logspace={} tag={} from={:016X} localid={:016X} flags={:04X}",
-                op->type, op->id, op->user_logspace, op->query_tag, op->query_start_seqnum, op->localid, op->flags);
+        HVLOG_F(1, "HandleLocalRead: op_type={} cid={} logspace={} tag={} from={:016X} localid={:016X} flags={:04X}",
+                op->type, op->client_data, op->user_logspace, op->query_tag, op->query_start_seqnum, op->localid, op->flags);
     }
     const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;

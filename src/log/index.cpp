@@ -967,7 +967,7 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
     if (found) {
         pending_query_results_.push_back(
             BuildFoundResult(query, view_->id(), seqnum, engine_id, localid));
-        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum=0x{:016X}", seqnum);
+        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={:016X}", seqnum);
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0));
         HVLOG(1) << "ProcessReadPrev: ContinueResult";

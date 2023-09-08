@@ -105,7 +105,7 @@ func (rb *ResponseBuffer) checkResolved(message []byte) {
 		close(rb.ingress)
 
 		// DEBUG: print debug info
-		rb.Inspect()
+		// rb.Inspect()
 	}
 }
 

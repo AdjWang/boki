@@ -143,16 +143,82 @@ private:
         const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>&
             fn_call_ctx);
 
+    absl::Mutex stat_mu_;
+    stat::Counter readaux_counter_ ABSL_GUARDED_BY(stat_mu_);
+    stat::Counter readp_counter_   ABSL_GUARDED_BY(stat_mu_);
+    stat::Counter readn_counter_   ABSL_GUARDED_BY(stat_mu_);
+    stat::StatisticsCollector<int32_t> readaux_delay_stat_ ABSL_GUARDED_BY(stat_mu_);
+    stat::StatisticsCollector<int32_t> readp_delay_stat_   ABSL_GUARDED_BY(stat_mu_);
+    stat::StatisticsCollector<int32_t> readn_delay_stat_   ABSL_GUARDED_BY(stat_mu_);
+
     void SetupZKWatchers();
     void SetupTimers();
 
     void PopulateLogTagsAndData(const protocol::Message& message, LocalOp* op);
+    void TickCounter(protocol::SharedLogOpType op_type);
+    void RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay);
 
     DISALLOW_COPY_AND_ASSIGN(EngineBase);
 };
 
 }  // namespace log
 }  // namespace faas
+
+
+template <>
+struct fmt::formatter<faas::protocol::SharedLogResultType>: formatter<std::string_view> {
+    auto format(faas::protocol::SharedLogResultType res, format_context& ctx) const {
+        std::string_view result = "unknown";
+        switch (res) {
+            case faas::protocol::SharedLogResultType::INVALID:
+                result = "INVALID";
+                break;
+            case faas::protocol::SharedLogResultType::APPEND_OK:
+                result = "APPEND_OK";
+                break;
+            case faas::protocol::SharedLogResultType::READ_OK:
+                result = "READ_OK";
+                break;
+            case faas::protocol::SharedLogResultType::TRIM_OK:
+                result = "TRIM_OK";
+                break;
+            case faas::protocol::SharedLogResultType::LOCALID:
+                result = "LOCALID";
+                break;
+            case faas::protocol::SharedLogResultType::AUXDATA_OK:
+                result = "AUXDATA_OK";
+                break;
+            case faas::protocol::SharedLogResultType::ASYNC_APPEND_OK:
+                result = "ASYNC_APPEND_OK";
+                break;
+            case faas::protocol::SharedLogResultType::ASYNC_READ_OK:
+                result = "ASYNC_READ_OK";
+                break;
+            case faas::protocol::SharedLogResultType::ASYNC_DISCARDED:
+                result = "ASYNC_DISCARDED";
+                break;
+            case faas::protocol::SharedLogResultType::ASYNC_EMPTY:
+                result = "ASYNC_EMPTY";
+                break;
+            case faas::protocol::SharedLogResultType::BAD_ARGS:
+                result = "BAD_ARGS";
+                break;
+            case faas::protocol::SharedLogResultType::DISCARDED:
+                result = "DISCARDED";
+                break;
+            case faas::protocol::SharedLogResultType::EMPTY:
+                result = "EMPTY";
+                break;
+            case faas::protocol::SharedLogResultType::DATA_LOST:
+                result = "DATA_LOST";
+                break;
+            case faas::protocol::SharedLogResultType::TRIM_FAILED:
+                result = "TRIM_FAILED";
+                break;
+        }
+        return formatter<string_view>::format(result, ctx);
+    }
+};
 
 template <>
 struct fmt::formatter<faas::protocol::SharedLogOpType>: formatter<std::string_view> {
