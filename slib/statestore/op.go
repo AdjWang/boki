@@ -1,6 +1,11 @@
 package statestore
 
 import (
+	"fmt"
+	"log"
+	"os"
+	"time"
+
 	gabs "github.com/Jeffail/gabs/v2"
 )
 
@@ -73,54 +78,54 @@ func (ctx *multiContext) appendOp(op *WriteOp, result *WriteResult) {
 	ctx.results = append(ctx.results, result)
 }
 
-func (obj *ObjectRef) MultiBegin() {
-	if obj.multiCtx != nil {
-		panic("Already in multi context")
-	}
-	if obj.txnCtx != nil {
-		panic("Multi not supported within transaction")
-	}
-	obj.multiCtx = &multiContext{
-		ops:     make([]*WriteOp, 0, 4),
-		results: make([]*WriteResult, 0, 4),
-	}
-}
+// func (obj *ObjectRef) MultiBegin() {
+// 	if obj.multiCtx != nil {
+// 		panic("Already in multi context")
+// 	}
+// 	if obj.txnCtx != nil {
+// 		panic("Multi not supported within transaction")
+// 	}
+// 	obj.multiCtx = &multiContext{
+// 		ops:     make([]*WriteOp, 0, 4),
+// 		results: make([]*WriteResult, 0, 4),
+// 	}
+// }
 
-func (obj *ObjectRef) MultiAbort() {
-	if obj.multiCtx == nil {
-		panic("Not in multi context")
-	}
-	obj.multiCtx = nil
-}
+// func (obj *ObjectRef) MultiAbort() {
+// 	if obj.multiCtx == nil {
+// 		panic("Not in multi context")
+// 	}
+// 	obj.multiCtx = nil
+// }
 
-func (obj *ObjectRef) MultiCommit() error {
-	if obj.multiCtx == nil {
-		panic("Not in multi context")
-	}
-	ctx := obj.multiCtx
-	obj.multiCtx = nil
-	if len(ctx.ops) == 0 {
-		// Nothing to commit
-		return nil
-	}
-	seqNum, err := obj.appendNormalOpLog(ctx.ops)
-	if err != nil {
-		return err
-	}
-	if err := obj.syncTo(seqNum); err != nil {
-		return err
-	}
-	obj.view.nextSeqNum = seqNum + 1
-	for i, op := range ctx.ops {
-		result := ctx.results[i]
-		if value, err := obj.view.applyWriteOp(op); err != nil {
-			result.failure(err)
-		} else {
-			result.successWithValue(value)
-		}
-	}
-	return nil
-}
+// func (obj *ObjectRef) MultiCommit() error {
+// 	if obj.multiCtx == nil {
+// 		panic("Not in multi context")
+// 	}
+// 	ctx := obj.multiCtx
+// 	obj.multiCtx = nil
+// 	if len(ctx.ops) == 0 {
+// 		// Nothing to commit
+// 		return nil
+// 	}
+// 	seqNum, err := obj.appendNormalOpLog(ctx.ops)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if err := obj.syncTo(seqNum); err != nil {
+// 		return err
+// 	}
+// 	obj.view.nextSeqNum = seqNum + 1
+// 	for i, op := range ctx.ops {
+// 		result := ctx.results[i]
+// 		if value, err := obj.view.applyWriteOp(op); err != nil {
+// 			result.failure(err)
+// 		} else {
+// 			result.successWithValue(value)
+// 		}
+// 	}
+// 	return nil
+// }
 
 func (obj *ObjectRef) doWriteOp(op *WriteOp) *WriteResult {
 	if op.Value.Object != nil || op.Value.Array != nil {
@@ -128,8 +133,10 @@ func (obj *ObjectRef) doWriteOp(op *WriteOp) *WriteResult {
 	}
 	result := newEmptyResult()
 	if obj.multiCtx != nil {
-		obj.multiCtx.appendOp(op, result)
-		return result
+		// DEBUG: not using multi ctx
+		panic("unreachable")
+		// obj.multiCtx.appendOp(op, result)
+		// return result
 	}
 	if obj.txnCtx != nil {
 		if !obj.txnCtx.active {
@@ -142,13 +149,27 @@ func (obj *ObjectRef) doWriteOp(op *WriteOp) *WriteResult {
 		result.successWithValue(NullValue())
 		return result
 	}
+	normalWriteStart := time.Now()
 	seqNum, err := obj.appendWriteLog(op)
 	if err != nil {
 		return result.failure(err)
 	}
-	if err := obj.syncTo(seqNum); err != nil {
+	appendElapsed := time.Since(normalWriteStart).Microseconds()
+	syncToStart := time.Now()
+	inspector, err := obj.syncTo(seqNum)
+	if err != nil {
 		return result.failure(err)
 	}
+	syncToElapsed := time.Since(syncToStart).Microseconds()
+	if flagProf := obj.env.faasCtx.Value("PROF"); flagProf != nil {
+		defer log.Printf("[PROF] SetNormal=%v append=%v read=%v count r/a=(%v %v) txn_r/a=(%v %v)",
+			time.Since(normalWriteStart).Microseconds(), appendElapsed, syncToElapsed, inspector.readCount, inspector.applyCount,
+			inspector.txnReadCount, inspector.txnApplyCount)
+		if len(inspector.ops) > 0 {
+			defer fmt.Fprintf(os.Stdout, "[PROF] SetNormal %+v\n", inspector.ops)
+		}
+	}
+
 	obj.view.nextSeqNum = seqNum + 1
 	if value, err := obj.view.applyWriteOp(op); err != nil {
 		return result.failure(err)
