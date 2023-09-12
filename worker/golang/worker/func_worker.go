@@ -68,10 +68,12 @@ func hexBytes2String(data []byte) string {
 const PIPE_BUF = 4096
 const QUEUE_RESERVED_CAP = 100
 
-func NewLogOpsQueue(w *FuncWorker, id uint64) *ResponseBuffer {
+func NewLogOpsQueue(w *FuncWorker, id uint64) ResponseBuffer {
 	queue := NewResponseBuffer(QUEUE_RESERVED_CAP)
+	// DEBUG
+	// queue := NewDummyResponseBuffer(QUEUE_RESERVED_CAP)
 	go func() {
-		<-queue.SignalResolved
+		queue.AwaitResolved()
 		w.mux.Lock()
 		delete(w.outgoingLogOps, id)
 		w.mux.Unlock()
@@ -92,8 +94,8 @@ type FuncWorker struct {
 	outputPipe           *os.File // protected by mux
 	// DEBUG
 	// outputPipe         *dbgPipe                 // protected by mux
-	outgoingFuncCalls  map[uint64](chan []byte)     // protected by mux
-	outgoingLogOps     map[uint64](*ResponseBuffer) // protected by mux
+	outgoingFuncCalls  map[uint64](chan []byte)    // protected by mux
+	outgoingLogOps     map[uint64](ResponseBuffer) // protected by mux
 	handler            types.FuncHandler
 	grpcHandler        types.GrpcFuncHandler
 	nextCallId         uint32
@@ -120,7 +122,7 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		useFifoForNestedCall: false,
 		newFuncCallChan:      make(chan []byte, 4),
 		outgoingFuncCalls:    make(map[uint64](chan []byte)),
-		outgoingLogOps:       make(map[uint64](*ResponseBuffer)),
+		outgoingLogOps:       make(map[uint64](ResponseBuffer)),
 		nextCallId:           0,
 		nextLogOpId:          0,
 		currentCall:          0,

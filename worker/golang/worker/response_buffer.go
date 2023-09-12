@@ -11,7 +11,55 @@ import (
 )
 
 // Reorder response by response count
-type ResponseBuffer struct {
+type ResponseBuffer interface {
+	Enqueue(message []byte)
+	Dequeue() []byte
+	AwaitResolved()
+
+	// DEBUG
+	Inspect()
+}
+
+type DummyResponseBuffer struct {
+	buffer         chan []byte
+	signalResolved chan struct{}
+}
+
+func NewDummyResponseBuffer(reservedCapacity int) ResponseBuffer {
+	return &DummyResponseBuffer{
+		buffer:         make(chan []byte, reservedCapacity),
+		signalResolved: make(chan struct{}, 1),
+	}
+}
+
+func (drb *DummyResponseBuffer) checkResolved(message []byte) {
+	flags := protocol.GetSharedLogOpFlagsFromMessage(message)
+	if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
+		drb.signalResolved <- struct{}{}
+		// ensure only do once
+		close(drb.signalResolved)
+		close(drb.buffer)
+	}
+}
+func (drb *DummyResponseBuffer) Enqueue(message []byte) {
+	drb.buffer <- message
+}
+
+func (drb *DummyResponseBuffer) Dequeue() []byte {
+	message := <-drb.buffer
+	defer drb.checkResolved(message)
+	return message
+}
+
+func (drb *DummyResponseBuffer) AwaitResolved() {
+	<-drb.signalResolved
+}
+
+func (drb *DummyResponseBuffer) Inspect() {
+
+}
+
+type ResponseBufferImpl struct {
 	ingress  chan []byte
 	outgress *types.Queue[[]byte]
 
@@ -19,7 +67,7 @@ type ResponseBuffer struct {
 	responseBuffer map[uint64][]byte
 
 	resolved       bool
-	SignalResolved chan struct{}
+	signalResolved chan struct{}
 
 	// DEBUG
 	deliverTs        map[uint64]time.Time
@@ -28,8 +76,8 @@ type ResponseBuffer struct {
 	totalCount       int
 }
 
-func NewResponseBuffer(reservedCapacity int) *ResponseBuffer {
-	rb := ResponseBuffer{
+func NewResponseBuffer(reservedCapacity int) ResponseBuffer {
+	rb := ResponseBufferImpl{
 		ingress:  make(chan []byte),
 		outgress: types.NewQueue[[]byte](reservedCapacity),
 
@@ -37,7 +85,7 @@ func NewResponseBuffer(reservedCapacity int) *ResponseBuffer {
 		responseBuffer: make(map[uint64][]byte),
 
 		resolved:       false,
-		SignalResolved: make(chan struct{}, 1),
+		signalResolved: make(chan struct{}, 1),
 
 		// DEBUG
 		deliverTs:        make(map[uint64]time.Time),
@@ -48,9 +96,12 @@ func NewResponseBuffer(reservedCapacity int) *ResponseBuffer {
 	go rb.worker()
 	return &rb
 }
+func (rb *ResponseBufferImpl) AwaitResolved() {
+	<-rb.signalResolved
+}
 
 // DEBUG
-func (rb *ResponseBuffer) Inspect() {
+func (rb *ResponseBufferImpl) Inspect() {
 	p30, _ := stats.Percentile(rb.deliverDurations, 30.0)
 	p50, _ := stats.Percentile(rb.deliverDurations, 50.0)
 	p70, _ := stats.Percentile(rb.deliverDurations, 70.0)
@@ -61,7 +112,7 @@ func (rb *ResponseBuffer) Inspect() {
 		rb.bufferedCount, rb.totalCount, p30, p50, p70, p90, p99, p100)
 }
 
-func (rb *ResponseBuffer) worker() {
+func (rb *ResponseBufferImpl) worker() {
 	for {
 		message, ok := <-rb.ingress
 		if !ok {
@@ -92,24 +143,24 @@ func (rb *ResponseBuffer) worker() {
 	}
 }
 
-func (rb *ResponseBuffer) checkResolved(message []byte) {
+func (rb *ResponseBufferImpl) checkResolved(message []byte) {
 	flags := protocol.GetSharedLogOpFlagsFromMessage(message)
 	if (flags & protocol.FLAG_kLogResponseContinueFlag) == 0 {
 		// DEBUG
 		// log.Printf("[DEBUG] ResponseBuffer resolved id=%v %v",
 		// 	rb.responseId, protocol.InspectMessage(message))
 		rb.resolved = true
-		rb.SignalResolved <- struct{}{}
+		rb.signalResolved <- struct{}{}
 		// ensure only do once
-		close(rb.SignalResolved)
+		close(rb.signalResolved)
 		close(rb.ingress)
 
 		// DEBUG: print debug info
-		rb.Inspect()
+		// rb.Inspect()
 	}
 }
 
-func (rb *ResponseBuffer) outputMessage(message []byte) {
+func (rb *ResponseBufferImpl) outputMessage(message []byte) {
 	if rb.resolved {
 		panic("output message after resolved")
 	}
@@ -125,11 +176,11 @@ func (rb *ResponseBuffer) outputMessage(message []byte) {
 	rb.checkResolved(message)
 }
 
-func (rb *ResponseBuffer) Enqueue(message []byte) {
+func (rb *ResponseBufferImpl) Enqueue(message []byte) {
 	rb.ingress <- message
 }
 
-func (rb *ResponseBuffer) Dequeue() []byte {
+func (rb *ResponseBufferImpl) Dequeue() []byte {
 	message := rb.outgress.BlockingDequeue()
 	// log.Printf("[DEBUG] SharedLogOp output cid=%v %v", rb.cid, protocol.InspectMessage(message))
 	return message
