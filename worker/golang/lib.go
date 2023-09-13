@@ -3,6 +3,10 @@ package faas
 import (
 	"encoding/binary"
 	"log"
+<<<<<<< HEAD
+=======
+	_ "net/http/pprof"
+>>>>>>> e164229 (add IPC stat)
 	"os"
 	"runtime"
 	"strconv"
@@ -29,7 +33,6 @@ func Serve(factory types.FuncHandlerFactory) {
 	if err != nil {
 		log.Fatal("[FATAL] Failed to parse FAAS_MSG_PIPE_FD")
 	}
-
 	msgPipe := os.NewFile(uintptr(msgPipeFd), "msg_pipe")
 	payloadSizeBuf := make([]byte, 4)
 	nread, err := msgPipe.Read(payloadSizeBuf)
