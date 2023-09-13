@@ -20,6 +20,7 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
+	"cs.utexas.edu/zjia/faas/utils"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 )
@@ -141,6 +142,10 @@ func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Handshake with engine done")
 
 	go w.servingLoop()
+	appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	for {
 		// tracer := utils.NewTracer()
 		message := protocol.NewEmptyMessage()
@@ -163,8 +168,19 @@ func (w *FuncWorker) Run() {
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			// DEBUG: PROF
-			// dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-			// log.Printf("[PROF] dispatchDelay: %v us", dispatchDelay)
+			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+			sc.AddSample(float64(dispatchDelay))
+			resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+			switch resultType {
+			case protocol.SharedLogResultType_APPEND_OK:
+				fallthrough
+			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
+				appendSc.AddSample(float64(dispatchDelay))
+			case protocol.SharedLogResultType_READ_OK:
+				readSc.AddSample(float64(dispatchDelay))
+			default:
+				otherSc.AddSample(float64(dispatchDelay))
+			}
 
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()

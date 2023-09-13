@@ -3,8 +3,6 @@ package faas
 import (
 	"encoding/binary"
 	"log"
-	"net/http"
-	"net/http/pprof"
 	_ "net/http/pprof"
 	"os"
 	"runtime"
@@ -32,30 +30,6 @@ func Serve(factory types.FuncHandlerFactory) {
 	if err != nil {
 		log.Fatal("[FATAL] Failed to parse FAAS_MSG_PIPE_FD")
 	}
-	// prof
-	go func() {
-		if funcId == 7 {
-			mux := http.NewServeMux()
-
-			mux.HandleFunc("/debug/pprof/", pprof.Index)
-			mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-			mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-
-			// ...
-
-			server := &http.Server{
-				Addr:    "0.0.0.0:9411",
-				Handler: mux,
-			}
-
-			if err := server.ListenAndServe(); err != nil {
-				panic(err)
-			}
-		}
-	}()
-
 	msgPipe := os.NewFile(uintptr(msgPipeFd), "msg_pipe")
 	payloadSizeBuf := make([]byte, 4)
 	nread, err := msgPipe.Read(payloadSizeBuf)
