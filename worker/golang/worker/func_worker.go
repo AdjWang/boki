@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -27,10 +28,10 @@ import (
 
 // region debug pipe
 type dbgPipe struct {
-	fp *os.File
+	fp io.Writer
 }
 
-func newDebugPipe(fp *os.File) *dbgPipe {
+func newDebugPipe(fp io.Writer) *dbgPipe {
 	return &dbgPipe{
 		fp: fp,
 	}
@@ -91,8 +92,8 @@ type FuncWorker struct {
 	useFifoForNestedCall bool
 	engineConn           net.Conn
 	newFuncCallChan      chan []byte
-	inputPipe            *os.File
-	outputPipe           *os.File // protected by mux
+	inputPipe            io.Reader
+	outputPipe           io.Writer // protected by mux
 	// DEBUG
 	// outputPipe         *dbgPipe                 // protected by mux
 	outgoingFuncCalls  map[uint64](chan []byte)    // protected by mux
@@ -207,11 +208,19 @@ func (w *FuncWorker) doHandshake() error {
 	}
 	w.engineConn = c
 
-	ip, err := ipc.FifoOpenForRead(ipc.GetFuncWorkerInputFifoName(w.clientId), true)
-	if err != nil {
-		return err
+	envUseEngineSocket := os.Getenv("FAAS_USE_ENGINE_SOCKET")
+	useEngineSocket := envUseEngineSocket != ""
+	log.Printf("[DEBUG] env engine socket=%v use=%v", envUseEngineSocket, useEngineSocket)
+
+	if useEngineSocket {
+		w.inputPipe = c
+	} else {
+		ip, err := ipc.FifoOpenForRead(ipc.GetFuncWorkerInputFifoName(w.clientId), true)
+		if err != nil {
+			return err
+		}
+		w.inputPipe = ip
 	}
-	w.inputPipe = ip
 
 	message := protocol.NewFuncWorkerHandshakeMessage(w.funcId, w.clientId)
 	_, err = w.engineConn.Write(message)
@@ -254,13 +263,17 @@ func (w *FuncWorker) doHandshake() error {
 		w.handler = handler
 	}
 
-	op, err := ipc.FifoOpenForWrite(ipc.GetFuncWorkerOutputFifoName(w.clientId), false)
-	if err != nil {
-		return err
+	if useEngineSocket {
+		w.outputPipe = c
+	} else {
+		op, err := ipc.FifoOpenForWrite(ipc.GetFuncWorkerOutputFifoName(w.clientId), false)
+		if err != nil {
+			return err
+		}
+		// DEBUG
+		// w.outputPipe = newDebugPipe(op)
+		w.outputPipe = op
 	}
-	// DEBUG
-	// w.outputPipe = newDebugPipe(op)
-	w.outputPipe = op
 
 	return nil
 }
