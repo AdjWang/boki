@@ -121,10 +121,6 @@ type Environment interface {
 	AsyncSharedLogRead(ctx context.Context, localId uint64) (*LogEntryWithMeta, error)
 	// TODO: replace this by AwaitSharedLogAppend
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
-	// TODO: replace original blocking read
-	AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
-	AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
-	AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
 }
 
 type FuncHandler interface {

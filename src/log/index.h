@@ -22,17 +22,11 @@ struct IndexQuery {
     static constexpr uint16_t kReadLocalIdFlag    = (1 << 1);     // Indicates localid/seqnum
     static constexpr uint16_t kReadFromCachedFlag = (1 << 2);     // Indicates whether skip previous cached logs
 
-    // determines how to response
-    // kSync: return once with the log entry
-    // kAsync: return twice, first only seqnum, second the same as kSync
-    enum QueryType { kSync, kAsync };
-
     // determines how to interpret the query_seqnum
     // kReadNext, kReadPrev, kReadNextB: query_seqnum is the seqnum of the shared log
     // kReadLocalId: query_seqnum is the localid
     // kReadNextU(ntil): both, use flags to resolve
     enum ReadDirection { kReadNext, kReadPrev, kReadPrevAux, kReadNextB, kReadLocalId, kReadNextU };
-    QueryType type;
     ReadDirection direction;
     uint16_t origin_node_id;
     uint16_t hop_times;

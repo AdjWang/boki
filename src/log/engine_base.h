@@ -206,20 +206,11 @@ struct fmt::formatter<faas::protocol::SharedLogOpType>: formatter<std::string_vi
             case faas::protocol::SharedLogOpType::ASYNC_APPEND:
                 result = "ASYNC_APPEND";
                 break;
-            case faas::protocol::SharedLogOpType::ASYNC_READ_NEXT:
-                result = "ASYNC_READ_NEXT";
+            case faas::protocol::SharedLogOpType::READ_PREV_AUX:
+                result = "READ_PREV_AUX";
                 break;
-            case faas::protocol::SharedLogOpType::ASYNC_READ_NEXT_B:
-                result = "ASYNC_READ_NEXT_B";
-                break;
-            case faas::protocol::SharedLogOpType::ASYNC_READ_PREV:
-                result = "ASYNC_READ_PREV";
-                break;
-            case faas::protocol::SharedLogOpType::ASYNC_READ_PREV_AUX:
-                result = "ASYNC_READ_PREV_AUX";
-                break;
-            case faas::protocol::SharedLogOpType::ASYNC_READ_LOCALID:
-                result = "ASYNC_READ_LOCALID";
+            case faas::protocol::SharedLogOpType::READ_LOCALID:
+                result = "READ_LOCALID";
                 break;
             case faas::protocol::SharedLogOpType::RESPONSE:
                 result = "RESPONSE";

@@ -282,7 +282,7 @@ func (q *Queue) BatchPush(payloads []string) error {
 		futures = append(futures, future)
 	}
 	for _, future := range futures {
-		if err := future.Await(60 * time.Second); err != nil {
+		if _, err := future.GetResult(60 * time.Second); err != nil {
 			return err
 		}
 	}

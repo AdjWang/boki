@@ -96,7 +96,8 @@ func (env *envImpl) TxnAbort() error {
 	}
 	if future, err := env.faasEnv.AsyncSharedLogAppendWithDeps(env.faasCtx, tags, common.CompressData2(encoded), []uint64{ctx.idFuture.GetLocalId()}); err == nil {
 		// ensure durability
-		return future.Await(common.AsyncWaitTimeout)
+		_, err = future.GetResult(common.AsyncWaitTimeout)
+		return err
 	} else {
 		return newRuntimeError(err.Error())
 	}

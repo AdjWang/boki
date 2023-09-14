@@ -115,11 +115,8 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::READ_SYNCTO:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
-    case SharedLogOpType::ASYNC_READ_PREV_AUX:
-    case SharedLogOpType::ASYNC_READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_LOCALID:
+    case SharedLogOpType::READ_PREV_AUX:
+    case SharedLogOpType::READ_LOCALID:
         HandleLocalRead(op);
         break;
     case SharedLogOpType::TRIM:
@@ -140,11 +137,8 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
     case SharedLogOpType::READ_SYNCTO:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
-    case SharedLogOpType::ASYNC_READ_PREV_AUX:
-    case SharedLogOpType::ASYNC_READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_LOCALID:
+    case SharedLogOpType::READ_PREV_AUX:
+    case SharedLogOpType::READ_LOCALID:
         HandleRemoteRead(message);
         break;
     case SharedLogOpType::INDEX_DATA:
@@ -236,10 +230,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
-    case SharedLogOpType::ASYNC_READ_PREV_AUX:
-    case SharedLogOpType::ASYNC_READ_NEXT_B:
+    case SharedLogOpType::READ_PREV_AUX:
         op->query_tag = message.log_tag;
         DCHECK(message.log_query_seqnum != protocol::kInvalidLogSeqNum);
         op->seqnum = message.log_query_seqnum;
@@ -267,7 +258,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
             op->flags |= LocalOp::kReadFromCachedFlag;
         }
         break;
-    case SharedLogOpType::ASYNC_READ_LOCALID:
+    case SharedLogOpType::READ_LOCALID:
         DCHECK((message.flags & protocol::kLogQueryLocalIdFlag) != 0);
         op->flags |= LocalOp::kReadLocalIdFlag;
         DCHECK(message.log_query_localid != protocol::kInvalidLogLocalId);
@@ -300,11 +291,8 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_SYNCTO)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_LOCALID)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT_B)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_PREV)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_PREV_AUX)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_LOCALID)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV_AUX)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
