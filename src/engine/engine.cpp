@@ -37,6 +37,7 @@ Engine::Engine(uint16_t node_id)
       enable_shared_log_(false),
       node_id_(node_id),
       func_worker_use_engine_socket_(absl::GetFlag(FLAGS_func_worker_use_engine_socket)),
+      func_worker_ipc_output_channels_(absl::GetFlag(FLAGS_func_worker_ipc_output_channels)),
       use_fifo_for_nested_call_(absl::GetFlag(FLAGS_use_fifo_for_nested_call)),
       ipc_sockfd_(-1),
       worker_manager_(this),
@@ -211,6 +212,7 @@ bool Engine::OnNewHandshake(MessageConnection* connection,
         if (func_worker_use_engine_socket_) {
             response->flags |= protocol::kFuncWorkerUseEngineSocketFlag;
         }
+        response->ipc_output_channels = func_worker_ipc_output_channels_;
         response->engine_id = node_id_;
         *response_payload = STRING_AS_SPAN(func_config_json_);
     } else {

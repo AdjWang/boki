@@ -43,8 +43,12 @@ private:
 
     std::optional<int> sockfd_;
     std::optional<int> in_fifo_fd_;
-    std::optional<int> out_fifo_fd_;
-    std::atomic<int> pipe_for_write_fd_;
+    absl::Mutex out_fifo_group_mu_;
+    std::vector<int> out_fifo_fd_group_ ABSL_GUARDED_BY(out_fifo_group_mu_);
+    size_t idx_next_out_fifo_;  // round robin
+    int GetPipeForWriteFd();    // thread safe
+    std::atomic<size_t> closed_count_;
+    bool func_worker_handshake_done_;
 
     std::string log_header_;
 

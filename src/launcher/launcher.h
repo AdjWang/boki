@@ -61,6 +61,7 @@ public:
     }
     std::string_view func_config_json() const { return func_config_json_; }
     bool func_worker_use_engine_socket() const { return func_worker_use_engine_socket_; }
+    size_t func_worker_ipc_output_channels() const { return func_worker_ipc_output_channels_; }
 
     void Start();
     void ScheduleStop();
@@ -101,6 +102,7 @@ private:
     FuncConfig func_config_;
     std::string func_config_json_;
     bool func_worker_use_engine_socket_;
+    size_t func_worker_ipc_output_channels_;
     EngineConnection engine_connection_;
     std::vector<std::unique_ptr<FuncProcess>> func_processes_;
 

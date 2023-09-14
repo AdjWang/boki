@@ -35,6 +35,7 @@ public:
     const FuncConfig* func_config() { return &func_config_; }
     int engine_tcp_port() const { return engine_tcp_port_; }
     bool func_worker_use_engine_socket() const { return func_worker_use_engine_socket_; }
+    size_t func_worker_ipc_output_channels() const { return func_worker_ipc_output_channels_; }
     WorkerManager* worker_manager() { return &worker_manager_; }
     Monitor* monitor() { return &monitor_.value(); }
     Tracer* tracer() { return &tracer_; }
@@ -59,6 +60,7 @@ private:
     std::string func_config_json_;
     FuncConfig func_config_;
     bool func_worker_use_engine_socket_;
+    size_t func_worker_ipc_output_channels_;
     bool use_fifo_for_nested_call_;
 
     int ipc_sockfd_;

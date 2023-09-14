@@ -37,6 +37,7 @@ bool FuncProcess::Start(uv_loop_t* uv_loop, utils::BufferPool* read_buffer_pool)
     if (launcher_->func_worker_use_engine_socket()) {
         subprocess_.AddEnvVariable("FAAS_USE_ENGINE_SOCKET", "1");
     }
+    subprocess_.AddEnvVariable("FAAS_E2F_PIPE_CHS", static_cast<int>(launcher_->func_worker_ipc_output_channels()));
     if (launcher_->engine_tcp_port() != -1) {
         subprocess_.AddEnvVariable("FAAS_ENGINE_TCP_PORT", launcher_->engine_tcp_port());
     }

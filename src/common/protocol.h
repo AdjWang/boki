@@ -201,6 +201,7 @@ struct Message {
             uint64_t log_query_localid;
             uint64_t log_query_seqnum;
         };
+        uint64_t ipc_output_channels;   // [8:16] Used in HANDSHAKE_RESPONSE
     };
     int64_t send_timestamp;       // [16:24]
     int32_t payload_size;         // [24:28] Used in HANDSHAKE_RESPONSE, INVOKE_FUNC,

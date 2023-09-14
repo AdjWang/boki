@@ -24,6 +24,7 @@ Launcher::Launcher()
                          absl::bind_front(&Launcher::EventLoopThreadMain, this)),
       buffer_pool_("Launcher", kBufferSize),
       func_worker_use_engine_socket_(false),
+      func_worker_ipc_output_channels_(1),
       engine_connection_(this),
       engine_message_delay_stat_(
           stat::StatisticsCollector<int32_t>::StandardReportCallback("engine_message_delay")) {
@@ -113,6 +114,8 @@ bool Launcher::OnRecvHandshakeResponse(const Message& handshake_response,
     if (handshake_response.flags & protocol::kFuncWorkerUseEngineSocketFlag) {
         func_worker_use_engine_socket_ = true;
     }
+    func_worker_ipc_output_channels_ = handshake_response.ipc_output_channels;
+    DCHECK_GE(func_worker_ipc_output_channels_, 1u);
     engine_id_ = handshake_response.engine_id;
     if (!func_config_.Load(std::string_view(payload.data(), payload.size()))) {
         HLOG(ERROR) << "Failed to load function config from handshake response, will close the connection";

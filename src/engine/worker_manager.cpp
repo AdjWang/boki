@@ -93,7 +93,10 @@ void WorkerManager::OnFuncWorkerDisconnected(MessageConnection* worker_connectio
     if (dispatcher != nullptr) {
         dispatcher->OnFuncWorkerDisconnected(func_worker.get());
     }
-    ipc::FifoRemove(ipc::GetFuncWorkerInputFifoName(client_id));
+    size_t n_output_ch = engine_->func_worker_ipc_output_channels();
+    for (size_t ch = 0; ch < n_output_ch; ch++) {
+        ipc::FifoRemove(ipc::GetFuncWorkerInputFifoName(client_id, ch));
+    }
     ipc::FifoRemove(ipc::GetFuncWorkerOutputFifoName(client_id));
 }
 
@@ -127,8 +130,11 @@ bool WorkerManager::RequestNewFuncWorkerInternal(MessageConnection* launcher_con
     HLOG_F(INFO, "Request new FuncWorker for func_id {} with client_id {}",
            launcher_connection->func_id(), client_id);
     if (!engine_->func_worker_use_engine_socket()) {
-        CHECK(ipc::FifoCreate(ipc::GetFuncWorkerInputFifoName(client_id)))
-            << "FifoCreate failed";
+        size_t n_output_ch = engine_->func_worker_ipc_output_channels();
+        for (size_t ch = 0; ch < n_output_ch; ch++) {
+            CHECK(ipc::FifoCreate(ipc::GetFuncWorkerInputFifoName(client_id, ch)))
+                << "FifoCreate failed";
+        }
         CHECK(ipc::FifoCreate(ipc::GetFuncWorkerOutputFifoName(client_id)))
             << "FifoCreate failed";
     }

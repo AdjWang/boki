@@ -21,7 +21,6 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
-	"cs.utexas.edu/zjia/faas/utils"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 )
@@ -92,7 +91,8 @@ type FuncWorker struct {
 	useFifoForNestedCall bool
 	engineConn           net.Conn
 	newFuncCallChan      chan []byte
-	inputPipe            io.Reader
+	useEngineSocket      bool
+	inputPipeGroup       []io.Reader
 	outputPipe           io.Writer // protected by mux
 	// DEBUG
 	// outputPipe         *dbgPipe                 // protected by mux
@@ -109,7 +109,7 @@ type FuncWorker struct {
 	mux                sync.Mutex
 }
 
-func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
+func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory, useEngineSocket bool, inputPipeChs int) (*FuncWorker, error) {
 	engineId := uint32(0)
 	if parsed, err := strconv.Atoi(os.Getenv("FAAS_ENGINE_ID")); err == nil {
 		log.Printf("[INFO] Parse FAAS_ENGINE_ID: %d", parsed)
@@ -123,6 +123,8 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		isGrpcSrv:            false,
 		useFifoForNestedCall: false,
 		newFuncCallChan:      make(chan []byte, 4),
+		useEngineSocket:      useEngineSocket,
+		inputPipeGroup:       make([]io.Reader, inputPipeChs),
 		outgoingFuncCalls:    make(map[uint64](chan []byte)),
 		outgoingLogOps:       make(map[uint64](ResponseBuffer)),
 		nextCallId:           0,
@@ -134,6 +136,19 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 	return w, nil
 }
 
+func (w *FuncWorker) servingPipeReading(idx int, buf chan []byte) {
+	log.Printf("[INFO] Listening on input pipe ch=%d", idx)
+	for {
+		message := protocol.NewEmptyMessage()
+		if n, err := w.inputPipeGroup[idx].Read(message); err != nil {
+			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
+		} else if n != protocol.MessageFullByteSize {
+			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+		}
+		buf <- message
+	}
+}
+
 func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Start new FuncWorker with client id %d", w.clientId)
 	err := w.doHandshake()
@@ -143,18 +158,16 @@ func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Handshake with engine done")
 
 	go w.servingLoop()
-	appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	for {
+	// appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	msgBuffer := make(chan []byte, 1000)
+	for idx := range w.inputPipeGroup {
+		go w.servingPipeReading(idx, msgBuffer)
+	}
+	for message := range msgBuffer {
 		// tracer := utils.NewTracer()
-		message := protocol.NewEmptyMessage()
-		if n, err := w.inputPipe.Read(message); err != nil {
-			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
-		} else if n != protocol.MessageFullByteSize {
-			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
-		}
 		// tracer.Trace().Tip("[PROF] Worker read message")
 		if protocol.IsDispatchFuncCallMessage(message) {
 			w.newFuncCallChan <- message
@@ -169,19 +182,19 @@ func (w *FuncWorker) Run() {
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			// DEBUG: PROF
-			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-			sc.AddSample(float64(dispatchDelay))
-			resultType := protocol.GetSharedLogResultTypeFromMessage(message)
-			switch resultType {
-			case protocol.SharedLogResultType_APPEND_OK:
-				fallthrough
-			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
-				appendSc.AddSample(float64(dispatchDelay))
-			case protocol.SharedLogResultType_READ_OK:
-				readSc.AddSample(float64(dispatchDelay))
-			default:
-				otherSc.AddSample(float64(dispatchDelay))
-			}
+			// dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+			// sc.AddSample(float64(dispatchDelay))
+			// resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+			// switch resultType {
+			// case protocol.SharedLogResultType_APPEND_OK:
+			// 	fallthrough
+			// case protocol.SharedLogResultType_ASYNC_APPEND_OK:
+			// 	appendSc.AddSample(float64(dispatchDelay))
+			// case protocol.SharedLogResultType_READ_OK:
+			// 	readSc.AddSample(float64(dispatchDelay))
+			// default:
+			// 	otherSc.AddSample(float64(dispatchDelay))
+			// }
 
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
@@ -208,18 +221,16 @@ func (w *FuncWorker) doHandshake() error {
 	}
 	w.engineConn = c
 
-	envUseEngineSocket := os.Getenv("FAAS_USE_ENGINE_SOCKET")
-	useEngineSocket := envUseEngineSocket != ""
-	log.Printf("[DEBUG] env engine socket=%v use=%v", envUseEngineSocket, useEngineSocket)
-
-	if useEngineSocket {
-		w.inputPipe = c
+	if w.useEngineSocket {
+		w.inputPipeGroup[0] = c
 	} else {
-		ip, err := ipc.FifoOpenForRead(ipc.GetFuncWorkerInputFifoName(w.clientId), true)
-		if err != nil {
-			return err
+		for ch := 0; ch < len(w.inputPipeGroup); ch++ {
+			ip, err := ipc.FifoOpenForRead(ipc.GetFuncWorkerInputFifoName(w.clientId, ch), true)
+			if err != nil {
+				return err
+			}
+			w.inputPipeGroup[ch] = ip
 		}
-		w.inputPipe = ip
 	}
 
 	message := protocol.NewFuncWorkerHandshakeMessage(w.funcId, w.clientId)
@@ -263,7 +274,7 @@ func (w *FuncWorker) doHandshake() error {
 		w.handler = handler
 	}
 
-	if useEngineSocket {
+	if w.useEngineSocket {
 		w.outputPipe = c
 	} else {
 		op, err := ipc.FifoOpenForWrite(ipc.GetFuncWorkerOutputFifoName(w.clientId), false)

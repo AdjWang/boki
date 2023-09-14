@@ -12,7 +12,7 @@ std::string_view GetEngineUnixSocketPath();
 std::string_view GetRootPathForShm();
 std::string_view GetRootPathForFifo();
 
-std::string GetFuncWorkerInputFifoName(uint16_t client_id);
+std::string GetFuncWorkerInputFifoName(uint16_t client_id, size_t ch);
 std::string GetFuncWorkerOutputFifoName(uint16_t client_id);
 
 std::string GetFuncCallInputShmName(uint64_t full_call_id);

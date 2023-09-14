@@ -18,7 +18,8 @@ MessageConnection::MessageConnection(Engine* engine, int sockfd)
     : server::ConnectionBase(kMessageConnectionTypeId),
       engine_(engine), io_worker_(nullptr), state_(kCreated),
       func_id_(0), client_id_(0), handshake_done_(false),
-      sockfd_(sockfd), pipe_for_write_fd_(-1),
+      sockfd_(sockfd), idx_next_out_fifo_(0),
+      func_worker_handshake_done_(false),
       log_header_("MessageConnection[Handshaking]: ") {
 }
 
@@ -79,12 +80,28 @@ void MessageConnection::ScheduleClose() {
             OnFdClosed();
         }));
     }
-    if (out_fifo_fd_.has_value()) {
-        URING_DCHECK_OK(current_io_uring()->Close(*out_fifo_fd_, [this] () {
-            out_fifo_fd_ = std::nullopt;
-            pipe_for_write_fd_.store(-1);
-            OnFdClosed();
-        }));
+    {
+        closed_count_.store(0);
+        absl::MutexLock lock(&out_fifo_group_mu_);
+        if (!out_fifo_fd_group_.empty()) {
+            size_t n = out_fifo_fd_group_.size();
+            DCHECK_EQ(n, engine_->func_worker_ipc_output_channels());
+            for (int fd : out_fifo_fd_group_) {
+                URING_DCHECK_OK(current_io_uring()->Close(fd,
+                    [this, n]() {
+                        // add_fetch
+                        size_t count = closed_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+                        DCHECK_LE(count, n);
+                        if (count == n) {
+                            {
+                                absl::MutexLock lock(&out_fifo_group_mu_);
+                                out_fifo_fd_group_.clear();
+                            }
+                            OnFdClosed();
+                        }
+                    }));
+            }
+        }
     }
     state_ = kClosing;
 }
@@ -117,7 +134,7 @@ void MessageConnection::SendPendingMessages() {
     size_t n_msg = write_size / sizeof(Message);
     for (size_t i = 0; i < n_msg; i++) {
         const char* ptr = write_message_buffer_.data() + i * sizeof(Message);
-        if (out_fifo_fd_.has_value()) {
+        if (func_worker_handshake_done_) {
             const Message* message = reinterpret_cast<const Message*>(ptr);
             if (!WriteMessageWithFifo(*message)) {
                 HLOG(FATAL) << "WriteMessageWithFifo failed";
@@ -145,10 +162,21 @@ void MessageConnection::OnFdClosed() {
     DCHECK(state_ == kClosing);
     if (    !sockfd_.has_value()
          && !in_fifo_fd_.has_value()
-         && !out_fifo_fd_.has_value()) {
+         && closed_count_.load() == engine_->func_worker_ipc_output_channels()) {
         state_ = kClosed;
         io_worker_->OnConnectionClose(this);
     }
+}
+
+int MessageConnection::GetPipeForWriteFd() {
+    size_t n_output_ch = engine_->func_worker_ipc_output_channels();
+
+    absl::ReaderMutexLock lock(&out_fifo_group_mu_);
+    DCHECK(!out_fifo_fd_group_.empty());
+    int fd = out_fifo_fd_group_[idx_next_out_fifo_];
+
+    idx_next_out_fifo_ = (idx_next_out_fifo_ + 1) % n_output_ch;
+    return fd;
 }
 
 void MessageConnection::RecvHandshakeMessage() {
@@ -171,13 +199,24 @@ void MessageConnection::RecvHandshakeMessage() {
     }
     if (MessageHelper::IsFuncWorkerHandshake(*message)
             && !engine_->func_worker_use_engine_socket()) {
-        out_fifo_fd_ = ipc::FifoOpenForWrite(ipc::GetFuncWorkerInputFifoName(client_id_));
-        if (!out_fifo_fd_.has_value()) {
-            HLOG(ERROR) << "FifoOpenForWrite failed";
-            ScheduleClose();
-            return;
+        // init output fifo fd
+        {
+            absl::MutexLock lock(&out_fifo_group_mu_);
+            size_t n_output_ch = engine_->func_worker_ipc_output_channels();
+            // HVLOG_F(1, "[INFO] about to init input chs={} client_id={}", n_output_ch, client_id_);
+            for (size_t ch = 0; ch < n_output_ch; ch++) {
+                std::optional<int> out_fifo_fd = ipc::FifoOpenForWrite(ipc::GetFuncWorkerInputFifoName(client_id_, ch));
+                if (!out_fifo_fd.has_value()) {
+                    HLOG(ERROR) << "FifoOpenForWrite failed";
+                    ScheduleClose();
+                    return;
+                }
+                URING_DCHECK_OK(current_io_uring()->RegisterFd(*out_fifo_fd));
+                io_utils::FdUnsetNonblocking(*out_fifo_fd);
+                out_fifo_fd_group_.push_back(*out_fifo_fd);
+            }
         }
-        URING_DCHECK_OK(current_io_uring()->RegisterFd(*out_fifo_fd_));
+        // init input fifo fd
         in_fifo_fd_ = ipc::FifoOpenForRead(ipc::GetFuncWorkerOutputFifoName(client_id_));
         if (!in_fifo_fd_.has_value()) {
             HLOG(ERROR) << "FifoOpenForRead failed";
@@ -186,8 +225,8 @@ void MessageConnection::RecvHandshakeMessage() {
         }
         URING_DCHECK_OK(current_io_uring()->RegisterFd(*in_fifo_fd_));
         io_utils::FdUnsetNonblocking(*in_fifo_fd_);
-        io_utils::FdUnsetNonblocking(*out_fifo_fd_);
-        pipe_for_write_fd_.store(*out_fifo_fd_);
+
+        func_worker_handshake_done_ = true;
     }
     char* buf = reinterpret_cast<char*>(malloc(sizeof(Message) + payload.size()));
     memcpy(buf, &handshake_response_, sizeof(Message));
@@ -276,7 +315,7 @@ bool MessageConnection::OnRecvData(int status, std::span<const char> data) {
 }
 
 bool MessageConnection::WriteMessageWithFifo(const protocol::Message& message) {
-    int fd = pipe_for_write_fd_.load();
+    int fd = GetPipeForWriteFd();
     if (fd == -1) {
         return false;
     }

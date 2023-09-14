@@ -16,8 +16,8 @@ func GetEngineUnixSocketPath() string {
 	return fmt.Sprintf("%s/engine.sock", rootPathForIpc)
 }
 
-func GetFuncWorkerInputFifoName(clientId uint16) string {
-	return fmt.Sprintf("worker_%d_input", clientId)
+func GetFuncWorkerInputFifoName(clientId uint16, ch int) string {
+	return fmt.Sprintf("worker_%d_input_ch_%d", clientId, ch)
 }
 
 func GetFuncWorkerOutputFifoName(clientId uint16) string {

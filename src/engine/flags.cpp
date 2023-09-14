@@ -5,6 +5,7 @@ ABSL_FLAG(size_t, shared_log_conn_per_worker, 2, "");
 
 ABSL_FLAG(bool, enable_monitor, false, "");
 ABSL_FLAG(bool, func_worker_use_engine_socket, false, "");
+ABSL_FLAG(size_t, func_worker_ipc_output_channels, 1, "");
 ABSL_FLAG(bool, use_fifo_for_nested_call, false, "");
 ABSL_FLAG(bool, func_worker_pipe_direct_write, false, "");
 

@@ -26,6 +26,16 @@ func Serve(factory types.FuncHandlerFactory) {
 	if err != nil {
 		log.Fatal("[FATAL] Failed to parse FAAS_CLIENT_ID")
 	}
+	envUseEngineSocket := os.Getenv("FAAS_USE_ENGINE_SOCKET")
+	useEngineSocket := envUseEngineSocket != ""
+	// log.Printf("[DEBUG] env engine socket=%v use=%v", envUseEngineSocket, useEngineSocket)
+	inputPipeChs, err := strconv.Atoi(os.Getenv("FAAS_E2F_PIPE_CHS"))
+	if err != nil || inputPipeChs < 1 {
+		log.Fatal("[FATAL] Failed to parse FAAS_E2F_PIPE_CHS")
+	}
+	if useEngineSocket && inputPipeChs != 1 {
+		log.Fatalf("unsupport multiple channels(%d) on socket for now", inputPipeChs)
+	}
 	msgPipeFd, err := strconv.Atoi(os.Getenv("FAAS_MSG_PIPE_FD"))
 	if err != nil {
 		log.Fatal("[FATAL] Failed to parse FAAS_MSG_PIPE_FD")
@@ -46,7 +56,7 @@ func Serve(factory types.FuncHandlerFactory) {
 	if err != nil {
 		log.Fatalf("[FATAL] InitFuncConfig failed: %s", err)
 	}
-	w, err := worker.NewFuncWorker(uint16(funcId), uint16(clientId), factory)
+	w, err := worker.NewFuncWorker(uint16(funcId), uint16(clientId), factory, useEngineSocket, inputPipeChs)
 	if err != nil {
 		log.Fatal("[FATAL] Failed to create FuncWorker: ", err)
 	}
@@ -68,7 +78,7 @@ func Serve(factory types.FuncHandlerFactory) {
 		}
 		if protocol.IsCreateFuncWorkerMessage(message) {
 			clientId := protocol.GetClientIdFromMessage(message)
-			w, err := worker.NewFuncWorker(uint16(funcId), clientId, factory)
+			w, err := worker.NewFuncWorker(uint16(funcId), clientId, factory, useEngineSocket, inputPipeChs)
 			if err != nil {
 				log.Fatal("[FATAL] Failed to create FuncWorker: ", err)
 			}

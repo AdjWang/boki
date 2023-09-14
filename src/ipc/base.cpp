@@ -58,8 +58,8 @@ std::string_view GetRootPathForFifo() {
     return root_path_for_fifo;
 }
 
-std::string GetFuncWorkerInputFifoName(uint16_t client_id) {
-    return fmt::format("worker_{}_input", client_id);
+std::string GetFuncWorkerInputFifoName(uint16_t client_id, size_t ch) {
+    return fmt::format("worker_{}_input_ch_{}", client_id, ch);
 }
 
 std::string GetFuncWorkerOutputFifoName(uint16_t client_id) {
