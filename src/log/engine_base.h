@@ -100,7 +100,9 @@ protected:
 
     void SendLocalOpWithResponse(LocalOp* op, protocol::Message* response,
                                  uint64_t metalog_progress,
-                                 std::function<void()> on_finished=nullptr);
+                                 std::function<void()> on_finished=nullptr,
+                                 bool reclaim_op=true);
+    void ReclaimOp(LocalOp* op);
 
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);

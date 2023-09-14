@@ -256,11 +256,11 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         // sync append
         Message response = MessageHelper::NewSharedLogOpSucceeded(
             SharedLogResultType::ASYNC_APPEND_OK, log_metadata.localid);
-        SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseContinueFlag);
+        SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
         // Not update metalog_progress here because the generation of local op id
         // not affects the metalog_progress.
         response.response_id = 0;
-        SendLocalOpWithResponse(op, &response, /*metalog_progress*/0);
+        SendLocalOpWithResponse(op, &response, /*metalog_progress*/0, /*on_finished*/nullptr, /*reclaim_op*/false);
     }
 
     ReplicateLogEntry(view, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
@@ -644,29 +644,25 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
 void Engine::ProcessAppendResults(const LogProducer::AppendResultVec& results) {
     for (const LogProducer::AppendResult& result : results) {
         LocalOp* op = reinterpret_cast<LocalOp*>(result.caller_data);
-        uint64_t response_id;
         if (op->type == protocol::SharedLogOpType::ASYNC_APPEND) {
-            response_id = 1;
-        } else if (op->type == protocol::SharedLogOpType::APPEND) {
-            response_id = 0;
+            ReclaimOp(op);
         } else {
-            UNREACHABLE();
-        }
-        if (result.seqnum != kInvalidLogSeqNum) {
-            LogMetaData log_metadata = MetaDataFromAppendOp(op);
-            log_metadata.seqnum = result.seqnum;
-            log_metadata.localid = result.localid;
-            LogCachePut(log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
-            Message response = MessageHelper::NewSharedLogOpSucceeded(
-                SharedLogResultType::APPEND_OK, result.localid, result.seqnum);
-            SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
-            response.response_id = response_id;
-            SendLocalOpWithResponse(op, &response, result.metalog_progress);
-        } else {
-            HVLOG_F(1, "Discard append result due to seqnum={:016X} invalid", result.seqnum);
-            Message response = MessageHelper::NewSharedLogOpWithoutData(protocol::SharedLogResultType::DISCARDED);
-            response.response_id = response_id;
-            SendLocalOpWithResponse(op, &response, /*metalog_progress*/0);
+            if (result.seqnum != kInvalidLogSeqNum) {
+                LogMetaData log_metadata = MetaDataFromAppendOp(op);
+                log_metadata.seqnum = result.seqnum;
+                log_metadata.localid = result.localid;
+                LogCachePut(log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
+                Message response = MessageHelper::NewSharedLogOpSucceeded(
+                    SharedLogResultType::APPEND_OK, result.localid, result.seqnum);
+                SET_LOG_RESP_FLAG(response.flags, protocol::kLogResponseEOFDataFlag);
+                response.response_id = 0;
+                SendLocalOpWithResponse(op, &response, result.metalog_progress);
+            } else {
+                HVLOG_F(1, "Discard append result due to seqnum={:016X} invalid", result.seqnum);
+                Message response = MessageHelper::NewSharedLogOpWithoutData(protocol::SharedLogResultType::DISCARDED);
+                response.response_id = 0;
+                SendLocalOpWithResponse(op, &response, /*metalog_progress*/0);
+            }
         }
     }
 }

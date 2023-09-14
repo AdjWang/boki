@@ -346,7 +346,8 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
 
 void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
                                          uint64_t metalog_progress,
-                                         std::function<void()> on_finished) {
+                                         std::function<void()> on_finished,
+                                         bool reclaim_op) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
         if (fn_call_ctx_.contains(op->func_call_id)) {
@@ -375,9 +376,15 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
             // before returning op
             on_finished();
         }
-        DCHECK(op->response_counter.IsResolved()) << op->InspectRead();
-        log_op_pool_.Return(op);
+        if (reclaim_op) {
+            ReclaimOp(op);
+        }
     }
+}
+
+void EngineBase::ReclaimOp(LocalOp* op) {
+    DCHECK(op->response_counter.IsResolved()) << op->InspectRead();
+    log_op_pool_.Return(op);
 }
 
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,

@@ -1,9 +1,7 @@
 package types
 
 import (
-	"context"
 	"math"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,8 +22,8 @@ type futureImpl[T uint64 | *LogEntryWithMeta] struct {
 	result T
 	err    error
 	// sync
-	wg       sync.WaitGroup
-	resolved atomic.Bool
+	fn_resolve func() (T, error)
+	resolved   atomic.Bool
 }
 
 func NewFuture[T uint64 | *LogEntryWithMeta](localId uint64, seqNum uint64, resolve func() (T, error)) Future[T] {
@@ -37,16 +35,10 @@ func NewFuture[T uint64 | *LogEntryWithMeta](localId uint64, seqNum uint64, reso
 		result: emptyRes,
 		err:    nil,
 
-		wg:       sync.WaitGroup{},
-		resolved: atomic.Bool{},
+		fn_resolve: resolve,
+		resolved:   atomic.Bool{},
 	}
-	future.wg.Add(1)
 	future.resolved.Store(false)
-	go func(fu *futureImpl[T]) {
-		fu.result, fu.err = resolve()
-		fu.wg.Done()
-		fu.resolved.Store(true)
-	}(future)
 	return future
 }
 
@@ -61,8 +53,8 @@ func NewDummyFuture[T uint64 | *LogEntryWithMeta](localId uint64, seqNum uint64,
 		result: emptyRes,
 		err:    nil,
 
-		wg:       sync.WaitGroup{},
-		resolved: atomic.Bool{},
+		fn_resolve: resolve,
+		resolved:   atomic.Bool{},
 	}
 	future.result, future.err = resolve()
 	future.resolved.Store(true)
@@ -71,35 +63,10 @@ func NewDummyFuture[T uint64 | *LogEntryWithMeta](localId uint64, seqNum uint64,
 
 func (f *futureImpl[T]) GetResult(timeout time.Duration) (T, error) {
 	if !f.resolved.Load() {
-		if err := f.Await(timeout); err != nil {
-			return f.result, err
-		}
+		f.result, f.err = f.fn_resolve()
+		f.resolved.Store(true)
 	}
 	return f.result, f.err
-}
-
-func (f *futureImpl[T]) Await(timeout time.Duration) error {
-	if f.resolved.Load() {
-		return nil
-	}
-
-	// log.Printf("wait future=%+v with timeout=%v", f, timeout)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	awaitDone := make(chan struct{})
-	go func() {
-		f.wg.Wait()
-		awaitDone <- struct{}{}
-	}()
-
-	select {
-	case <-ctx.Done():
-		// log.Printf("wait future=%+v timeout", f)
-		return ctx.Err()
-	case <-awaitDone:
-		// log.Printf("wait future=%+v without error", f)
-		return nil
-	}
 }
 
 func (f *futureImpl[T]) GetLocalId() uint64 {

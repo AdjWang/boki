@@ -58,7 +58,6 @@ type Future[T uint64 | *LogEntryWithMeta] interface {
 	GetSeqNum() uint64
 	GetLogEntryIndex() LogEntryIndex
 	GetResult(timeout time.Duration) (T, error)
-	Await(timeout time.Duration) error
 	IsResolved() bool
 }
 
@@ -111,6 +110,8 @@ type Environment interface {
 
 	AsyncSharedLogAppend(ctx context.Context, tags []Tag, data []byte) (Future[uint64], error)
 	AsyncSharedLogAppendWithDeps(ctx context.Context, tags []Tag, data []byte, deps []uint64) (Future[uint64], error)
+	AwaitSharedLogAppend(ctx context.Context, localId uint64) (uint64, error)
+
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
@@ -118,6 +119,7 @@ type Environment interface {
 	AsyncSharedLogReadPrevWithAux(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, localId uint64) (*LogEntryWithMeta, error)
+	// TODO: replace this by AwaitSharedLogAppend
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
 	// TODO: replace original blocking read
 	AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)

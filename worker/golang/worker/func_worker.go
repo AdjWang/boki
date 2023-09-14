@@ -781,16 +781,7 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 		if result == protocol.SharedLogResultType_ASYNC_APPEND_OK {
 			localId := protocol.GetLogLocalIdFromMessage(response)
 			resolve := func() (uint64, error) {
-				response := queue.Dequeue()
-				result := protocol.GetSharedLogResultTypeFromMessage(response)
-				if result == protocol.SharedLogResultType_APPEND_OK {
-					return protocol.GetLogSeqNumFromMessage(response), nil
-				} else if result == protocol.SharedLogResultType_DISCARDED {
-					// TODO: remove these mess by checking log response hint flags
-					return 0, fmt.Errorf("failed to append log due to discarded, should retry")
-				} else {
-					return 0, fmt.Errorf("failed to resolve log, unacceptable result type: %d", result)
-				}
+				return w.AwaitSharedLogAppend(ctx, localId)
 			}
 			// seqNum is invalid when appending
 			return types.NewFuture(localId, protocol.InvalidLogSeqNum, resolve), nil
@@ -813,6 +804,9 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 			return nil, err
 		}
 	}
+}
+func (w *FuncWorker) AwaitSharedLogAppend(ctx context.Context, localId uint64) (uint64, error) {
+	return w.AsyncSharedLogReadIndex(ctx, localId)
 }
 
 func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
