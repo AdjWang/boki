@@ -72,7 +72,9 @@ protected:
         utils::AppendableBuffer data;
         uint16_t flags;
         // Used by READ_SYNCTO to reorder results
-        log_utils::ThreadSafeCounter response_counter;
+        log_utils::ThreadSafeCounter<protocol::Message> response_counter;
+        // DEPRECATED
+        // log_utils::ThreadSafeBuffer<protocol::Message> response_buffer;    // Used by batch read
 
         static constexpr uint16_t kReadLocalIdFlag    = (1 << 1);     // Indicates localid/seqnum
         static constexpr uint16_t kReadFromCachedFlag = (1 << 2);     // Indicates whether skip previous cached logs
@@ -98,9 +100,12 @@ protected:
     void PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
                           std::span<const char> aux_data);
 
+    void BufferLocalOpWithResponse(LocalOp* op, protocol::Message* response,
+                                   uint64_t metalog_progress);
+    void ResolveLocalOpResponseBuffer(std::function<void(uint64_t)> on_finished=nullptr);
     void SendLocalOpWithResponse(LocalOp* op, protocol::Message* response,
                                  uint64_t metalog_progress,
-                                 std::function<void()> on_finished=nullptr,
+                                 std::function<void(uint64_t)> on_finished=nullptr,
                                  bool reclaim_op=true);
     void ReclaimOp(LocalOp* op);
 
@@ -144,6 +149,13 @@ private:
     std::string DebugListExistingFnCall(
         const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>&
             fn_call_ctx);
+
+    using pending_response = std::tuple<LocalOp*, protocol::Message>;
+    log_utils::ThreadedBuffer<pending_response> response_buffer_;
+    
+    absl::Mutex stat_mu_;
+    stat::Counter buffer_counter_ ABSL_GUARDED_BY(stat_mu_);
+    stat::StatisticsCollector<size_t> buffer_size_stat_ ABSL_GUARDED_BY(stat_mu_);
 
     void SetupZKWatchers();
     void SetupTimers();

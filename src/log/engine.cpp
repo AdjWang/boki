@@ -504,8 +504,8 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             }
             SendLocalOpWithResponse(
                 op, &response, message.user_metalog_progress,
-                [this, op] /*on_finished*/ () {
-                    ongoing_local_reads_.RemoveChecked(op->id);
+                [this] /*on_finished*/ (uint64_t op_id) {
+                    ongoing_local_reads_.RemoveChecked(op_id);
                 });
             // Put the received log entry into log cache
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
@@ -522,8 +522,8 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             Message response = BuildLocalReadOKResponseWithoutData(response_id);
             SendLocalOpWithResponse(
                 op, &response, message.user_metalog_progress,
-                [this, op] /*on_finished*/ () {
-                    ongoing_local_reads_.RemoveChecked(op->id);
+                [this] /*on_finished*/ (uint64_t op_id) {
+                    ongoing_local_reads_.RemoveChecked(op_id);
                 });
         }
     };
@@ -555,8 +555,8 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         response.response_id = response_id;
         SendLocalOpWithResponse(
             op, &response, message.user_metalog_progress,
-            [this, op] /*on_finished*/ () {
-                ongoing_local_reads_.RemoveChecked(op->id);
+            [this] /*on_finished*/ (uint64_t op_id) {
+                ongoing_local_reads_.RemoveChecked(op_id);
             });
     } else {
         UNREACHABLE();
@@ -655,11 +655,21 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             }
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
-            SendLocalOpWithResponse(
-                op, &response, query_result.metalog_progress,
-                [this, query] /*on_finished*/ () {
-                    ongoing_local_reads_.RemoveChecked(query.client_data);
-                });
+            if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
+                BufferLocalOpWithResponse(op, &response,
+                                          query_result.metalog_progress);
+                // SendLocalOpWithResponse(
+                //     op, &response, query_result.metalog_progress,
+                //     [this] /*on_finished*/ (uint64_t op_id) {
+                //         ongoing_local_reads_.RemoveChecked(op_id);
+                //     });
+            } else {
+                SendLocalOpWithResponse(
+                    op, &response, query_result.metalog_progress,
+                    [this] /*on_finished*/ (uint64_t op_id) {
+                        ongoing_local_reads_.RemoveChecked(op_id);
+                    });
+            }
         } else {
             HVLOG_F(1, "Send remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
             SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();
@@ -713,8 +723,8 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
                 }
                 SendLocalOpWithResponse(
                     op, &response, query_result.metalog_progress,
-                    [this, query] /*on_finished*/ () {
-                        ongoing_local_reads_.RemoveChecked(query.client_data);
+                    [this] /*on_finished*/ (uint64_t op_id) {
+                        ongoing_local_reads_.RemoveChecked(op_id);
                     });
             } else {
                 SendReadResponseWithoutData(query, SharedLogResultType::DATA_LOST);
@@ -869,6 +879,9 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
         // avoid recursive on the stack
         query_results = DoProcessIndexQueryResults(query_results);
     }
+    ResolveLocalOpResponseBuffer([this] /*on_finished*/ (uint64_t op_id) {
+        ongoing_local_reads_.RemoveChecked(op_id);
+    });
 }
 Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResultVec& results) {
     Index::QueryResultVec more_results;
@@ -890,8 +903,8 @@ Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResul
                 response.response_id = result.id;
                 SendLocalOpWithResponse(
                     op, &response, result.metalog_progress,
-                    [this, query] /*on_finished*/ () {
-                        ongoing_local_reads_.RemoveChecked(query.client_data);
+                    [this] /*on_finished*/ (uint64_t op_id) {
+                        ongoing_local_reads_.RemoveChecked(op_id);
                     });
             } else {
                 SendReadResponseWithoutData(query, SharedLogResultType::EMPTY, result.metalog_progress);
@@ -909,8 +922,8 @@ Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResul
                 LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
                 SendLocalOpWithResponse(
                     op, &response, result.metalog_progress,
-                    [this, query] /*on_finished*/ () {
-                        ongoing_local_reads_.RemoveChecked(query.client_data);
+                    [this] /*on_finished*/ (uint64_t op_id) {
+                        ongoing_local_reads_.RemoveChecked(op_id);
                     });
             } else {
                 // perceive empty read ok as EOF

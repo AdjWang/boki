@@ -453,6 +453,181 @@ void FinalizedLogSpace(LockablePtr<T> logspace_ptr,
     }
 }
 
+// DEPRECATED
+// template<class T>
+// class ThreadSafeBuffer {
+// public:
+//     ThreadSafeBuffer()
+//         : counter_(0), target_(std::numeric_limits<uint64_t>::max()) {}
+
+//     void Reset() {
+//         absl::MutexLock lk(&mu_);
+//         counter_ = 0;
+//         target_ = std::numeric_limits<uint64_t>::max();
+//         buffer_.clear();
+//     }
+
+//     void SetTarget(uint64_t n) {
+//         absl::MutexLock lk(&mu_);
+//         DCHECK_EQ(target_, std::numeric_limits<uint64_t>::max());
+//         target_ = n;
+//     }
+
+//     bool AppendAndCheck(uint64_t key, T* value) {
+//         absl::MutexLock lk(&mu_);
+//         DCHECK_NE(target_, std::numeric_limits<uint64_t>::max());
+//         buffer_[key] = value;
+//         ++counter_;
+//         return counter_ == target_;
+//     }
+
+//     void PollAll(std::vector<std::pair<uint64_t, T*>>* values) {
+//         absl::MutexLock lk(&mu_);
+//         values->resize(buffer_.size());
+//         if (values->empty()) {
+//             return;
+//         }
+//         size_t i = 0;
+//         for (const auto& [key, value] : buffer_) {
+//             (*values)[i++] = std::make_pair(key, value);
+//         }
+//         DCHECK_EQ(i, buffer_.size());
+//         buffer_.clear();
+//     }
+
+// private:
+//     absl::Mutex mu_;
+//     uint64_t counter_ ABSL_GUARDED_BY(mu_);
+//     uint64_t target_ ABSL_GUARDED_BY(mu_);
+
+//     absl::flat_hash_map<uint64_t, T*> buffer_ ABSL_GUARDED_BY(mu_);
+
+//     DISALLOW_COPY_AND_ASSIGN(ThreadSafeBuffer);
+// };
+
+template<class T>
+class ThreadedBuffer {
+public:
+    ThreadedBuffer() {}
+
+    void Reset() {
+        absl::MutexLock lk(&mu_);
+        buffer_.clear();
+    }
+
+    void Put(uint64_t key, T value) {
+        absl::MutexLock lk(&mu_);
+        auto it = buffer_.find(key);
+        if (it == buffer_.end()) {
+            buffer_.emplace(key, std::vector<T>{value});
+        } else {
+            it->second.emplace_back(value);
+        }
+    }
+
+    void PollAll(std::vector<std::pair<uint64_t, std::vector<T>>>* values) {
+        absl::MutexLock lk(&mu_);
+        values->resize(buffer_.size());
+        if (values->empty()) {
+            return;
+        }
+        size_t i = 0;
+        for (const auto& [key, value] : buffer_) {
+            (*values)[i++] = std::make_pair(key, value);
+        }
+        DCHECK_EQ(i, buffer_.size());
+        buffer_.clear();
+    }
+
+private:
+    absl::Mutex mu_;
+    std::multimap<uint64_t, std::vector<T>> buffer_ ABSL_GUARDED_BY(mu_);
+
+    DISALLOW_COPY_AND_ASSIGN(ThreadedBuffer);
+};
+
+// DEPRECATED
+// template<class T>
+// class ThreadSafeCounter {
+// public:
+//     ThreadSafeCounter() 
+//         : counter_(0), target_(std::numeric_limits<uint64_t>::max()) {}
+
+//     void Reset() {
+//         {
+//             absl::MutexLock lk(&mu_);
+//             counter_ = 0;
+//             target_ = std::numeric_limits<uint64_t>::max();
+//             buffer_.clear();
+//         }
+//         {
+//             absl::MutexLock lk(&buffer_mu_);
+//             seqnum_id_map_.clear();
+//         }
+//     }
+
+//     bool AddCountAndCheck(uint64_t key, T value) {
+//         absl::MutexLock lk(&mu_);
+//         buffer_[key] = value;
+//         ++counter_;
+//         // VLOG_F(1, "AddCountAndCheck n={}, check={}, bt={}", 
+//         //              n, counter_==target_, utils::DumpStackTrace());
+//         return counter_ == target_;
+//     }
+//     bool SetTargetAndCheck(uint64_t target, uint64_t key, T value) {
+//         absl::MutexLock lk(&mu_);
+//         buffer_[key] = value;
+
+//         DCHECK(target >= 0);
+//         DCHECK(target_ == std::numeric_limits<uint64_t>::max())
+//             << fmt::format("[{}] target_={}", (void*)this, target_);    // should set only once
+//         target_ = target;
+//         // VLOG_F(1, "SetTargetAndCheck[{}] target={}, check={}, bt={}", 
+//         //           (void*)this, target, counter_==target_, utils::DumpStackTrace());
+//         return counter_ == target_;
+//     }
+//     void PollAll(std::vector<std::pair<uint64_t, T>>* values) {
+//         absl::MutexLock lk(&mu_);
+//         values->resize(buffer_.size());
+//         if (values->empty()) {
+//             return;
+//         }
+//         size_t i = 0;
+//         for (const auto& [key, value] : buffer_) {
+//             (*values)[i++] = std::make_pair(key, value);
+//         }
+//         DCHECK_EQ(i, buffer_.size());
+//         buffer_.clear();
+//     }
+
+//     void BufferRequestId(uint64_t seqnum, uint64_t id) {
+//         absl::MutexLock lk(&buffer_mu_);
+//         DCHECK(!seqnum_id_map_.contains(seqnum));
+//         seqnum_id_map_.emplace(seqnum, id);
+//     }
+//     uint64_t GetBufferedRequestId(uint64_t seqnum) {
+//         absl::ReaderMutexLock lk(&buffer_mu_);
+//         DCHECK(seqnum_id_map_.contains(seqnum));
+//         return seqnum_id_map_.at(seqnum);
+//     }
+
+//     // DEBUG
+//     bool IsResolved() {
+//         absl::ReaderMutexLock lk(&mu_);
+//         return counter_ == target_;
+//     }
+// private:
+//     absl::Mutex mu_;
+//     uint64_t counter_ ABSL_GUARDED_BY(mu_);
+//     uint64_t target_ ABSL_GUARDED_BY(mu_);
+//     absl::flat_hash_map<uint64_t, T> buffer_ ABSL_GUARDED_BY(mu_);
+
+//     absl::Mutex buffer_mu_;
+//     absl::flat_hash_map<uint64_t, uint64_t> seqnum_id_map_ ABSL_GUARDED_BY(buffer_mu_);
+
+//     DISALLOW_COPY_AND_ASSIGN(ThreadSafeCounter);
+// };
+template<class T>
 class ThreadSafeCounter {
 public:
     ThreadSafeCounter() 
@@ -470,9 +645,9 @@ public:
         }
     }
 
-    bool AddCountAndCheck(uint64_t n) {
+    bool AddCountAndCheck() {
         absl::MutexLock lk(&mu_);
-        counter_ += n;
+        ++counter_;
         // VLOG_F(1, "AddCountAndCheck n={}, check={}, bt={}", 
         //              n, counter_==target_, utils::DumpStackTrace());
         return counter_ == target_;
@@ -487,6 +662,7 @@ public:
         //           (void*)this, target, counter_==target_, utils::DumpStackTrace());
         return counter_ == target_;
     }
+
     void BufferRequestId(uint64_t seqnum, uint64_t id) {
         absl::MutexLock lk(&buffer_mu_);
         DCHECK(!seqnum_id_map_.contains(seqnum));

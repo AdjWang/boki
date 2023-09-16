@@ -24,7 +24,9 @@ using protocol::SharedLogResultType;
 EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
-      next_local_op_id_(0) {}
+      next_local_op_id_(0),
+      buffer_counter_(stat::Counter::StandardReportCallback("buffer counter")),
+      buffer_size_stat_(stat::StatisticsCollector<size_t>::StandardReportCallback("buffer size stat")) {}
 
 EngineBase::~EngineBase() {}
 
@@ -216,6 +218,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->data.Reset();
     op->flags = 0;
     op->response_counter.Reset();
+    // DEPRECATED
+    // op->response_buffer.Reset();
 
     // TODO: modified format
     // DCHECK(!(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type) &&
@@ -332,9 +336,42 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
     }
 }
 
+void EngineBase::BufferLocalOpWithResponse(LocalOp* op, Message* response,
+                                           uint64_t metalog_progress) {
+    if (metalog_progress > 0) {
+        absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+        if (fn_call_ctx_.contains(op->func_call_id)) {
+            FnCallContext& ctx = fn_call_ctx_[op->func_call_id];
+            if (metalog_progress > ctx.metalog_progress) {
+                ctx.metalog_progress = metalog_progress;
+            }
+        }
+    }
+    auto response_tp = std::make_tuple(op, *response);
+    response_buffer_.Put(op->client_data, response_tp);
+}
+void EngineBase::ResolveLocalOpResponseBuffer(std::function<void(uint64_t)> on_finished) {
+    std::vector<std::pair<uint64_t, std::vector<pending_response>>> responses;
+    response_buffer_.PollAll(&responses);
+#ifndef __FAAS_DISABLE_STAT
+    {
+        absl::MutexLock stat_lk(&stat_mu_);
+        buffer_counter_.Tick();
+        if (!responses.empty()) {
+            buffer_size_stat_.AddSample(responses.size());
+        }
+    }
+#endif
+    for (auto& [client_data, args] : responses) {
+        for (auto [op, response] : args) {
+            SendLocalOpWithResponse(op, &response, /*metalog_progress*/0, on_finished, /*reclaim_op*/true);
+        }
+    }
+}
+
 void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
                                          uint64_t metalog_progress,
-                                         std::function<void()> on_finished,
+                                         std::function<void(uint64_t)> on_finished,
                                          bool reclaim_op) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
@@ -353,16 +390,17 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
     bool finished;
     if ((response->flags & protocol::kLogResponseContinueFlag) != 0) {
         // Continue
-        finished = op->response_counter.AddCountAndCheck(1);
+        finished = op->response_counter.AddCountAndCheck();
     } else {
         // EOFData or EOF
         finished = op->response_counter.SetTargetAndCheck(response->response_id);
     }
     if (finished) {
+        // reclaim resources
         if (on_finished != nullptr) {
             // Resource reclaiming operations from engine must be performed
             // before returning op
-            on_finished();
+            on_finished(op->id);
         }
         if (reclaim_op) {
             ReclaimOp(op);
@@ -370,6 +408,8 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
     }
 }
 
+// For async append, we hope not to reclaim op at first response, manually
+// reclaim at the second response.
 void EngineBase::ReclaimOp(LocalOp* op) {
     DCHECK(op->response_counter.IsResolved()) << op->InspectRead();
     log_op_pool_.Return(op);
