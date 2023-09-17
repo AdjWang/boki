@@ -655,21 +655,12 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             }
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
-            if (query.direction == IndexQuery::ReadDirection::kReadNextU) {
-                BufferLocalOpWithResponse(op, &response,
-                                          query_result.metalog_progress);
-                // SendLocalOpWithResponse(
-                //     op, &response, query_result.metalog_progress,
-                //     [this] /*on_finished*/ (uint64_t op_id) {
-                //         ongoing_local_reads_.RemoveChecked(op_id);
-                //     });
-            } else {
-                SendLocalOpWithResponse(
-                    op, &response, query_result.metalog_progress,
-                    [this] /*on_finished*/ (uint64_t op_id) {
-                        ongoing_local_reads_.RemoveChecked(op_id);
-                    });
-            }
+            BufferLocalOpWithResponse(op, &response,
+                                        query_result.metalog_progress);
+            // SendLocalOpWithResponse( op, &response, query_result.metalog_progress,
+            //     [this] /*on_finished*/ (uint64_t op_id) {
+            //         ongoing_local_reads_.RemoveChecked(op_id);
+            //     });
         } else {
             HVLOG_F(1, "Send remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
             SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();

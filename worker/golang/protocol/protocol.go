@@ -106,8 +106,9 @@ const (
 	FLAG_kLogResponseContinueFlag  uint32 = (1 << 3)
 	FLAG_kLogResponseEOFDataFlag   uint32 = (1 << 4)
 	FLAG_kLogResponseEOFFlag       uint32 = (1 << 5)
-	FLAG_kLogQueryLocalIdFlag      uint32 = (1 << 6)
-	FLAG_kLogQueryFromCachedFlag   uint32 = (1 << 7)
+	FLAG_kLogResponseBatchFlag     uint32 = (1 << 6)
+	FLAG_kLogQueryLocalIdFlag      uint32 = (1 << 7)
+	FLAG_kLogQueryFromCachedFlag   uint32 = (1 << 8)
 )
 
 // DEBUG
@@ -235,6 +236,21 @@ func NewEmptyMessage() []byte {
 	binary.LittleEndian.PutUint64(buffer[8:16], InvalidLogSeqNum)  // target
 	binary.LittleEndian.PutUint64(buffer[56:64], InvalidLogSeqNum) // from
 	return buffer
+}
+
+func ReadMessageFromStream(buf []byte) ([][]byte, error) {
+	if (len(buf) % MessageFullByteSize) != 0 {
+		return nil, fmt.Errorf("[FATAL] Invalid message stream size: %d", len(buf))
+	}
+	nMessage := len(buf) / MessageFullByteSize
+	array := make([][]byte, nMessage)
+	for i := 0; i < nMessage; i++ {
+		buffer := make([]byte, MessageFullByteSize)
+		copy(buffer, buf[:MessageFullByteSize])
+		buf = buf[MessageFullByteSize:]
+		array[i] = buffer
+	}
+	return array, nil
 }
 
 func NewFuncWorkerHandshakeMessage(funcId uint16, clientId uint16) []byte {

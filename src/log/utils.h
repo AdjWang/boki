@@ -541,7 +541,7 @@ public:
 
 private:
     absl::Mutex mu_;
-    std::multimap<uint64_t, std::vector<T>> buffer_ ABSL_GUARDED_BY(mu_);
+    absl::flat_hash_map<uint64_t, std::vector<T>> buffer_ ABSL_GUARDED_BY(mu_);
 
     DISALLOW_COPY_AND_ASSIGN(ThreadedBuffer);
 };

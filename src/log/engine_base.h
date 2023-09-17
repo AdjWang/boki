@@ -66,7 +66,7 @@ protected:
         uint64_t query_start_seqnum;
         uint64_t localid;
         uint64_t seqnum;
-        uint64_t func_call_id;
+        uint64_t full_call_id;
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
@@ -154,7 +154,6 @@ private:
     log_utils::ThreadedBuffer<pending_response> response_buffer_;
     
     absl::Mutex stat_mu_;
-    stat::Counter buffer_counter_ ABSL_GUARDED_BY(stat_mu_);
     stat::StatisticsCollector<size_t> buffer_size_stat_ ABSL_GUARDED_BY(stat_mu_);
 
     void SetupZKWatchers();

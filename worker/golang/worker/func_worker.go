@@ -146,16 +146,39 @@ func (w *FuncWorker) Run() {
 	appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	for {
-		// tracer := utils.NewTracer()
-		message := protocol.NewEmptyMessage()
-		if n, err := w.inputPipe.Read(message); err != nil {
-			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
-		} else if n != protocol.MessageFullByteSize {
-			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+	fifoSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Fifo delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	shmSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Shm delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	messageCh := make(chan []byte, 1000)
+	go func() {
+		for {
+			message := protocol.NewEmptyMessage()
+			if n, err := w.inputPipe.Read(message); err != nil {
+				log.Fatalf("[FATAL] Failed to read engine message: %v", err)
+			} else if n != protocol.MessageFullByteSize {
+				log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+			}
+			// DEBUG: PROF
+			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+			fifoSc.AddSample(float64(dispatchDelay))
+
+			messageCh <- message
 		}
-		// tracer.Trace().Tip("[PROF] Worker read message")
+	}()
+	for message := range messageCh {
+		// DEBUG: PROF
+		dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+		switch resultType {
+		case protocol.SharedLogResultType_APPEND_OK:
+			fallthrough
+		case protocol.SharedLogResultType_ASYNC_APPEND_OK:
+			appendSc.AddSample(float64(dispatchDelay))
+		case protocol.SharedLogResultType_READ_OK:
+			readSc.AddSample(float64(dispatchDelay))
+		default:
+			otherSc.AddSample(float64(dispatchDelay))
+		}
+
 		if protocol.IsDispatchFuncCallMessage(message) {
 			w.newFuncCallChan <- message
 		} else if protocol.IsFuncCallCompleteMessage(message) || protocol.IsFuncCallFailedMessage(message) {
@@ -168,21 +191,34 @@ func (w *FuncWorker) Run() {
 			w.mux.Unlock()
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
-			// DEBUG: PROF
-			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-			sc.AddSample(float64(dispatchDelay))
-			resultType := protocol.GetSharedLogResultTypeFromMessage(message)
-			switch resultType {
-			case protocol.SharedLogResultType_APPEND_OK:
-				fallthrough
-			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
-				appendSc.AddSample(float64(dispatchDelay))
-			case protocol.SharedLogResultType_READ_OK:
-				readSc.AddSample(float64(dispatchDelay))
-			default:
-				otherSc.AddSample(float64(dispatchDelay))
-			}
+			flags := protocol.GetFlagsFromMessage(message)
+			if (flags & protocol.FLAG_kLogResponseBatchFlag) != 0 {
+				funcCall := protocol.GetFuncCallFromMessage(message)
+				respId := protocol.GetResponseIdFromMessage(message)
+				// func_call:client_op_id:response_id
+				shmName := fmt.Sprintf("%d_%d_%d.o", funcCall.FullCallId(), id, respId)
+				go func(shmName string) {
+					outputRegion, err := ipc.ShmOpen(shmName, true /*readOnly*/)
+					defer func() {
+						outputRegion.Close()
+						outputRegion.Remove()
+					}()
+					if err != nil {
+						log.Fatalf("[FATAL] Failed to read shm %v messages: %v", shmName, err)
+					}
+					if (outputRegion.Size % protocol.MessageFullByteSize) != 0 {
+						log.Fatalf("[FATAL] Invalid message size: %d", outputRegion.Size)
+					}
+					messages, err := protocol.ReadMessageFromStream(outputRegion.Data)
+					for _, msg := range messages {
+						// DEBUG: PROF
+						dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+						shmSc.AddSample(float64(dispatchDelay))
 
+						messageCh <- msg
+					}
+				}(shmName)
+			}
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if queue, exists := w.outgoingLogOps[id]; exists {

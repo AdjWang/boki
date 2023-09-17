@@ -169,8 +169,11 @@ constexpr uint32_t kLogResponseEOFFlag            = (1 << 5);
         target &= ~(uint32_t)((1 << 3) | (1 << 4) | (1 << 5)); \
         target |= flag;                                        \
     } while (0)
-constexpr uint32_t kLogQueryLocalIdFlag           = (1 << 6);
-constexpr uint32_t kLogQueryFromCachedFlag        = (1 << 7);
+// Carrying more responses with shm
+constexpr uint32_t kLogResponseBatchFlag          = (1 << 6);
+
+constexpr uint32_t kLogQueryLocalIdFlag           = (1 << 7);
+constexpr uint32_t kLogQueryFromCachedFlag        = (1 << 8);
 
 struct Message {
     struct {
@@ -382,6 +385,11 @@ public:
         message->method_id = func_call.method_id;
         message->client_id = func_call.client_id;
         message->call_id = func_call.call_id;
+    }
+    static void SetFuncCall(Message* message, uint64_t full_call_id) {
+        FuncCall func_call;
+        func_call.full_call_id = full_call_id;
+        SetFuncCall(message, func_call);
     }
 
     static FuncCall GetFuncCall(const Message& message) {

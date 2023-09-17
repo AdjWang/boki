@@ -25,8 +25,7 @@ EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
       next_local_op_id_(0),
-      buffer_counter_(stat::Counter::StandardReportCallback("buffer counter")),
-      buffer_size_stat_(stat::StatisticsCollector<size_t>::StandardReportCallback("buffer size stat")) {}
+      buffer_size_stat_(stat::StatisticsCollector<size_t>::StandardReportCallback("buffer_size")) {}
 
 EngineBase::~EngineBase() {}
 
@@ -207,7 +206,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->start_timestamp = GetMonotonicMicroTimestamp();
     op->client_id = message.log_client_id;
     op->client_data = message.log_client_data;
-    op->func_call_id = func_call.full_call_id;
+    op->full_call_id = func_call.full_call_id;
     op->user_logspace = ctx.user_logspace;
     op->metalog_progress = ctx.metalog_progress;
     op->type = MessageHelper::GetSharedLogOpType(message);
@@ -340,32 +339,57 @@ void EngineBase::BufferLocalOpWithResponse(LocalOp* op, Message* response,
                                            uint64_t metalog_progress) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
-        if (fn_call_ctx_.contains(op->func_call_id)) {
-            FnCallContext& ctx = fn_call_ctx_[op->func_call_id];
+        if (fn_call_ctx_.contains(op->full_call_id)) {
+            FnCallContext& ctx = fn_call_ctx_[op->full_call_id];
             if (metalog_progress > ctx.metalog_progress) {
                 ctx.metalog_progress = metalog_progress;
             }
         }
     }
+    protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
+    response->log_client_data = op->client_data;
     auto response_tp = std::make_tuple(op, *response);
-    response_buffer_.Put(op->client_data, response_tp);
+    response_buffer_.Put(op->client_id, response_tp);
 }
+
 void EngineBase::ResolveLocalOpResponseBuffer(std::function<void(uint64_t)> on_finished) {
-    std::vector<std::pair<uint64_t, std::vector<pending_response>>> responses;
+    std::vector<std::pair<uint64_t/*client_id*/, std::vector<pending_response>>> responses;
     response_buffer_.PollAll(&responses);
+    for (auto& [client_id, args] : responses) {
+        DCHECK_GE(args.size(), 1u);
 #ifndef __FAAS_DISABLE_STAT
-    {
-        absl::MutexLock stat_lk(&stat_mu_);
-        buffer_counter_.Tick();
-        if (!responses.empty()) {
-            buffer_size_stat_.AddSample(responses.size());
+        {
+            absl::MutexLock stat_lk(&stat_mu_);
+            buffer_size_stat_.AddSample(args.size());
         }
-    }
 #endif
-    for (auto& [client_data, args] : responses) {
-        for (auto [op, response] : args) {
-            SendLocalOpWithResponse(op, &response, /*metalog_progress*/0, on_finished, /*reclaim_op*/true);
+        auto [op, response] = args[0];
+        // ensure responses are with the same destination
+        DCHECK_EQ(client_id, op->client_id);
+        if (args.size() > 1) {
+            // for (auto [op, response] : args) {
+            //     DCHECK_EQ(client_id, op->client_id);
+            //     SendLocalOpWithResponse(op, &response, /*metalog_progress*/0, on_finished, /*reclaim_op*/true);
+            // }
+
+            // send idx0 through fifo, send idx[1:] through shm
+            response.flags |= protocol::kLogResponseBatchFlag;
+            // func_call:client_op_id:response_id
+            std::string shm_name = fmt::format("{}_{}_{}.o", op->full_call_id, op->client_data, response.response_id);
+            auto output_region = ipc::ShmCreate(
+                shm_name, (args.size() - 1) * __FAAS_MESSAGE_SIZE);
+            if (output_region == nullptr) {
+                LOG(FATAL) << "ShmCreate failed";
+            }
+            for (size_t i = 1; i < args.size(); i++) {
+                auto [op, resp] = args[i];
+                DCHECK_EQ(client_id, op->client_id);
+                resp.send_timestamp = GetMonotonicMicroTimestamp();
+                memcpy(output_region->base() + (i - 1) * __FAAS_MESSAGE_SIZE,
+                       reinterpret_cast<char*>(&resp), __FAAS_MESSAGE_SIZE);
+            }
         }
+        SendLocalOpWithResponse(op, &response, /*metalog_progress*/0, on_finished, /*reclaim_op*/true);
     }
 }
 
@@ -375,13 +399,14 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
                                          bool reclaim_op) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
-        if (fn_call_ctx_.contains(op->func_call_id)) {
-            FnCallContext& ctx = fn_call_ctx_[op->func_call_id];
+        if (fn_call_ctx_.contains(op->full_call_id)) {
+            FnCallContext& ctx = fn_call_ctx_[op->full_call_id];
             if (metalog_progress > ctx.metalog_progress) {
                 ctx.metalog_progress = metalog_progress;
             }
         }
     }
+    protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
     // HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={} resp_flags={:08X} seqnum={:016X} aux_size={}",
