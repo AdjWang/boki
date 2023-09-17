@@ -137,8 +137,7 @@ enum class SharedLogResultType : uint16_t {
     APPEND_OK         = 0x20,
     READ_OK           = 0x21,
     TRIM_OK           = 0x22,
-    LOCALID           = 0x23,
-    AUXDATA_OK        = 0x24,
+    AUXDATA_OK        = 0x23,
     // Async successful results
     ASYNC_APPEND_OK   = 0x30,
     // NO ASYNC_DATA_LOST because all async reads are local index reads
@@ -174,6 +173,20 @@ constexpr uint32_t kLogResponseBatchFlag          = (1 << 6);
 
 constexpr uint32_t kLogQueryLocalIdFlag           = (1 << 7);
 constexpr uint32_t kLogQueryFromCachedFlag        = (1 << 8);
+
+// PROF
+constexpr uint32_t kLogReadRespUnknown            = (0 << 9);
+constexpr uint32_t kLogReadRespNext               = (1 << 9);
+constexpr uint32_t kLogReadRespPrev               = (2 << 9);
+constexpr uint32_t kLogReadRespNextB              = (3 << 9);
+constexpr uint32_t kLogReadRespSyncTo             = (4 << 9);
+constexpr uint32_t kLogReadRespPrevAux            = (5 << 9);
+constexpr uint32_t kLogReadRespLocalId            = (6 << 9);
+#define SET_LOG_READ_RESP_TYPE(target, flag)                     \
+    do {                                                         \
+        target &= ~(uint32_t)((1 << 9) | (1 << 10) | (1 << 11)); \
+        target |= flag;                                          \
+    } while (0)
 
 struct Message {
     struct {

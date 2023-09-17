@@ -100,6 +100,7 @@ protected:
     void PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
                           std::span<const char> aux_data);
 
+    void SetLogReadRespTypeFlag(LocalOp* op, protocol::Message* response);
     void BufferLocalOpWithResponse(LocalOp* op, protocol::Message* response,
                                    uint64_t metalog_progress);
     void ResolveLocalOpResponseBuffer(std::function<void(uint64_t)> on_finished=nullptr);

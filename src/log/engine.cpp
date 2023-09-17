@@ -290,6 +290,10 @@ void Engine::HandleLocalRead(LocalOp* op) {
 
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
     uint64_t seqnum = op->seqnum;
+    if (seqnum == protocol::kInvalidLogSeqNum) {
+
+    }
+
     uint64_t localid = op->localid;
     uint64_t tag = op->query_tag;
     HVLOG_F(1, "HandleLocalSetAuxData op_id={} seqnum={:016X} localid={:016X} tag={}",

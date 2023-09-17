@@ -144,7 +144,16 @@ func (w *FuncWorker) Run() {
 
 	go w.servingLoop()
 	appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readNextSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNext delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readPrevSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadPrev delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readNextBSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNextB delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readSyncToSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadSyncTo delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readLocalIdSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadLocalId delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readPrevAuxSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadPrevAux delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readUnknownSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadUnknown delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	auxSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Aux delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	emptySc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Empty delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	fifoSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Fifo delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	shmSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Shm delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
@@ -174,7 +183,27 @@ func (w *FuncWorker) Run() {
 		case protocol.SharedLogResultType_ASYNC_APPEND_OK:
 			appendSc.AddSample(float64(dispatchDelay))
 		case protocol.SharedLogResultType_READ_OK:
-			readSc.AddSample(float64(dispatchDelay))
+			readRespType := protocol.GetReadResponseTypeFromMessage(message)
+			switch readRespType {
+			case 1:
+				readNextSc.AddSample(float64(dispatchDelay))
+			case 2:
+				readPrevSc.AddSample(float64(dispatchDelay))
+			case 3:
+				readNextBSc.AddSample(float64(dispatchDelay))
+			case 4:
+				readSyncToSc.AddSample(float64(dispatchDelay))
+			case 5:
+				readPrevAuxSc.AddSample(float64(dispatchDelay))
+			case 6:
+				readLocalIdSc.AddSample(float64(dispatchDelay))
+			default:
+				readUnknownSc.AddSample(float64(dispatchDelay))
+			}
+		case protocol.SharedLogResultType_AUXDATA_OK:
+			auxSc.AddSample(float64(dispatchDelay))
+		case protocol.SharedLogResultType_EMPTY:
+			emptySc.AddSample(float64(dispatchDelay))
 		default:
 			otherSc.AddSample(float64(dispatchDelay))
 		}

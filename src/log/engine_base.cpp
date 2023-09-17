@@ -335,6 +335,31 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
     }
 }
 
+void EngineBase::SetLogReadRespTypeFlag(LocalOp* op, Message* response) {
+    switch (op->type) {
+    case SharedLogOpType::READ_NEXT:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespNext);
+        break;
+    case SharedLogOpType::READ_PREV:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespPrev);
+        break;
+    case SharedLogOpType::READ_NEXT_B:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespNextB);
+        break;
+    case SharedLogOpType::READ_SYNCTO:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespSyncTo);
+        break;
+    case SharedLogOpType::READ_PREV_AUX:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespPrevAux);
+        break;
+    case SharedLogOpType::READ_LOCALID:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespLocalId);
+        break;
+    default:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespUnknown);
+        break;
+    }
+}
 void EngineBase::BufferLocalOpWithResponse(LocalOp* op, Message* response,
                                            uint64_t metalog_progress) {
     if (metalog_progress > 0) {
@@ -346,6 +371,7 @@ void EngineBase::BufferLocalOpWithResponse(LocalOp* op, Message* response,
             }
         }
     }
+    SetLogReadRespTypeFlag(op, response);
     protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
     response->log_client_data = op->client_data;
     auto response_tp = std::make_tuple(op, *response);
@@ -406,6 +432,7 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
             }
         }
     }
+    SetLogReadRespTypeFlag(op, response);
     protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);

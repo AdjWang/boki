@@ -71,8 +71,7 @@ const (
 	SharedLogResultType_APPEND_OK  uint16 = 0x20
 	SharedLogResultType_READ_OK    uint16 = 0x21
 	SharedLogResultType_TRIM_OK    uint16 = 0x22
-	SharedLogResultType_LOCALID    uint16 = 0x23
-	SharedLogResultType_AUXDATA_OK uint16 = 0x24
+	SharedLogResultType_AUXDATA_OK uint16 = 0x23
 	// Async successful results
 	SharedLogResultType_ASYNC_APPEND_OK uint16 = 0x30
 	// NO ASYNC_DATA_LOST because all async reads are local index reads
@@ -109,7 +108,39 @@ const (
 	FLAG_kLogResponseBatchFlag     uint32 = (1 << 6)
 	FLAG_kLogQueryLocalIdFlag      uint32 = (1 << 7)
 	FLAG_kLogQueryFromCachedFlag   uint32 = (1 << 8)
+	// FLAG_kLogReadRespType [9:11]
 )
+
+func GetReadResponseTypeFromMessage(buffer []byte) uint8 {
+	// constexpr uint32_t kLogReadRespUnknown            = (0 << 9);
+	// constexpr uint32_t kLogReadRespNext               = (1 << 9);
+	// constexpr uint32_t kLogReadRespPrev               = (2 << 9);
+	// constexpr uint32_t kLogReadRespNextB              = (3 << 9);
+	// constexpr uint32_t kLogReadRespSyncTo             = (4 << 9);
+	// constexpr uint32_t kLogReadRespPrevAux            = (5 << 9);
+	// constexpr uint32_t kLogReadRespLocalId            = (6 << 9);
+
+	flags := GetFlagsFromMessage(buffer)
+	flags &= ((1 << 9) | (1 << 10) | (1 << 11))
+	readRespType := uint8(flags >> 9)
+	return readRespType
+	// switch readRespType {
+	// case 1:
+	// 	return "Next"
+	// case 2:
+	// 	return "Prev"
+	// case 3:
+	// 	return "NextB"
+	// case 4:
+	// 	return "SyncTo"
+	// case 5:
+	// 	return "PrevAux"
+	// case 6:
+	// 	return "LocalId"
+	// default:
+	// 	return "Unknown"
+	// }
+}
 
 // DEBUG
 func InspectMessage(buffer []byte) string {
