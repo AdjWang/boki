@@ -148,7 +148,8 @@ func (w *FuncWorker) Run() {
 	readNextSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNext delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	readPrevSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadPrev delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	readNextBSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNextB delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readSyncToSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadSyncTo delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readSyncToDataSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadSyncToData delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readSyncToEOFSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadSyncToEOF delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	readLocalIdSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadLocalId delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	readPrevAuxSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadPrevAux delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	readUnknownSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadUnknown delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
@@ -192,7 +193,12 @@ func (w *FuncWorker) Run() {
 			case 3:
 				readNextBSc.AddSample(float64(dispatchDelay))
 			case 4:
-				readSyncToSc.AddSample(float64(dispatchDelay))
+				flags := protocol.GetFlagsFromMessage(message)
+				if (flags & protocol.FLAG_kLogResponseEOFFlag) != 0 {
+					readSyncToEOFSc.AddSample(float64(dispatchDelay))
+				} else {
+					readSyncToDataSc.AddSample(float64(dispatchDelay))
+				}
 			case 5:
 				readPrevAuxSc.AddSample(float64(dispatchDelay))
 			case 6:
@@ -1222,6 +1228,9 @@ func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, localId uint64
 	condLogEntry, err := w.AsyncSharedLogRead(ctx, localId)
 	if err != nil {
 		return 0, err
+	}
+	if condLogEntry == nil {
+		panic("unreachable")
 	}
 	return condLogEntry.SeqNum, err
 }

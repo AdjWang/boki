@@ -150,6 +150,10 @@ func (l *ObjectLogEntry) writeSetOverlapped(other *ObjectLogEntry) bool {
 	return false
 }
 
+// DEBUG
+func (l *ObjectLogEntry) getWriteSet() string {
+	return fmt.Sprintf("%+v", l.writeSet)
+}
 func (l *ObjectLogEntry) withinWriteSet(objName string) bool {
 	if l.writeSet == nil {
 		return false
@@ -157,6 +161,97 @@ func (l *ObjectLogEntry) withinWriteSet(objName string) bool {
 	_, exists := l.writeSet[objName]
 	return exists
 }
+
+// func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqNum func() (uint64, error)) (bool, error) {
+// 	// DEBUG
+// 	if txnCommitLog.seqNum == protocol.InvalidLogSeqNum {
+// 		if awaitSeqNum == nil {
+// 			panic("unreachable")
+// 		}
+// 		seqNum, err := awaitSeqNum()
+// 		if err != nil {
+// 			return false, err
+// 		}
+// 		txnCommitLog.seqNum = seqNum
+// 	}
+
+// 	if txnCommitLog.LogType != LOG_TxnCommit {
+// 		panic("Wrong log type")
+// 	}
+// 	if txnCommitLog.auxData != nil {
+// 		if v, exists := txnCommitLog.auxData[common.KeyCommitResult]; exists {
+// 			commitResult, err := common.DecompressData2([]byte(v))
+// 			if err != nil {
+// 				panic(err)
+// 			}
+// 			// use json ["t"]
+// 			return string(commitResult) == "\"t\"", nil
+// 		}
+// 	} else {
+// 		txnCommitLog.auxData = NewAuxData()
+// 	}
+// 	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
+// 	commitResult := true
+// 	checkedTag := make(map[uint64]bool)
+// 	for _, op := range txnCommitLog.Ops {
+// 		tag := objectLogTag(common.NameHash(op.ObjName))
+// 		if _, exists := checkedTag[tag]; exists {
+// 			continue
+// 		}
+// 		seqNum := txnCommitLog.seqNum
+// 		for seqNum > txnCommitLog.TxnId {
+// 			logEntry, err := env.faasEnv.AsyncSharedLogReadPrev(env.faasCtx, tag, seqNum-1)
+// 			if err != nil {
+// 				return false, newRuntimeError(err.Error())
+// 			}
+// 			if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
+// 				break
+// 			}
+// 			seqNum = logEntry.SeqNum
+// 			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
+
+// 			objectLog := decodeLogEntry(logEntry)
+// 			if !txnCommitLog.writeSetOverlapped(objectLog) {
+// 				continue
+// 			}
+// 			if objectLog.LogType == LOG_NormalOp {
+// 				commitResult = false
+// 				break
+// 			} else if objectLog.LogType == LOG_TxnCommit {
+// 				if committed, err := objectLog.checkTxnCommitResult(env, nil); err != nil {
+// 					return false, err
+// 				} else if committed {
+// 					commitResult = false
+// 					break
+// 				}
+// 			}
+// 		}
+// 		if !commitResult {
+// 			break
+// 		}
+// 		checkedTag[tag] = true
+// 	}
+// 	commitResultStr := "f"
+// 	if commitResult {
+// 		commitResultStr = "t"
+// 	}
+// 	txnCommitLog.auxData[common.KeyCommitResult] = commitResultStr
+// 	if !FLAGS_DisableAuxData {
+// 		// txnCommitLog.seqNum maybe invalid here from txn.go:objectLog.seqNum = protocol.InvalidLogSeqNum
+// 		if txnCommitLog.seqNum == protocol.InvalidLogSeqNum {
+// 			if awaitSeqNum == nil {
+// 				panic("unreachable")
+// 			}
+// 			seqNum, err := awaitSeqNum()
+// 			if err != nil {
+// 				return false, err
+// 			}
+// 			txnCommitLog.seqNum = seqNum
+// 		}
+// 		env.setLogAuxData(txnCommitLog.getLogIndex(), common.KeyCommitResult, commitResultStr)
+// 	}
+// 	return commitResult, nil
+// }
 
 func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, awaitSeqNum func() (uint64, error)) (bool, error) {
 	if txnCommitLog.LogType != LOG_TxnCommit {
@@ -320,7 +415,170 @@ func (l *ObjectLogEntry) cacheObjectView(env *envImpl, view *ObjectView) {
 	}
 }
 
+func (obj *ObjectRef) syncToForward(tailSeqNum uint64) error {
+	tag := objectLogTag(obj.nameHash)
+	env := obj.env
+
+	var view *ObjectView
+	if obj.view != nil {
+		view = obj.view
+	} else {
+		view = &ObjectView{
+			name:       obj.name,
+			nextSeqNum: 0,
+			contents:   gabs.New(),
+		}
+	}
+
+	logEntryWithAux, err := obj.env.faasEnv.AsyncSharedLogReadPrevWithAux(env.faasCtx, tag, tailSeqNum-1)
+	if err != nil {
+		return err
+	}
+	if logEntryWithAux != nil && logEntryWithAux.SeqNum >= view.nextSeqNum {
+		if logEntryWithAux.SeqNum >= tailSeqNum {
+			panic("unreachable")
+		}
+		objectLog := decodeLogEntry(logEntryWithAux)
+		if !objectLog.withinWriteSet(obj.name) {
+			log.Panicf("invalid object name got write_set=%v expected=%v inside", objectLog.getWriteSet(), obj.name)
+		}
+		if len(logEntryWithAux.AuxData) == 0 {
+			panic("unreachable")
+		}
+		if cachedView := objectLog.loadCachedObjectView(obj.name); cachedView != nil {
+			view = cachedView
+		} else {
+			panic("unreachable")
+		}
+	}
+
+	seqNum := view.nextSeqNum
+	if tailSeqNum < seqNum {
+		log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", seqNum, tailSeqNum)
+	}
+	for seqNum < tailSeqNum {
+		logEntry, err := env.faasEnv.AsyncSharedLogReadNext(env.faasCtx, tag, seqNum)
+		if err != nil {
+			return newRuntimeError(err.Error())
+		}
+		if logEntry == nil || logEntry.SeqNum >= tailSeqNum {
+			break
+		}
+		seqNum = logEntry.SeqNum + 1
+		objectLog := decodeLogEntry(logEntry)
+		if !objectLog.withinWriteSet(obj.name) {
+			continue
+		}
+		if objectLog.LogType == LOG_TxnCommit {
+			if committed, err := objectLog.checkTxnCommitResult(obj.env, nil); err != nil {
+				return err
+			} else if !committed {
+				continue
+			}
+		}
+		view.nextSeqNum = objectLog.seqNum + 1
+		for _, op := range objectLog.Ops {
+			if op.ObjName == obj.name {
+				view.applyWriteOp(op)
+			}
+		}
+		if !objectLog.hasCachedObjectView(obj.name) {
+			objectLog.cacheObjectView(env, view)
+		}
+	}
+	obj.view = view
+	return nil
+}
+func (obj *ObjectRef) syncToBackward(tailSeqNum uint64) error {
+	tag := objectLogTag(obj.nameHash)
+	env := obj.env
+	objectLogs := make([]*ObjectLogEntry, 0, 4)
+	var view *ObjectView
+	seqNum := tailSeqNum
+	currentSeqNum := uint64(0)
+	if obj.view != nil {
+		currentSeqNum = obj.view.nextSeqNum
+		if tailSeqNum < currentSeqNum {
+			log.Fatalf("[FATAL] Current seqNum=%#016x, cannot sync to %#016x", currentSeqNum, tailSeqNum)
+		}
+	}
+	if tailSeqNum == currentSeqNum {
+		return nil
+	}
+
+	for seqNum > currentSeqNum {
+		if seqNum != protocol.MaxLogSeqnum {
+			seqNum -= 1
+		}
+		logEntry, err := env.faasEnv.AsyncSharedLogReadPrev(env.faasCtx, tag, seqNum)
+		if err != nil {
+			return newRuntimeError(err.Error())
+		}
+		if logEntry == nil || logEntry.SeqNum < currentSeqNum {
+			break
+		}
+		seqNum = logEntry.SeqNum
+		// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
+		objectLog := decodeLogEntry(logEntry)
+		if !objectLog.withinWriteSet(obj.name) {
+			continue
+		}
+		if objectLog.LogType == LOG_TxnCommit {
+			if committed, err := objectLog.checkTxnCommitResult(env, nil); err != nil {
+				return err
+			} else if !committed {
+				continue
+			}
+		}
+		view = objectLog.loadCachedObjectView(obj.name)
+		if view == nil {
+			objectLogs = append(objectLogs, objectLog)
+		} else {
+			// log.Printf("[DEBUG] Load cached view: seqNum=%#016x, obj=%s", seqNum, obj.name)
+			break
+		}
+	}
+
+	if view == nil {
+		if obj.view != nil {
+			view = obj.view
+		} else {
+			view = &ObjectView{
+				name:       obj.name,
+				nextSeqNum: 0,
+				contents:   gabs.New(),
+			}
+		}
+	}
+	for i := len(objectLogs) - 1; i >= 0; i-- {
+		objectLog := objectLogs[i]
+		if objectLog.seqNum < view.nextSeqNum {
+			log.Fatalf("[FATAL] LogSeqNum=%#016x, ViewNextSeqNum=%#016x", objectLog.seqNum, view.nextSeqNum)
+		}
+		view.nextSeqNum = objectLog.seqNum + 1
+		for _, op := range objectLog.Ops {
+			if op.ObjName == obj.name {
+				view.applyWriteOp(op)
+			}
+		}
+		objectLog.cacheObjectView(env, view)
+	}
+	obj.view = view
+	return nil
+}
+
 func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
+	// DEBUG
+	// if logIndex.SeqNum == protocol.InvalidLogSeqNum {
+	// 	seqNum, err := obj.env.faasEnv.AsyncSharedLogReadIndex(obj.env.faasCtx, logIndex.LocalId)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	logIndex.SeqNum = seqNum
+	// }
+	// // return obj.syncToForward(logIndex.SeqNum)
+	// return obj.syncToBackward(logIndex.SeqNum)
+
 	if logIndex.SeqNum != protocol.InvalidLogSeqNum {
 		tailSeqNum := logIndex.SeqNum
 		currentSeqNum := uint64(0)
@@ -385,7 +643,9 @@ func (obj *ObjectRef) syncTo(logIndex types.LogEntryIndex) error {
 				view.applyWriteOp(op)
 			}
 		}
-		objectLog.cacheObjectView(env, view)
+		if !objectLog.hasCachedObjectView(obj.name) {
+			objectLog.cacheObjectView(env, view)
+		}
 	}
 	obj.view = view
 	return nil

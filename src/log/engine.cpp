@@ -896,11 +896,13 @@ Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResul
                 LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
                 Message response = MessageHelper::NewSharedLogOpWithoutData(SharedLogResultType::EMPTY);
                 response.response_id = result.id;
-                SendLocalOpWithResponse(
-                    op, &response, result.metalog_progress,
-                    [this] /*on_finished*/ (uint64_t op_id) {
-                        ongoing_local_reads_.RemoveChecked(op_id);
-                    });
+                BufferLocalOpWithResponse(op, &response,
+                                          result.metalog_progress);
+                // SendLocalOpWithResponse(
+                //     op, &response, result.metalog_progress,
+                //     [this] /*on_finished*/ (uint64_t op_id) {
+                //         ongoing_local_reads_.RemoveChecked(op_id);
+                //     });
             } else {
                 SendReadResponseWithoutData(query, SharedLogResultType::EMPTY, result.metalog_progress);
             }
@@ -915,11 +917,13 @@ Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResul
             if (query.origin_node_id == my_node_id()) {
                 Message response = BuildLocalReadOKResponseWithoutData(result.id);
                 LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
-                SendLocalOpWithResponse(
-                    op, &response, result.metalog_progress,
-                    [this] /*on_finished*/ (uint64_t op_id) {
-                        ongoing_local_reads_.RemoveChecked(op_id);
-                    });
+                BufferLocalOpWithResponse(op, &response,
+                                          result.metalog_progress);
+                // SendLocalOpWithResponse(
+                //     op, &response, result.metalog_progress,
+                //     [this] /*on_finished*/ (uint64_t op_id) {
+                //         ongoing_local_reads_.RemoveChecked(op_id);
+                //     });
             } else {
                 // perceive empty read ok as EOF
                 SendReadResponseWithoutData(query, SharedLogResultType::READ_OK, result.metalog_progress);

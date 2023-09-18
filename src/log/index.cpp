@@ -837,6 +837,7 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     // } else {
     //     ProcessReadNextUntilContinue(query);
     // }
+    // return;
 
     DCHECK(query.direction == IndexQuery::kReadNextU);
     uint64_t result_id = query.next_result_id;
