@@ -30,7 +30,8 @@ private:
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
     log_utils::FutureRequests       future_requests_;
-    log_utils::ThreadedMap<LocalOp> onging_local_reads_;
+    log_utils::ThreadedMap<LocalOp> ongoing_local_reads_;
+    log_utils::ThreadedMap<LocalOp> ongoing_check_tails_;
 
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
@@ -40,12 +41,14 @@ private:
     void HandleLocalTrim(LocalOp* op) override;
     void HandleLocalRead(LocalOp* op) override;
     void HandleLocalSetAuxData(LocalOp* op) override;
+    void HandleLocalCheckTail(LocalOp* op) override;
 
     void HandleRemoteRead(const protocol::SharedLogMessage& request) override;
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                            std::span<const char> payload) override;
     void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                             std::span<const char> payload) override;
+    void OnRecvCheckTailResponse(const protocol::SharedLogMessage& message) override;
     void OnRecvResponse(const protocol::SharedLogMessage& message,
                         std::span<const char> payload) override;
 

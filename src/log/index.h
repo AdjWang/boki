@@ -24,7 +24,10 @@ struct IndexQuery {
 
     uint32_t user_logspace;
     uint64_t user_tag;
-    uint64_t query_seqnum;
+    union {
+        uint64_t query_localid;
+        uint64_t query_seqnum;
+    };
     uint64_t metalog_progress;
 
     IndexFoundResult prev_found_result;

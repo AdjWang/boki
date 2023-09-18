@@ -23,6 +23,7 @@ protected:
     virtual void OnViewFinalized(const FinalizedView* finalized_view) = 0;
 
     virtual void HandleTrimRequest(const protocol::SharedLogMessage& message) = 0;
+    virtual void HandleCheckTailRequest(const protocol::SharedLogMessage& message) = 0;
     virtual void OnRecvMetaLogProgress(const protocol::SharedLogMessage& message) = 0;
     virtual void OnRecvShardProgress(const protocol::SharedLogMessage& message,
                                      std::span<const char> payload) = 0;

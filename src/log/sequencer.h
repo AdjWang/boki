@@ -31,6 +31,7 @@ private:
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
     void HandleTrimRequest(const protocol::SharedLogMessage& request) override;
+    void HandleCheckTailRequest(const protocol::SharedLogMessage& request) override;
     void OnRecvMetaLogProgress(const protocol::SharedLogMessage& message) override;
     void OnRecvShardProgress(const protocol::SharedLogMessage& message,
                              std::span<const char> payload) override;

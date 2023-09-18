@@ -124,6 +124,9 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::TRIM:
         HandleLocalTrim(op);
         break;
+    case SharedLogOpType::LINEAR_CHECK_TAIL:
+        HandleLocalCheckTail(op);
+        break;
     case SharedLogOpType::SET_AUXDATA:
         HandleLocalSetAuxData(op);
         break;
@@ -146,6 +149,9 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
         break;
     case SharedLogOpType::METALOGS:
         OnRecvNewMetaLogs(message, payload);
+        break;
+    case SharedLogOpType::LINEAR_CHECK_TAIL:
+        OnRecvCheckTailResponse(message);
         break;
     case SharedLogOpType::RESPONSE:
         OnRecvResponse(message, payload);
@@ -223,9 +229,13 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::READ_LOCALID:
-        op->seqnum = message.log_seqnum;
+        op->localid = message.log_localid;
         break;
     case SharedLogOpType::TRIM:
+        op->seqnum = message.log_seqnum;
+        break;
+    case SharedLogOpType::LINEAR_CHECK_TAIL:
+        op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::SET_AUXDATA:
@@ -250,6 +260,7 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_LOCALID)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
+     || (conn_type == kSequencerIngressTypeId && op_type == SharedLogOpType::LINEAR_CHECK_TAIL)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);

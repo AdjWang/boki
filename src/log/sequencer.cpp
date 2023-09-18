@@ -180,6 +180,30 @@ void Sequencer::HandleTrimRequest(const SharedLogMessage& request) {
     NOT_IMPLEMENTED();
 }
 
+void Sequencer::HandleCheckTailRequest(const SharedLogMessage& request) {
+    DCHECK(SharedLogMessageHelper::GetOpType(request) == SharedLogOpType::LINEAR_CHECK_TAIL);
+    uint32_t logspace_id = request.logspace_id;
+    uint32_t metalog_position;
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        PANIC_IF_FROM_FUTURE_VIEW(request);
+        IGNORE_IF_FROM_PAST_VIEW(request);
+        auto logspace_ptr = primary_collection_.GetLogSpaceChecked(logspace_id);
+        {
+            auto locked_logspace = logspace_ptr.Lock();
+            RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
+            metalog_position = locked_logspace->replicated_metalog_position();
+        }
+    }
+    SharedLogMessage response = SharedLogMessageHelper::NewCheckTailMessage(logspace_id);
+    response.metalog_position = metalog_position;
+    bool success = SendEngineResponse(request, &response);
+    if (!success) {
+        uint16_t engine_id = request.origin_node_id;
+        HLOG_F(ERROR, "Failed to send metalog message to engine {}", engine_id);
+    }
+}
+
 void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::META_PROG);
     const View* view = nullptr;

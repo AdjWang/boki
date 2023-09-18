@@ -65,6 +65,9 @@ void SequencerBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::TRIM:
         HandleTrimRequest(message);
         break;
+    case SharedLogOpType::LINEAR_CHECK_TAIL:
+        HandleCheckTailRequest(message);
+        break;
     case SharedLogOpType::META_PROG:
         OnRecvMetaLogProgress(message);
         break;
@@ -186,6 +189,7 @@ void SequencerBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
         (conn_type == kSequencerIngressTypeId && op_type == SharedLogOpType::METALOGS)
      || (conn_type == kSequencerIngressTypeId && op_type == SharedLogOpType::META_PROG)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::TRIM)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::LINEAR_CHECK_TAIL)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::SHARD_PROG)
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);

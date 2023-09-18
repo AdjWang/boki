@@ -210,7 +210,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     HVLOG_F(1, "Handle local read: op_type=0x{:02X}, op_id={}, logspace={}, tag={}, seqnum={}",
             uint16_t(op->type), op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
-    onging_local_reads_.PutChecked(op->id, op);
+    ongoing_local_reads_.PutChecked(op->id, op);
     const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
     {
@@ -249,7 +249,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
         SharedLogMessage request = BuildReadRequestMessage(op);
         bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
         if (!send_success) {
-            onging_local_reads_.RemoveChecked(op->id);
+            ongoing_local_reads_.RemoveChecked(op->id);
             FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         }
     }
@@ -274,6 +274,26 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
             }
         }
     }
+}
+
+void Engine::HandleLocalCheckTail(LocalOp* op) {
+    DCHECK(op->type == SharedLogOpType::LINEAR_CHECK_TAIL);
+    ongoing_check_tails_.PutChecked(op->id, op);
+    const View::Sequencer* sequencer_node = nullptr;
+    uint32_t logspace_id;
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        if (!current_view_active_) {
+            HLOG(WARNING) << "Current view not active";
+            FinishLocalOpWithFailure(op, SharedLogResultType::DISCARDED);
+            return;
+        }
+        logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
+        sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
+    }
+    SharedLogMessage request = SharedLogMessageHelper::NewCheckTailMessage(logspace_id);
+    request.client_data = op->id;
+    SendSequencerMessage(sequencer_node->node_id(), &request);
 }
 
 #undef ONHOLD_IF_SEEN_FUTURE_VIEW
@@ -386,6 +406,17 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
     ProcessIndexQueryResults(query_results);
 }
 
+void Engine::OnRecvCheckTailResponse(const protocol::SharedLogMessage& message) {
+    DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::LINEAR_CHECK_TAIL);
+    LocalOp* op = ongoing_check_tails_.PollChecked(message.client_data);
+    // make check tail query
+    // TODO: maybe faster if query only index without log data
+    op->type = protocol::SharedLogOpType::READ_PREV;
+    op->metalog_progress = message.metalog_position;
+    DCHECK_EQ(op->seqnum, kMaxLogSeqNum);
+    HandleLocalRead(op);
+}
+
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
 #undef IGNORE_IF_FROM_PAST_VIEW
 
@@ -398,7 +429,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         result == SharedLogResultType::DATA_LOST) {
         uint64_t op_id = message.client_data;
         LocalOp* op;
-        if (!onging_local_reads_.Poll(op_id, &op)) {
+        if (!ongoing_local_reads_.Poll(op_id, &op)) {
             HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
             return;
         }
@@ -497,7 +528,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
         if (local_request) {
             Message response = BuildLocalReadOKResponse(log_entry);
-            LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
+            LocalOp* op = ongoing_local_reads_.PollChecked(query.client_data);
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
             FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
@@ -528,7 +559,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         if (!success) {
             HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
             if (local_request) {
-                LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
+                LocalOp* op = ongoing_local_reads_.PollChecked(query.client_data);
                 FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
             } else {
                 SendReadFailureResponse(query, SharedLogResultType::DATA_LOST);
@@ -587,7 +618,7 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
             break;
         case IndexQueryResult::kEmpty:
             if (query.origin_node_id == my_node_id()) {
-                LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
+                LocalOp* op = ongoing_local_reads_.PollChecked(query.client_data);
                 Message response = MessageHelper::NewSharedLogOpFailed(SharedLogResultType::EMPTY);
                 // empty result won't be sent to the future object, only return once
                 FinishLocalOpWithResponse(op, &response, result.metalog_progress);

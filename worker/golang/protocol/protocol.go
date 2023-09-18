@@ -48,13 +48,14 @@ const (
 
 // SharedLogOpType enum
 const (
-	SharedLogOpType_INVALID     uint16 = 0x00
-	SharedLogOpType_APPEND      uint16 = 0x01
-	SharedLogOpType_READ_NEXT   uint16 = 0x02
-	SharedLogOpType_READ_PREV   uint16 = 0x03
-	SharedLogOpType_TRIM        uint16 = 0x04
-	SharedLogOpType_SET_AUXDATA uint16 = 0x05
-	SharedLogOpType_READ_NEXT_B uint16 = 0x06
+	SharedLogOpType_INVALID           uint16 = 0x00
+	SharedLogOpType_APPEND            uint16 = 0x01
+	SharedLogOpType_READ_NEXT         uint16 = 0x02
+	SharedLogOpType_READ_PREV         uint16 = 0x03
+	SharedLogOpType_TRIM              uint16 = 0x04
+	SharedLogOpType_SET_AUXDATA       uint16 = 0x05
+	SharedLogOpType_READ_NEXT_B       uint16 = 0x06
+	SharedLogOpType_LINEAR_CHECK_TAIL uint16 = 0x07
 
 	SharedLogOpType_ASYNC_APPEND uint16 = 0x20
 	SharedLogOpType_READ_LOCALID uint16 = 0x21
@@ -262,6 +263,18 @@ func NewSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, local
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], localId)
+	return buffer
+}
+
+func NewSharedLogLinearizableCheckTailMessage(currentCallId uint64, myClientId uint16, tag uint64, clientData uint64) []byte {
+	buffer := NewEmptyMessage()
+	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
+	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
+	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_LINEAR_CHECK_TAIL)
+	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
+	binary.LittleEndian.PutUint64(buffer[40:48], tag)
+	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	binary.LittleEndian.PutUint64(buffer[8:16], MaxLogSeqnum)
 	return buffer
 }
 

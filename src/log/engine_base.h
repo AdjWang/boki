@@ -48,6 +48,7 @@ protected:
                                    std::span<const char> payload) = 0;
     virtual void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                                     std::span<const char> payload) = 0;
+    virtual void OnRecvCheckTailResponse(const protocol::SharedLogMessage& message) = 0;
     virtual void OnRecvResponse(const protocol::SharedLogMessage& message,
                                 std::span<const char> payload) = 0;
 
@@ -62,7 +63,10 @@ protected:
         uint64_t client_data;
         uint64_t metalog_progress;
         uint64_t query_tag;
-        uint64_t seqnum;
+        union {
+            uint64_t localid;
+            uint64_t seqnum;
+        };
         uint64_t func_call_id;
         int64_t start_timestamp;
         UserTagVec user_tags;
@@ -73,6 +77,7 @@ protected:
     virtual void HandleLocalTrim(LocalOp* op) = 0;
     virtual void HandleLocalRead(LocalOp* op) = 0;
     virtual void HandleLocalSetAuxData(LocalOp* op) = 0;
+    virtual void HandleLocalCheckTail(LocalOp* op) = 0;
 
     void LocalOpHandler(LocalOp* op);
 

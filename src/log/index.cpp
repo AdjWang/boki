@@ -380,8 +380,7 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
     // gaurantee read-your-write. So local query is promised to be found, even
     // metalog_position_ is old.
 
-    // replace seqnum if querying by localid
-    uint64_t local_id = query.query_seqnum;
+    uint64_t local_id = query.query_localid;
     if (log_index_map_.find(local_id) == log_index_map_.end()) {
         // not found
         // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",

@@ -94,6 +94,7 @@ enum class SharedLogOpType : uint16_t {
     TRIM               = 0x04,  // FuncWorker to Engine, Engine to Sequencer
     SET_AUXDATA        = 0x05,  // FuncWorker to Engine, Engine to Storage
     READ_NEXT_B        = 0x06,  // FuncWorker to Engine, Engine to Index
+    LINEAR_CHECK_TAIL  = 0x07,  // FuncWorker to Engine, Engine to Sequencer
 
     READ_AT            = 0x11,  // Index to Storage
     REPLICATE          = 0x12,  // Engine to Storage
@@ -628,6 +629,13 @@ public:
     static SharedLogMessage NewIndexDataMessage(uint32_t logspace_id) {
         NEW_EMPTY_SHAREDLOG_MESSAGE(message);
         message.op_type = static_cast<uint16_t>(SharedLogOpType::INDEX_DATA);
+        message.logspace_id = logspace_id;
+        return message;
+    }
+
+    static SharedLogMessage NewCheckTailMessage(uint32_t logspace_id) {
+        NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+        message.op_type = static_cast<uint16_t>(SharedLogOpType::LINEAR_CHECK_TAIL);
         message.logspace_id = logspace_id;
         return message;
     }
