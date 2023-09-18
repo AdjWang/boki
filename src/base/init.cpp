@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <execinfo.h>
+#include <ucontext.h>
 
 __BEGIN_THIRD_PARTY_HEADERS
 
@@ -36,13 +38,40 @@ static std::atomic<size_t>   next_cleanup_fn{0};
 
 static std::function<void()> sigint_handler;
 
+static std::string DumpPCAndSymbol(void *pc) {
+    char tmp[1024];
+    const char *symbol = "(unknown)";
+    if (absl::Symbolize(pc, tmp, sizeof(tmp))) {
+        symbol = tmp;
+    }
+    return fmt::format("{}  {}\n", pc, symbol);
+}
+
 static void RaiseToDefaultHandler(int signo) {
     signal(signo, SIG_DFL);
     raise(signo);
 }
 
-static void SignalHandler(int signo) {
+static void PrintStackTrace(ucontext_t* uc) {
+    constexpr int kSize = 16;
+    void *trace[kSize];
+    int trace_size = backtrace(trace, kSize);
+    /* overwrite sigaction with caller's address */
+    trace[1] = (void *)uc->uc_mcontext.gregs[REG_RIP];
+
+    std::string res("Stack Trace:\n");
+    for (int i = 0; i < trace_size; i++) {
+        res.append(DumpPCAndSymbol(trace[i]));
+    }
+    fprintf(stderr, "%s\n", res.c_str());
+}
+
+static void BTSignalHandler(int signo, siginfo_t *info, void *secret) {
+    ucontext_t *uc = (ucontext_t *)secret;
     if (signo == SIGTERM || signo == SIGABRT) {
+        // dump stacktrace
+        PrintStackTrace(uc);
+        // clean up
         size_t n = next_cleanup_fn.load();
         fprintf(stderr, "Invoke %d clean-up functions\n", (int) n);
         for (size_t i = 0; i < n; i++) {
@@ -57,6 +86,12 @@ static void SignalHandler(int signo) {
             RaiseToDefaultHandler(SIGINT);
         }
     } else {
+        if (signo == SIGSEGV) {
+            fprintf(stderr,
+                "SIGSEGV, faulty address is %p, from %p\n",
+                info->si_addr, (void*)uc->uc_mcontext.gregs[REG_RIP]);
+        }
+        PrintStackTrace(uc);
         RaiseToDefaultHandler(signo);
     }
 }
@@ -68,13 +103,16 @@ void InitMain(int argc, char* argv[],
 
     struct sigaction act;
     memset(&act, 0, sizeof(struct sigaction));
-    act.sa_handler = SignalHandler;
+    act.sa_sigaction = BTSignalHandler;
+    act.sa_flags |= SA_SIGINFO | SA_RESTART;
     RAW_CHECK(sigaction(SIGABRT, &act, nullptr) == 0,
               "Failed to set SIGABRT handler");
     RAW_CHECK(sigaction(SIGTERM, &act, nullptr) == 0,
               "Failed to set SIGTERM handler");
     RAW_CHECK(sigaction(SIGINT, &act, nullptr) == 0,
               "Failed to set SIGINT handler");
+    RAW_CHECK(sigaction(SIGSEGV, &act, nullptr) == 0,
+              "Failed to set SIGSEGV handler");
 
     absl::FailureSignalHandlerOptions options;
     options.call_previous_handler = true;
@@ -96,6 +134,7 @@ void InitMain(int argc, char* argv[],
     Thread::RegisterMainThread();
     #if defined(DEBUG)
     LOG(INFO) << "Running DEBUG built version";
+    absl::SetMutexDeadlockDetectionMode(absl::OnDeadlockCycle::kAbort);
     #endif
     #if defined(NDEBUG)
     LOG(INFO) << "Running RELEASE built version";
