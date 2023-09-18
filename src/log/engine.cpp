@@ -497,8 +497,19 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_data);
             Message response = BuildLocalReadOKResponse(seqnum, user_tags, log_data);
             if (aux_data.size() > 0) {
-                response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-                MessageHelper::AppendInlineData(&response, aux_data);
+                size_t full_size = log_data.size()
+                                    + user_tags.size() * sizeof(uint64_t)
+                                    + aux_data.size();
+                if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
+                    response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                    MessageHelper::AppendInlineData(&response, aux_data);
+                } else {
+                    HLOG_F(WARNING, "Inline buffer of message not large enough "
+                                    "for auxiliary data of log (seqnum {}): "
+                                    "log_size={}, num_tags={} aux_data_size={}",
+                            bits::HexStr0x(seqnum), log_data.size(),
+                            user_tags.size(), aux_data.size());
+                }
             }
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
             // Put the received log entry into log cache

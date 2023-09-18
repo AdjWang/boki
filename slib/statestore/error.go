@@ -3,6 +3,7 @@ package statestore
 import (
 	"fmt"
 	"log"
+	"runtime/debug"
 )
 
 const (
@@ -15,8 +16,9 @@ const (
 )
 
 type Error struct {
-	code    int
-	message string
+	code      int
+	message   string
+	callstack string
 }
 
 func (e *Error) GetCode() int {
@@ -26,37 +28,37 @@ func (e *Error) GetCode() int {
 func (e *Error) Error() string {
 	switch e.code {
 	case ERROR_Runtime:
-		return fmt.Sprintf("RuntimeError: %s", e.message)
+		return fmt.Sprintf("RuntimeError: %s %s", e.message, e.callstack)
 	case ERROR_BadArguments:
-		return fmt.Sprintf("BadArguments: %s", e.message)
+		return fmt.Sprintf("BadArguments: %s %s", e.message, e.callstack)
 	case ERROR_PathNotExist:
-		return fmt.Sprintf("Path %s not exists", e.message)
+		return fmt.Sprintf("Path %s not exists %s", e.message, e.callstack)
 	case ERROR_PathConflict:
-		return fmt.Sprintf("Path %s conflicts", e.message)
+		return fmt.Sprintf("Path %s conflicts %s", e.message, e.callstack)
 	case ERROR_GabsError:
-		return fmt.Sprintf("GabsError: %s", e.message)
+		return fmt.Sprintf("GabsError: %s %s", e.message, e.callstack)
 	default:
 		panic("Unknown error type")
 	}
 }
 
 func newRuntimeError(message string) error {
-	log.Fatalf("[FATAL] RuntimeError: %s", message)
-	return &Error{code: ERROR_Runtime, message: message}
+	log.Fatalf("[FATAL] RuntimeError: %s\n%s", message, string(debug.Stack()))
+	return &Error{code: ERROR_Runtime, message: message, callstack: string(debug.Stack())}
 }
 
 func newBadArgumentsError(message string) error {
-	return &Error{code: ERROR_BadArguments, message: message}
+	return &Error{code: ERROR_BadArguments, message: message, callstack: string(debug.Stack())}
 }
 
 func newPathNotExistError(path string) error {
-	return &Error{code: ERROR_PathNotExist, message: path}
+	return &Error{code: ERROR_PathNotExist, message: path, callstack: string(debug.Stack())}
 }
 
 func newPathConflictError(path string) error {
-	return &Error{code: ERROR_PathConflict, message: path}
+	return &Error{code: ERROR_PathConflict, message: path, callstack: string(debug.Stack())}
 }
 
 func newGabsError(gabsError error) error {
-	return &Error{code: ERROR_GabsError, message: gabsError.Error()}
+	return &Error{code: ERROR_GabsError, message: gabsError.Error(), callstack: string(debug.Stack())}
 }
