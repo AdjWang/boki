@@ -103,10 +103,7 @@ enum class SharedLogOpType : uint16_t {
     META_PROG          = 0x16,  // Sequencer to Sequencer
 
     ASYNC_APPEND       = 0x20,  // FuncWorker to Engine
-    ASYNC_READ_NEXT    = 0x21,  // FuncWorker to Engine, Engine to Index
-    ASYNC_READ_NEXT_B  = 0x22,  // FuncWorker to Engine, Engine to Index
-    ASYNC_READ_PREV    = 0x23,  // FuncWorker to Engine, Engine to Index
-    ASYNC_READ_LOCALID = 0x24,  // FuncWorker to Engine, Engine to Index
+    READ_LOCALID       = 0x21,  // FuncWorker to Engine, Engine to Index
 
     RESPONSE           = 0x30
 };
@@ -114,8 +111,7 @@ enum class SharedLogOpType : uint16_t {
 class SharedLogOpTypeHelper {
 public:
     static bool IsAsyncSharedLogOp(SharedLogOpType op_type) {
-        return op_type >= SharedLogOpType::ASYNC_APPEND
-            && op_type < SharedLogOpType::RESPONSE;
+        return op_type >= SharedLogOpType::ASYNC_APPEND;
     }
 
     static bool IsFuncAppend(SharedLogOpType op_type) {
@@ -127,10 +123,7 @@ public:
         return op_type == SharedLogOpType::READ_NEXT
             || op_type == SharedLogOpType::READ_PREV
             || op_type == SharedLogOpType::READ_NEXT_B
-            || op_type == SharedLogOpType::ASYNC_READ_NEXT
-            || op_type == SharedLogOpType::ASYNC_READ_NEXT_B
-            || op_type == SharedLogOpType::ASYNC_READ_PREV
-            || op_type == SharedLogOpType::ASYNC_READ_LOCALID;
+            || op_type == SharedLogOpType::READ_LOCALID;
     }
 };
 
@@ -144,9 +137,6 @@ enum class SharedLogResultType : uint16_t {
     AUXDATA_OK        = 0x24,
     // Async successful results
     ASYNC_APPEND_OK   = 0x30,
-    ASYNC_READ_OK     = 0x31,
-    ASYNC_DISCARDED   = 0x32,  // Log to append is discarded
-    ASYNC_EMPTY       = 0x33,  // Cannot find log entries satisfying requirements
     // NO ASYNC_DATA_LOST because all async reads are local index reads
     // Error results
     BAD_ARGS    = 0x40,
@@ -665,10 +655,6 @@ public:
 
     static SharedLogMessage NewReadOkResponse() {
         return NewResponse(SharedLogResultType::READ_OK);
-    }
-
-    static SharedLogMessage NewAsyncReadOkResponse() {
-        return NewResponse(SharedLogResultType::ASYNC_READ_OK);
     }
 
     static SharedLogMessage NewDataLostResponse() {

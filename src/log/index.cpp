@@ -8,15 +8,12 @@ namespace log {
 IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpType op_type) {
     switch (op_type) {
     case protocol::SharedLogOpType::READ_NEXT:
-    case protocol::SharedLogOpType::ASYNC_READ_NEXT:
         return IndexQuery::kReadNext;
     case protocol::SharedLogOpType::READ_PREV:
-    case protocol::SharedLogOpType::ASYNC_READ_PREV:
         return IndexQuery::kReadPrev;
     case protocol::SharedLogOpType::READ_NEXT_B:
-    case protocol::SharedLogOpType::ASYNC_READ_NEXT_B:
         return IndexQuery::kReadNextB;
-    case protocol::SharedLogOpType::ASYNC_READ_LOCALID:
+    case protocol::SharedLogOpType::READ_LOCALID:
         return IndexQuery::kReadLocalId;
     default:
         UNREACHABLE();
@@ -24,30 +21,17 @@ IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpT
 }
 
 protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
-    if (type == IndexQuery::kAsync) {
-        switch (direction) {
-        case IndexQuery::kReadNext:
-            return protocol::SharedLogOpType::ASYNC_READ_NEXT;
-        case IndexQuery::kReadPrev:
-            return protocol::SharedLogOpType::ASYNC_READ_PREV;
-        case IndexQuery::kReadNextB:
-            return protocol::SharedLogOpType::ASYNC_READ_NEXT_B;
-        case IndexQuery::kReadLocalId:
-            return protocol::SharedLogOpType::ASYNC_READ_LOCALID;
-        default:
-            UNREACHABLE();
-        }
-    } else {
-        switch (direction) {
-        case IndexQuery::kReadNext:
-            return protocol::SharedLogOpType::READ_NEXT;
-        case IndexQuery::kReadPrev:
-            return protocol::SharedLogOpType::READ_PREV;
-        case IndexQuery::kReadNextB:
-            return protocol::SharedLogOpType::READ_NEXT_B;
-        default:
-            UNREACHABLE();
-        }
+    switch (direction) {
+    case IndexQuery::kReadNext:
+        return protocol::SharedLogOpType::READ_NEXT;
+    case IndexQuery::kReadPrev:
+        return protocol::SharedLogOpType::READ_PREV;
+    case IndexQuery::kReadNextB:
+        return protocol::SharedLogOpType::READ_NEXT_B;
+    case IndexQuery::kReadLocalId:
+        return protocol::SharedLogOpType::READ_LOCALID;
+    default:
+        UNREACHABLE();
     }
 }
 
@@ -240,17 +224,17 @@ void Index::MakeQuery(const IndexQuery& query) {
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
         } else if (view_id < view_->id()) {
-            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query viewid={} smaller than current viewid={}",
-                    uint16_t(query.type), query.query_seqnum, view_id, view_->id());
+            HVLOG_F(1, "MakeQuery Process query seqnum={:016X} "
+                    "since pending_query viewid={} smaller than current viewid={}",
+                    query.query_seqnum, view_id, view_->id());
             ProcessQuery(query);
         } else {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
             if (position <= indexed_metalog_position_) {
-                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query metalog_position={} not larger than indexed_metalog_position={}",
-                        uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
+                HVLOG_F(1, "MakeQuery Process query seqnum={:016X} "
+                        "since pending_query metalog_position={} not larger than indexed_metalog_position={}",
+                        query.query_seqnum, position, indexed_metalog_position_);
                 ProcessQuery(query);
             } else {
                 pending_queries_.insert(std::make_pair(position, query));
@@ -259,8 +243,8 @@ since pending_query metalog_position={} not larger than indexed_metalog_position
     } else {
         HVLOG(1) << "Receive continue query";
         if (finalized()) {
-            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} since finalized",
-                    uint16_t(query.type), query.query_seqnum);
+            HVLOG_F(1, "MakeQuery Process query seqnum={:016X} since finalized",
+                    query.query_seqnum);
             ProcessQuery(query);
         } else {
             pending_queries_.insert(std::make_pair(kMaxMetalogPosition, query));
@@ -366,9 +350,9 @@ void Index::AdvanceIndexProgress() {
             break;
         }
         const IndexQuery& query = iter->second;
-        HVLOG_F(1, "AdvanceIndexProgress Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query metalog_position={} not larger than indexed_metalog_position={}",
-                uint16_t(query.type), query.query_seqnum, iter->first, indexed_metalog_position_);
+        HVLOG_F(1, "AdvanceIndexProgress Process query seqnum={:016X} "
+                "since pending_query metalog_position={} not larger than indexed_metalog_position={}",
+                query.query_seqnum, iter->first, indexed_metalog_position_);
         ProcessQuery(query);
         iter = pending_queries_.erase(iter);
     }

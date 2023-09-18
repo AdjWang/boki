@@ -118,10 +118,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
-    case SharedLogOpType::ASYNC_READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_LOCALID:
+    case SharedLogOpType::READ_LOCALID:
         HandleLocalRead(op);
         break;
     case SharedLogOpType::TRIM:
@@ -141,10 +138,7 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
-    case SharedLogOpType::ASYNC_READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_LOCALID:
+    case SharedLogOpType::READ_LOCALID:
         HandleRemoteRead(message);
         break;
     case SharedLogOpType::INDEX_DATA:
@@ -225,13 +219,10 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-    case SharedLogOpType::ASYNC_READ_NEXT:
-    case SharedLogOpType::ASYNC_READ_PREV:
-    case SharedLogOpType::ASYNC_READ_NEXT_B:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         break;
-    case SharedLogOpType::ASYNC_READ_LOCALID:
+    case SharedLogOpType::READ_LOCALID:
         op->seqnum = message.log_seqnum;
         break;
     case SharedLogOpType::TRIM:
@@ -257,10 +248,7 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_LOCALID)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_NEXT_B)
-     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::ASYNC_READ_PREV)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_LOCALID)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",

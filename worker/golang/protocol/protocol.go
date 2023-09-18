@@ -56,11 +56,8 @@ const (
 	SharedLogOpType_SET_AUXDATA uint16 = 0x05
 	SharedLogOpType_READ_NEXT_B uint16 = 0x06
 
-	SharedLogOpType_ASYNC_APPEND       uint16 = 0x20
-	SharedLogOpType_ASYNC_READ_NEXT    uint16 = 0x21
-	SharedLogOpType_ASYNC_READ_NEXT_B  uint16 = 0x22
-	SharedLogOpType_ASYNC_READ_PREV    uint16 = 0x23
-	SharedLogOpType_ASYNC_READ_LOCALID uint16 = 0x24
+	SharedLogOpType_ASYNC_APPEND uint16 = 0x20
+	SharedLogOpType_READ_LOCALID uint16 = 0x21
 )
 
 // SharedLogResultType enum
@@ -74,9 +71,6 @@ const (
 	SharedLogResultType_AUXDATA_OK uint16 = 0x24
 	// Async successful results
 	SharedLogResultType_ASYNC_APPEND_OK uint16 = 0x30
-	SharedLogResultType_ASYNC_READ_OK   uint16 = 0x31
-	SharedLogResultType_ASYNC_DISCARDED uint16 = 0x32
-	SharedLogResultType_ASYNC_EMPTY     uint16 = 0x33
 	// NO ASYNC_DATA_LOST because all async reads are local index reads
 	// Error results
 	SharedLogResultType_BAD_ARGS    uint16 = 0x40
@@ -260,31 +254,11 @@ func NewSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag uint64
 	return buffer
 }
 
-func NewAsyncSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag uint64, seqNum uint64, direction int, block bool, clientData uint64) []byte {
+func NewSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, localId uint64, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
-	if direction > 0 {
-		if block {
-			binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_ASYNC_READ_NEXT_B)
-		} else {
-			binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_ASYNC_READ_NEXT)
-		}
-	} else {
-		binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_ASYNC_READ_PREV)
-	}
-	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
-	binary.LittleEndian.PutUint64(buffer[40:48], tag)
-	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
-	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
-	return buffer
-}
-
-func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, localId uint64, clientData uint64) []byte {
-	buffer := NewEmptyMessage()
-	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
-	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
-	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_ASYNC_READ_LOCALID)
+	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_READ_LOCALID)
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], localId)
