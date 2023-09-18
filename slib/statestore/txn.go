@@ -18,11 +18,7 @@ type txnContext struct {
 
 func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 	env := CreateEnv(ctx, faasEnv).(*envImpl)
-	if tail, err := faasEnv.SharedLogLinearizableCheckTail(ctx, 0 /* tag */); err == nil {
-		seqNum := uint64(0)
-		if tail != nil {
-			seqNum = tail.SeqNum + 1
-		}
+	if seqNum, err := faasEnv.SharedLogLinearizableCheckTail(ctx, 0 /* tag */); err == nil {
 		// if seqNum, err := env.appendTxnBeginLog(); err == nil {
 		env.txnCtx = &txnContext{
 			active:   true,
@@ -55,11 +51,7 @@ func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, 
 			return nil, err
 		}
 	} else if env.consistency == STRONG_CONSISTENCY {
-		if tail, err := faasEnv.SharedLogLinearizableCheckTail(ctx, 0 /* tag */); err == nil {
-			seqNum := uint64(0)
-			if tail != nil {
-				seqNum = tail.SeqNum + 1
-			}
+		if seqNum, err := faasEnv.SharedLogLinearizableCheckTail(ctx, 0 /* tag */); err == nil {
 			// if seqNum, err := env.appendTxnBeginLog(); err == nil {
 			env.txnCtx = &txnContext{
 				active:   true,

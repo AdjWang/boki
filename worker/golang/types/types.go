@@ -75,7 +75,7 @@ type Environment interface {
 	// Set auxiliary data for log entry of given `seqNum`
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
 
-	SharedLogLinearizableCheckTail(ctx context.Context, tag uint64) (*LogEntry, error)
+	SharedLogLinearizableCheckTail(ctx context.Context, tag uint64) (uint64, error)
 	AsyncSharedLogAppend(ctx context.Context, tags []Tag, data []byte) (Future[uint64], error)
 	AsyncSharedLogAppendWithDeps(ctx context.Context, tags []Tag, data []byte, deps []uint64) (Future[uint64], error)
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*LogEntryWithMeta, error)

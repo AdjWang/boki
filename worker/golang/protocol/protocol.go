@@ -82,6 +82,7 @@ const (
 )
 
 const MaxLogSeqnum = uint64(0xffff000000000000)
+const InvalidLogSeqnum = uint64(0xffffffffffffffff)
 
 const MessageTypeBits = 4
 
@@ -99,6 +100,7 @@ const (
 	FLAG_UseFifoForNestedCall      uint32 = (1 << 1)
 	FLAG_kAsyncInvokeFuncFlag      uint32 = (1 << 2)
 	FLAG_kLogDataCachedFlag        uint32 = (1 << 3)
+	FLAG_kLogRespIndexOnlyFlag     uint32 = (1 << 4)
 )
 
 func GetFlagsFromMessage(buffer []byte) uint32 {

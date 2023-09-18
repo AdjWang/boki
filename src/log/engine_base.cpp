@@ -208,6 +208,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->start_timestamp = GetMonotonicMicroTimestamp();
     op->client_id = message.log_client_id;
     op->client_data = message.log_client_data;
+    op->query_index_only = false;
     op->func_call_id = func_call.full_call_id;
     op->user_logspace = ctx.user_logspace;
     op->metalog_progress = ctx.metalog_progress;
@@ -237,6 +238,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::LINEAR_CHECK_TAIL:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
+        op->query_index_only = true;
         break;
     case SharedLogOpType::SET_AUXDATA:
         op->seqnum = message.log_seqnum;

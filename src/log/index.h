@@ -21,6 +21,7 @@ struct IndexQuery {
     uint16_t hop_times;
     bool     initial;
     uint64_t client_data;
+    bool     index_only;
 
     uint32_t user_logspace;
     uint64_t user_tag;

@@ -410,7 +410,6 @@ void Engine::OnRecvCheckTailResponse(const protocol::SharedLogMessage& message) 
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::LINEAR_CHECK_TAIL);
     LocalOp* op = ongoing_check_tails_.PollChecked(message.client_data);
     // make check tail query
-    // TODO: maybe faster if query only index without log data
     op->type = protocol::SharedLogOpType::READ_PREV;
     op->metalog_progress = message.metalog_position;
     DCHECK_EQ(op->seqnum, kMaxLogSeqNum);
@@ -436,32 +435,40 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         if (result == SharedLogResultType::READ_OK) {
             uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
             HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
-            std::span<const uint64_t> user_tags;
-            std::span<const char> log_data;
-            std::span<const char> aux_data;
-            log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_data);
-            Message response = BuildLocalReadOKResponse(seqnum, user_tags, log_data);
-            if (aux_data.size() > 0) {
-                size_t full_size = log_data.size()
-                                    + user_tags.size() * sizeof(uint64_t)
-                                    + aux_data.size();
-                if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
-                    response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
-                    MessageHelper::AppendInlineData(&response, aux_data);
-                } else {
-                    HLOG_F(WARNING, "Inline buffer of message not large enough "
-                                    "for auxiliary data of log (seqnum {}): "
-                                    "log_size={}, num_tags={} aux_data_size={}",
-                            bits::HexStr0x(seqnum), log_data.size(),
-                            user_tags.size(), aux_data.size());
+            if (op->query_index_only) {
+                DCHECK((message.flags & protocol::kReadIndexOnlyFlag) != 0);
+                Message response = MessageHelper::NewSharedLogOpSucceeded(
+                    SharedLogResultType::READ_OK, seqnum);
+                response.flags |= protocol::kLogRespIndexOnlyFlag;
+                FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
+            } else {
+                std::span<const uint64_t> user_tags;
+                std::span<const char> log_data;
+                std::span<const char> aux_data;
+                log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_data);
+                Message response = BuildLocalReadOKResponse(seqnum, user_tags, log_data);
+                if (aux_data.size() > 0) {
+                    size_t full_size = log_data.size()
+                                        + user_tags.size() * sizeof(uint64_t)
+                                        + aux_data.size();
+                    if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
+                        response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+                        MessageHelper::AppendInlineData(&response, aux_data);
+                    } else {
+                        HLOG_F(WARNING, "Inline buffer of message not large enough "
+                                        "for auxiliary data of log (seqnum {}): "
+                                        "log_size={}, num_tags={} aux_data_size={}",
+                                bits::HexStr0x(seqnum), log_data.size(),
+                                user_tags.size(), aux_data.size());
+                    }
                 }
-            }
-            FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
-            // Put the received log entry into log cache
-            LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
-            LogCachePut(log_metadata, user_tags, log_data);
-            if (aux_data.size() > 0) {
-                LogCachePutAuxData(seqnum, aux_data);
+                FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
+                // Put the received log entry into log cache
+                LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
+                LogCachePut(log_metadata, user_tags, log_data);
+                if (aux_data.size() > 0) {
+                    LogCachePutAuxData(seqnum, aux_data);
+                }
             }
         } else if (result == SharedLogResultType::EMPTY) {
             FinishLocalOpWithFailure(
@@ -502,6 +509,24 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     const IndexQuery& query = query_result.original_query;
     bool local_request = (query.origin_node_id == my_node_id());
     uint64_t seqnum = query_result.found_result.seqnum;
+    if (query.index_only) {
+        if (local_request) {
+            Message response = MessageHelper::NewSharedLogOpSucceeded(
+                SharedLogResultType::READ_OK, seqnum);
+            response.flags |= protocol::kLogRespIndexOnlyFlag;
+            LocalOp* op = ongoing_local_reads_.PollChecked(query.client_data);
+            FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
+        } else {
+            HVLOG_F(1, "Send remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
+            SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();
+            response.flags |= protocol::kReadIndexOnlyFlag;
+            response.logspace_id = bits::HighHalf64(seqnum);
+            response.seqnum_lowhalf = bits::LowHalf64(seqnum);
+            response.user_metalog_progress = query_result.metalog_progress;
+            SendReadResponse(query, &response);
+        }
+        return;
+    }
     // async read response when found && sync read response
     // For async requests:
     // if the log is cached: return ONCE as an async response with kLogDataCachedFlag set.
@@ -659,6 +684,9 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
     request.query_seqnum = op->seqnum;
     request.user_metalog_progress = op->metalog_progress;
     request.flags |= protocol::kReadInitialFlag;
+    if (op->query_index_only) {
+        request.flags |= protocol::kReadIndexOnlyFlag;
+    }
     request.prev_view_id = 0;
     request.prev_engine_id = 0;
     request.prev_found_seqnum = kInvalidLogSeqNum;
@@ -677,6 +705,9 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
     request.query_tag = query.user_tag;
     request.query_seqnum = query.query_seqnum;
     request.user_metalog_progress = result.metalog_progress;
+    if (query.index_only) {
+        request.flags |= protocol::kReadIndexOnlyFlag;
+    }
     request.prev_view_id = result.found_result.view_id;
     request.prev_engine_id = result.found_result.engine_id;
     request.prev_found_seqnum = result.found_result.seqnum;
@@ -690,6 +721,7 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
         .hop_times = 0,
         .initial = true,
         .client_data = op->id,
+        .index_only = op->query_index_only,
         .user_logspace = op->user_logspace,
         .user_tag = op->query_tag,
         .query_seqnum = op->seqnum,
@@ -710,6 +742,7 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
         .hop_times = message.hop_times,
         .initial = (message.flags | protocol::kReadInitialFlag) != 0,
         .client_data = message.client_data,
+        .index_only = (message.flags & protocol::kReadIndexOnlyFlag) != 0,
         .user_logspace = message.user_logspace,
         .user_tag = message.query_tag,
         .query_seqnum = message.query_seqnum,

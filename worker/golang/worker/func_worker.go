@@ -819,7 +819,7 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 	var response []byte
 	select {
 	case <-ctx.Done():
-		return nil, nil
+		return nil, ctx.Err()
 	case response = <-outputChan:
 	}
 	result := protocol.GetSharedLogResultTypeFromMessage(response)
@@ -962,11 +962,38 @@ func (w *FuncWorker) SharedLogCheckTail(ctx context.Context, tag uint64) (*types
 	return w.SharedLogReadPrev(ctx, tag, protocol.MaxLogSeqnum)
 }
 
-func (w *FuncWorker) SharedLogLinearizableCheckTail(ctx context.Context, tag uint64) (*types.LogEntry, error) {
+func (w *FuncWorker) SharedLogLinearizableCheckTail(ctx context.Context, tag uint64) (uint64, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewSharedLogLinearizableCheckTailMessage(currentCallId, w.clientId, tag, id)
-	return w.sharedLogReadCommon(ctx, message, id)
+
+	w.mux.Lock()
+	outputChan := make(chan []byte, 1)
+	w.outgoingLogOps[id] = outputChan
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	if err != nil {
+		return protocol.InvalidLogSeqnum, err
+	}
+
+	var response []byte
+	select {
+	case <-ctx.Done():
+		return protocol.InvalidLogSeqnum, ctx.Err()
+	case response = <-outputChan:
+	}
+	result := protocol.GetSharedLogResultTypeFromMessage(response)
+	if result == protocol.SharedLogResultType_READ_OK {
+		flags := protocol.GetFlagsFromMessage(response)
+		if (flags & protocol.FLAG_kLogRespIndexOnlyFlag) == 0 {
+			panic("unreachable")
+		}
+		return protocol.GetLogSeqNumFromMessage(response), nil
+	} else if result == protocol.SharedLogResultType_EMPTY {
+		return 0, nil
+	} else {
+		return protocol.InvalidLogSeqnum, fmt.Errorf("Failed to read log: 0x%02X", result)
+	}
 }
 
 // Implement types.Environment

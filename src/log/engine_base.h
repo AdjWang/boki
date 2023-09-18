@@ -61,6 +61,7 @@ protected:
         uint32_t user_logspace;
         uint64_t id;
         uint64_t client_data;
+        bool     query_index_only;
         uint64_t metalog_progress;
         uint64_t query_tag;
         union {

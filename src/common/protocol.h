@@ -155,6 +155,7 @@ constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
 constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
 constexpr uint32_t kLogDataCachedFlag             = (1 << 3);   // Used to check if the first async response had carried the log data
+constexpr uint16_t kLogRespIndexOnlyFlag          = (1 << 4);
 
 struct Message {
     struct {
@@ -250,7 +251,8 @@ struct GatewayMessage {
 
 static_assert(sizeof(GatewayMessage) == 16, "Unexpected GatewayMessage size");
 
-constexpr uint16_t kReadInitialFlag = (1 << 0);
+constexpr uint16_t kReadInitialFlag =   (1 << 0);
+constexpr uint16_t kReadIndexOnlyFlag = (1 << 1);
 
 struct SharedLogMessage {
     uint16_t op_type;         // [0:2]
