@@ -27,8 +27,10 @@ EngineBase::EngineBase(engine::Engine* engine)
       next_local_op_id_(0)
 #ifndef __FAAS_DISABLE_STAT
       ,
-      check_tail_query_delay_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
-          fmt::format("check_tail_query_delay[{}]", my_node_id())))
+      append_delay_stat_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          fmt::format("log_append_delay[{}]", my_node_id()))),
+      check_tail_delay_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          fmt::format("check_tail_delay[{}]", my_node_id())))
 #endif
     {}
 
@@ -333,6 +335,39 @@ void EngineBase::SetLogReadRespTypeFlag(LocalOp* op, Message* response) {
     }
 }
 
+// SharedLogOpType::LINEAR_CHECK_TAIL is separated as 2 stage: check and read
+// the first stage is recorded in Engine::OnRecvCheckTailResponse()
+void EngineBase::RecordOpDelay(const LocalOp* op) {
+#if !defined(__FAAS_DISABLE_STAT)
+    int32_t op_delay = gsl::narrow_cast<int32_t>(
+        GetMonotonicMicroTimestamp() - op->start_timestamp);
+
+    absl::MutexLock lk(&stat_mu_);
+    switch (op->type) {
+    case SharedLogOpType::APPEND:
+        append_delay_stat_.AddSample(op_delay);
+        break;
+    case SharedLogOpType::ASYNC_APPEND:
+        break;
+    case SharedLogOpType::READ_PREV:
+        if ((op->flags & LocalOp::kCheckTailReadPrev) != 0) {
+            check_tail_delay_.AddSample(op_delay);
+        }
+        break;
+    case SharedLogOpType::READ_NEXT:
+    case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::READ_LOCALID:
+        break;
+    case SharedLogOpType::TRIM:
+        break;
+    case SharedLogOpType::SET_AUXDATA:
+        break;
+    default:
+        UNREACHABLE();
+    }
+#endif  // !defined(__FAAS_DISABLE_STAT)
+}
+
 // Used to send the first response to async operations.
 void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response, 
                                                  uint64_t metalog_progress) {
@@ -352,15 +387,8 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
                                            uint64_t metalog_progress) {
-#ifndef __FAAS_DISABLE_STAT
-    if ((op->flags & LocalOp::kCheckTailReadPrev) != 0) {
-        int32_t op_delay = gsl::narrow_cast<int32_t>(
-            GetMonotonicMicroTimestamp() - op->start_timestamp);
-        absl::MutexLock lk(&stat_mu_);
-        check_tail_query_delay_.AddSample(op_delay);
-    }
-#endif
     IntermediateLocalOpWithResponse(op, response, metalog_progress);
+    RecordOpDelay(op);
     log_op_pool_.Return(op);
 }
 
@@ -470,6 +498,7 @@ bool EngineBase::SendSequencerMessage(uint16_t sequencer_id,
                                       std::span<const char> payload) {
     message->origin_node_id = node_id_;
     message->payload_size = gsl::narrow_cast<uint32_t>(payload.size());
+    message->send_timestamp = GetMonotonicMicroTimestamp();
     return engine_->SendSharedLogMessage(
         protocol::ConnType::ENGINE_TO_SEQUENCER,
         sequencer_id, *message, payload);

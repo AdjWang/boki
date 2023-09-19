@@ -146,7 +146,8 @@ private:
 
 #ifndef __FAAS_DISABLE_STAT
     absl::Mutex stat_mu_;
-    stat::StatisticsCollector<int32_t> check_tail_query_delay_ ABSL_GUARDED_BY(stat_mu_);
+    stat::StatisticsCollector<int32_t> append_delay_stat_ ABSL_GUARDED_BY(stat_mu_);
+    stat::StatisticsCollector<int32_t> check_tail_delay_ ABSL_GUARDED_BY(stat_mu_);
 #endif
 
     void SetupZKWatchers();
@@ -155,6 +156,7 @@ private:
     void PopulateLogTagsAndData(const protocol::Message& message, LocalOp* op);
 
     void SetLogReadRespTypeFlag(LocalOp* op, protocol::Message* response);
+    void RecordOpDelay(const LocalOp* op);
 
     DISALLOW_COPY_AND_ASSIGN(EngineBase);
 };

@@ -119,43 +119,34 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 	return w, nil
 }
 
-func (w *FuncWorker) Run() {
-	log.Printf("[INFO] Start new FuncWorker with client id %d", w.clientId)
-	err := w.doHandshake()
-	if err != nil {
-		log.Fatalf("[FATAL] Handshake failed: %v", err)
-	}
-	log.Printf("[INFO] Handshake with engine done")
+type statInfo struct {
+	delay   int64
+	message []byte
+}
 
-	go w.servingLoop()
-	appendSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	asyncAppendSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d asyncAppend delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readNextSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNext delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readPrevSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadPrev delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readNextBSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNextB delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readLocalIdSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadLocalId delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readCheckTailSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadCheckTail delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readUnknownSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadUnknown delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	auxSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Aux delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	emptySc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Empty delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	otherSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	for {
-		message := protocol.NewEmptyMessage()
-		if n, err := w.inputPipe.Read(message); err != nil {
-			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
-		} else if n != protocol.MessageFullByteSize {
-			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
-		}
-		// DEBUG: PROF
-		dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-		resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+func reportStat(funcId uint16, clientId uint16, infoCh chan statInfo) {
+	appendSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	asyncAppendSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d asyncAppend delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	readNextSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNext delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	readPrevSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadPrev delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	readNextBSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNextB delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	readLocalIdSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadLocalId delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	readCheckTailSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadCheckTail delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	readUnknownSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadUnknown delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	auxSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Aux delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	emptySc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Empty delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+	otherSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second)
+
+	for info := range infoCh {
+		dispatchDelay := info.delay
+		resultType := protocol.GetSharedLogResultTypeFromMessage(info.message)
 		switch resultType {
 		case protocol.SharedLogResultType_APPEND_OK:
 			appendSc.AddSample(float64(dispatchDelay))
 		case protocol.SharedLogResultType_ASYNC_APPEND_OK:
 			asyncAppendSc.AddSample(float64(dispatchDelay))
 		case protocol.SharedLogResultType_READ_OK:
-			readRespType := protocol.GetReadResponseTypeFromMessage(message)
+			readRespType := protocol.GetReadResponseTypeFromMessage(info.message)
 			switch readRespType {
 			case 1:
 				readNextSc.AddSample(float64(dispatchDelay))
@@ -177,6 +168,31 @@ func (w *FuncWorker) Run() {
 		default:
 			otherSc.AddSample(float64(dispatchDelay))
 		}
+	}
+}
+
+func (w *FuncWorker) Run() {
+	log.Printf("[INFO] Start new FuncWorker with client id %d", w.clientId)
+	err := w.doHandshake()
+	if err != nil {
+		log.Fatalf("[FATAL] Handshake failed: %v", err)
+	}
+	log.Printf("[INFO] Handshake with engine done")
+
+	statInfoCh := make(chan statInfo, 200)
+	go reportStat(w.funcId, w.clientId, statInfoCh)
+
+	go w.servingLoop()
+	for {
+		message := protocol.NewEmptyMessage()
+		if n, err := w.inputPipe.Read(message); err != nil {
+			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
+		} else if n != protocol.MessageFullByteSize {
+			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+		}
+		// DEBUG: PROF
+		dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		statInfoCh <- statInfo{delay: dispatchDelay, message: message}
 
 		if protocol.IsDispatchFuncCallMessage(message) {
 			w.newFuncCallChan <- message

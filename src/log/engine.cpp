@@ -424,7 +424,6 @@ void Engine::OnRecvCheckTailResponse(const protocol::SharedLogMessage& message) 
     }
 #endif
     // make check tail query
-    op->start_timestamp = GetMonotonicMicroTimestamp();
     op->type = protocol::SharedLogOpType::READ_PREV;
     op->metalog_progress = message.metalog_position;
     DCHECK_EQ(op->seqnum, kMaxLogSeqNum);

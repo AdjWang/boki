@@ -317,7 +317,10 @@ struct SharedLogMessage {
     };
     uint64_t client_data;       // [48:56]
 
-    uint64_t prev_found_seqnum; // [56:64]
+    union {
+        int64_t send_timestamp;     // [56:64] (only used by ENGINE_TO_SEQUENCER)
+        uint64_t prev_found_seqnum; // [56:64]
+    };
 
 } __attribute__ (( packed, aligned(__FAAS_CACHE_LINE_SIZE) ));
 
