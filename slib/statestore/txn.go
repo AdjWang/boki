@@ -3,6 +3,8 @@ package statestore
 import (
 	"context"
 	"encoding/json"
+	"log"
+	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
 
@@ -20,12 +22,20 @@ func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 	env := CreateEnv(ctx, faasEnv).(*envImpl)
 	var seqNum uint64
 	var err error
-	if env.txnCheckMethos == TXN_CHECK_SEQUENCER {
+	var ts_start time.Time
+	if common.SW_STAT == common.SWITCH_ON {
+		ts_start = time.Now()
+	}
+	if env.txnCheckMethos == common.TXN_CHECK_SEQUENCER {
 		seqNum, err = env.faasEnv.SharedLogLinearizableCheckTail(env.faasCtx, 0 /*tag*/)
-	} else if env.txnCheckMethos == TXN_CHECK_APPEND {
+	} else if env.txnCheckMethos == common.TXN_CHECK_APPEND {
 		seqNum, err = env.appendTxnBeginLog()
 	} else {
 		panic("unreachable")
+	}
+	if common.SW_STAT == common.SWITCH_ON {
+		defer log.Printf("[STAT] strong rw-txn update view delay=%dus",
+			time.Since(ts_start).Microseconds())
 	}
 	if err != nil {
 		return nil, err
@@ -41,8 +51,16 @@ func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 
 func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 	env := CreateEnv(ctx, faasEnv).(*envImpl)
-	if env.consistency == SEQUENTIAL_CONSISTENCY {
+	if env.consistency == common.SEQUENTIAL_CONSISTENCY {
+		var ts_start time.Time
+		if common.SW_STAT == common.SWITCH_ON {
+			ts_start = time.Now()
+		}
 		if tail, err := faasEnv.SharedLogCheckTail(ctx, 0 /* tag */); err == nil {
+			if common.SW_STAT == common.SWITCH_ON {
+				defer log.Printf("[STAT] sequential ro-txn update view delay=%dus",
+					time.Since(ts_start).Microseconds())
+			}
 			seqNum := uint64(0)
 			if tail != nil {
 				seqNum = tail.SeqNum + 1
@@ -57,15 +75,23 @@ func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, 
 		} else {
 			return nil, err
 		}
-	} else if env.consistency == STRONG_CONSISTENCY {
+	} else if env.consistency == common.STRONG_CONSISTENCY {
 		var seqNum uint64
 		var err error
-		if env.txnCheckMethos == TXN_CHECK_SEQUENCER {
+		var ts_start time.Time
+		if common.SW_STAT == common.SWITCH_ON {
+			ts_start = time.Now()
+		}
+		if env.txnCheckMethos == common.TXN_CHECK_SEQUENCER {
 			seqNum, err = env.faasEnv.SharedLogLinearizableCheckTail(env.faasCtx, 0 /*tag*/)
-		} else if env.txnCheckMethos == TXN_CHECK_APPEND {
+		} else if env.txnCheckMethos == common.TXN_CHECK_APPEND {
 			seqNum, err = env.appendTxnBeginLog()
 		} else {
 			panic("unreachable")
+		}
+		if common.SW_STAT == common.SWITCH_ON {
+			defer log.Printf("[STAT] strong ro-txn update view delay=%dus",
+				time.Since(ts_start).Microseconds())
 		}
 		if err == nil {
 			env.txnCtx = &txnContext{

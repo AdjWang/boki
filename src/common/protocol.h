@@ -157,6 +157,19 @@ constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
 constexpr uint32_t kLogDataCachedFlag             = (1 << 3);   // Used to check if the first async response had carried the log data
 constexpr uint16_t kLogRespIndexOnlyFlag          = (1 << 4);
 
+// STAT
+constexpr uint32_t kLogReadRespUnknown            = (0 << 8);
+constexpr uint32_t kLogReadRespNext               = (1 << 8);
+constexpr uint32_t kLogReadRespPrev               = (2 << 8);
+constexpr uint32_t kLogReadRespNextB              = (3 << 8);
+constexpr uint32_t kLogReadRespCheckTail          = (4 << 8);
+constexpr uint32_t kLogReadRespLocalId            = (5 << 8);
+#define SET_LOG_READ_RESP_TYPE(target, flag)                     \
+    do {                                                         \
+        target &= ~(uint32_t)((1 << 8) | (1 << 9) | (1 << 10)); \
+        target |= flag;                                          \
+    } while (0)
+
 struct Message {
     struct {
         uint16_t message_type : 4;

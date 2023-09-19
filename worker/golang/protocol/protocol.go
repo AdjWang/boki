@@ -112,6 +112,34 @@ func GetFuncCallFromMessage(buffer []byte) FuncCall {
 	return FuncCallFromFullCallId(tmp >> MessageTypeBits)
 }
 
+func GetReadResponseTypeFromMessage(buffer []byte) uint8 {
+	// constexpr uint32_t kLogReadRespUnknown            = (0 << 8);
+	// constexpr uint32_t kLogReadRespNext               = (1 << 8);
+	// constexpr uint32_t kLogReadRespPrev               = (2 << 8);
+	// constexpr uint32_t kLogReadRespNextB              = (3 << 8);
+	// constexpr uint32_t kLogReadRespCheckTail          = (4 << 8);
+	// constexpr uint32_t kLogReadRespLocalId            = (5 << 8);
+
+	flags := GetFlagsFromMessage(buffer)
+	flags &= ((1 << 8) | (1 << 9) | (1 << 10))
+	readRespType := uint8(flags >> 8)
+	return readRespType
+	// switch readRespType {
+	// case 1:
+	// 	return "Next"
+	// case 2:
+	// 	return "Prev"
+	// case 3:
+	// 	return "NextB"
+	// case 4:
+	// 	return "CheckTail"
+	// case 5:
+	// 	return "LocalId"
+	// default:
+	// 	return "Unknown"
+	// }
+}
+
 func GetSharedLogOpTypeFromMessage(buffer []byte) uint16 {
 	return binary.LittleEndian.Uint16(buffer[32:34])
 }

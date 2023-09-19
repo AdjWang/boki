@@ -24,7 +24,13 @@ using protocol::SharedLogResultType;
 EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
-      next_local_op_id_(0) {}
+      next_local_op_id_(0)
+#ifndef __FAAS_DISABLE_STAT
+      ,
+      check_tail_query_delay_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          fmt::format("check_tail_query_delay[{}]", my_node_id())))
+#endif
+    {}
 
 EngineBase::~EngineBase() {}
 
@@ -217,6 +223,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->query_tag = kInvalidLogTag;
     op->user_tags.clear();
     op->data.Reset();
+    op->flags = 0;
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -239,6 +246,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
         op->query_index_only = true;
+        op->flags |= LocalOp::kCheckTailReadPrev;
         break;
     case SharedLogOpType::SET_AUXDATA:
         op->seqnum = message.log_seqnum;
@@ -301,6 +309,30 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
     }
 }
 
+void EngineBase::SetLogReadRespTypeFlag(LocalOp* op, Message* response) {
+    switch (op->type) {
+    case SharedLogOpType::READ_NEXT:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespNext);
+        break;
+    case SharedLogOpType::READ_PREV:
+        if ((op->flags & LocalOp::kCheckTailReadPrev) != 0) {
+            SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespCheckTail);
+        } else {
+            SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespPrev);
+        }
+        break;
+    case SharedLogOpType::READ_NEXT_B:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespNextB);
+        break;
+    case SharedLogOpType::READ_LOCALID:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespLocalId);
+        break;
+    default:
+        SET_LOG_READ_RESP_TYPE(response->flags, protocol::kLogReadRespUnknown);
+        break;
+    }
+}
+
 // Used to send the first response to async operations.
 void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response, 
                                                  uint64_t metalog_progress) {
@@ -313,12 +345,21 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
             }
         }
     }
+    SetLogReadRespTypeFlag(op, response);
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
 }
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
                                            uint64_t metalog_progress) {
+#ifndef __FAAS_DISABLE_STAT
+    if ((op->flags & LocalOp::kCheckTailReadPrev) != 0) {
+        int32_t op_delay = gsl::narrow_cast<int32_t>(
+            GetMonotonicMicroTimestamp() - op->start_timestamp);
+        absl::MutexLock lk(&stat_mu_);
+        check_tail_query_delay_.AddSample(op_delay);
+    }
+#endif
     IntermediateLocalOpWithResponse(op, response, metalog_progress);
     log_op_pool_.Return(op);
 }

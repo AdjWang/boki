@@ -8,18 +8,6 @@ import (
 	"cs.utexas.edu/zjia/faas/types"
 )
 
-const (
-	// for single object and readonly txn
-	// r/w txn is always strict serializable
-	SEQUENTIAL_CONSISTENCY = "SEQUENTIAL"
-	// for single object -> linearizable
-	// for txn -> strict serializable
-	STRONG_CONSISTENCY = "STRONG"
-
-	TXN_CHECK_SEQUENCER = "CHECKSEQ"
-	TXN_CHECK_APPEND    = "APPEND"
-)
-
 type Env interface {
 	Object(name string) *ObjectRef
 	TxnCommit() (bool /* committed */, error)

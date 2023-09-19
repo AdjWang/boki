@@ -33,6 +33,11 @@ private:
     log_utils::ThreadedMap<LocalOp> ongoing_local_reads_;
     log_utils::ThreadedMap<LocalOp> ongoing_check_tails_;
 
+#ifndef __FAAS_DISABLE_STAT
+    absl::Mutex stat_mu_;
+    stat::StatisticsCollector<int32_t> check_tail_update_view_delay_ ABSL_GUARDED_BY(stat_mu_);
+#endif
+
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;

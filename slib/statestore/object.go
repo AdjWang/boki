@@ -1,6 +1,9 @@
 package statestore
 
 import (
+	"log"
+	"time"
+
 	"cs.utexas.edu/zjia/faas/slib/common"
 
 	"cs.utexas.edu/zjia/faas/protocol"
@@ -52,7 +55,7 @@ func (objView *ObjectView) Clone() *ObjectView {
 }
 
 func (obj *ObjectRef) ensureView() error {
-	if obj.env.consistency == SEQUENTIAL_CONSISTENCY {
+	if obj.env.consistency == common.SEQUENTIAL_CONSISTENCY {
 		if obj.view == nil {
 			tailSeqNum := protocol.MaxLogSeqnum
 			if obj.txnCtx != nil {
@@ -62,7 +65,7 @@ func (obj *ObjectRef) ensureView() error {
 		} else {
 			return nil
 		}
-	} else if obj.env.consistency == STRONG_CONSISTENCY {
+	} else if obj.env.consistency == common.STRONG_CONSISTENCY {
 		if obj.txnCtx != nil {
 			if obj.view == nil {
 				tailSeqNum := obj.txnCtx.id
@@ -73,12 +76,20 @@ func (obj *ObjectRef) ensureView() error {
 		} else {
 			var seqNum uint64
 			var err error
-			if obj.env.txnCheckMethos == TXN_CHECK_SEQUENCER {
+			var ts_start time.Time
+			if common.SW_STAT == common.SWITCH_ON {
+				ts_start = time.Now()
+			}
+			if obj.env.txnCheckMethos == common.TXN_CHECK_SEQUENCER {
 				seqNum, err = obj.env.faasEnv.SharedLogLinearizableCheckTail(obj.env.faasCtx, 0 /*tag*/)
-			} else if obj.env.txnCheckMethos == TXN_CHECK_APPEND {
+			} else if obj.env.txnCheckMethos == common.TXN_CHECK_APPEND {
 				seqNum, err = obj.appendNormalOpSyncLog()
 			} else {
 				panic("unreachable")
+			}
+			if common.SW_STAT == common.SWITCH_ON {
+				defer log.Printf("[STAT] strong non-txn ensureView delay=%dus",
+					time.Since(ts_start).Microseconds())
 			}
 			if err != nil {
 				return err

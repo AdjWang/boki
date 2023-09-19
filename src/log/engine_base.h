@@ -56,6 +56,8 @@ protected:
                         std::span<const char> payload);
 
     struct LocalOp {
+        constexpr static uint32_t kCheckTailReadPrev = (1 << 0);
+
         protocol::SharedLogOpType type;
         uint16_t client_id;
         uint32_t user_logspace;
@@ -72,6 +74,7 @@ protected:
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
+        uint32_t flags;
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;
@@ -141,10 +144,17 @@ private:
 
     std::optional<LRUCache> log_cache_;
 
+#ifndef __FAAS_DISABLE_STAT
+    absl::Mutex stat_mu_;
+    stat::StatisticsCollector<int32_t> check_tail_query_delay_ ABSL_GUARDED_BY(stat_mu_);
+#endif
+
     void SetupZKWatchers();
     void SetupTimers();
 
     void PopulateLogTagsAndData(const protocol::Message& message, LocalOp* op);
+
+    void SetLogReadRespTypeFlag(LocalOp* op, protocol::Message* response);
 
     DISALLOW_COPY_AND_ASSIGN(EngineBase);
 };

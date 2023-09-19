@@ -128,6 +128,17 @@ func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Handshake with engine done")
 
 	go w.servingLoop()
+	appendSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	asyncAppendSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d asyncAppend delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readNextSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNext delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readPrevSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadPrev delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readNextBSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadNextB delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readLocalIdSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadLocalId delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readCheckTailSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadCheckTail delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	readUnknownSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d ReadUnknown delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	auxSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Aux delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	emptySc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Empty delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	otherSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	for {
 		message := protocol.NewEmptyMessage()
 		if n, err := w.inputPipe.Read(message); err != nil {
@@ -135,6 +146,38 @@ func (w *FuncWorker) Run() {
 		} else if n != protocol.MessageFullByteSize {
 			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
+		// DEBUG: PROF
+		dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+		switch resultType {
+		case protocol.SharedLogResultType_APPEND_OK:
+			appendSc.AddSample(float64(dispatchDelay))
+		case protocol.SharedLogResultType_ASYNC_APPEND_OK:
+			asyncAppendSc.AddSample(float64(dispatchDelay))
+		case protocol.SharedLogResultType_READ_OK:
+			readRespType := protocol.GetReadResponseTypeFromMessage(message)
+			switch readRespType {
+			case 1:
+				readNextSc.AddSample(float64(dispatchDelay))
+			case 2:
+				readPrevSc.AddSample(float64(dispatchDelay))
+			case 3:
+				readNextBSc.AddSample(float64(dispatchDelay))
+			case 4:
+				readCheckTailSc.AddSample(float64(dispatchDelay))
+			case 5:
+				readLocalIdSc.AddSample(float64(dispatchDelay))
+			default:
+				readUnknownSc.AddSample(float64(dispatchDelay))
+			}
+		case protocol.SharedLogResultType_AUXDATA_OK:
+			auxSc.AddSample(float64(dispatchDelay))
+		case protocol.SharedLogResultType_EMPTY:
+			emptySc.AddSample(float64(dispatchDelay))
+		default:
+			otherSc.AddSample(float64(dispatchDelay))
+		}
+
 		if protocol.IsDispatchFuncCallMessage(message) {
 			w.newFuncCallChan <- message
 		} else if protocol.IsFuncCallCompleteMessage(message) || protocol.IsFuncCallFailedMessage(message) {

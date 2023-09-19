@@ -19,7 +19,13 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) {}
+      current_view_active_(false)
+#ifndef __FAAS_DISABLE_STAT
+      ,
+      check_tail_update_view_delay_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          fmt::format("check_tail_update_view_delay[{}]", my_node_id())))
+#endif
+      {}
 
 Engine::~Engine() {}
 
@@ -409,7 +415,16 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
 void Engine::OnRecvCheckTailResponse(const protocol::SharedLogMessage& message) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::LINEAR_CHECK_TAIL);
     LocalOp* op = ongoing_check_tails_.PollChecked(message.client_data);
+#ifndef __FAAS_DISABLE_STAT
+    int32_t op_delay = gsl::narrow_cast<int32_t>(
+        GetMonotonicMicroTimestamp() - op->start_timestamp);
+    {
+        absl::MutexLock lk(&stat_mu_);
+        check_tail_update_view_delay_.AddSample(op_delay);
+    }
+#endif
     // make check tail query
+    op->start_timestamp = GetMonotonicMicroTimestamp();
     op->type = protocol::SharedLogOpType::READ_PREV;
     op->metalog_progress = message.metalog_position;
     DCHECK_EQ(op->seqnum, kMaxLogSeqNum);
