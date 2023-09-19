@@ -224,10 +224,8 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
             locked_logspace->UpdateReplicaProgress(
                 message.origin_node_id, message.metalog_position);
             uint32_t new_position = locked_logspace->replicated_metalog_position();
-            uint32_t max_position = 0;
             for (uint32_t pos = old_position; pos < new_position; pos++) {
                 if (auto metalog = locked_logspace->GetMetaLog(pos); metalog.has_value()) {
-                    max_position = std::max(0u, metalog->metalog_seqnum());
                     replicated_metalogs.push_back(std::move(*metalog));
                 } else {
                     HLOG_F(FATAL, "Cannot get meta log at position {}", pos);
@@ -235,7 +233,7 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
             }
             {
                 absl::MutexLock matalog_tail_lk(&metalog_tail_mu_);
-                last_propagated_metalog_pos_[message.logspace_id] = max_position;
+                last_propagated_metalog_pos_[message.logspace_id] = new_position;
             }
         }
     }
