@@ -18,18 +18,25 @@ type txnContext struct {
 
 func CreateTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
 	env := CreateEnv(ctx, faasEnv).(*envImpl)
-	if seqNum, err := faasEnv.SharedLogLinearizableCheckTail(ctx, 0 /* tag */); err == nil {
-		// if seqNum, err := env.appendTxnBeginLog(); err == nil {
-		env.txnCtx = &txnContext{
-			active:   true,
-			readonly: false,
-			id:       seqNum,
-			ops:      make([]*WriteOp, 0, 4),
-		}
-		return env, nil
+	var seqNum uint64
+	var err error
+	if env.txnCheckMethos == TXN_CHECK_SEQUENCER {
+		seqNum, err = env.faasEnv.SharedLogLinearizableCheckTail(env.faasCtx, 0 /*tag*/)
+	} else if env.txnCheckMethos == TXN_CHECK_APPEND {
+		seqNum, err = env.appendTxnBeginLog()
 	} else {
+		panic("unreachable")
+	}
+	if err != nil {
 		return nil, err
 	}
+	env.txnCtx = &txnContext{
+		active:   true,
+		readonly: false,
+		id:       seqNum,
+		ops:      make([]*WriteOp, 0, 4),
+	}
+	return env, nil
 }
 
 func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, error) {
@@ -51,8 +58,16 @@ func CreateReadOnlyTxnEnv(ctx context.Context, faasEnv types.Environment) (Env, 
 			return nil, err
 		}
 	} else if env.consistency == STRONG_CONSISTENCY {
-		if seqNum, err := faasEnv.SharedLogLinearizableCheckTail(ctx, 0 /* tag */); err == nil {
-			// if seqNum, err := env.appendTxnBeginLog(); err == nil {
+		var seqNum uint64
+		var err error
+		if env.txnCheckMethos == TXN_CHECK_SEQUENCER {
+			seqNum, err = env.faasEnv.SharedLogLinearizableCheckTail(env.faasCtx, 0 /*tag*/)
+		} else if env.txnCheckMethos == TXN_CHECK_APPEND {
+			seqNum, err = env.appendTxnBeginLog()
+		} else {
+			panic("unreachable")
+		}
+		if err == nil {
 			env.txnCtx = &txnContext{
 				active:   true,
 				readonly: true,

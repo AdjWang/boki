@@ -188,19 +188,22 @@ void Sequencer::HandleCheckTailRequest(const SharedLogMessage& request) {
         absl::ReaderMutexLock view_lk(&view_mu_);
         PANIC_IF_FROM_FUTURE_VIEW(request);
         IGNORE_IF_FROM_PAST_VIEW(request);
-        auto logspace_ptr = primary_collection_.GetLogSpaceChecked(logspace_id);
         {
-            auto locked_logspace = logspace_ptr.Lock();
-            RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
-            metalog_position = locked_logspace->replicated_metalog_position();
+            absl::MutexLock matalog_tail_lk(&metalog_tail_mu_);
+            const auto& it = last_propagated_metalog_pos_.find(logspace_id);
+            if (it != last_propagated_metalog_pos_.end()) {
+                metalog_position = it->second;
+            } else {
+                metalog_position = 0;
+            }
+            SharedLogMessage response = SharedLogMessageHelper::NewCheckTailMessage(logspace_id);
+            response.metalog_position = metalog_position;
+            bool success = SendEngineResponse(request, &response);
+            if (!success) {
+                uint16_t engine_id = request.origin_node_id;
+                HLOG_F(ERROR, "Failed to send metalog message to engine {}", engine_id);
+            }
         }
-    }
-    SharedLogMessage response = SharedLogMessageHelper::NewCheckTailMessage(logspace_id);
-    response.metalog_position = metalog_position;
-    bool success = SendEngineResponse(request, &response);
-    if (!success) {
-        uint16_t engine_id = request.origin_node_id;
-        HLOG_F(ERROR, "Failed to send metalog message to engine {}", engine_id);
     }
 }
 
@@ -221,12 +224,18 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
             locked_logspace->UpdateReplicaProgress(
                 message.origin_node_id, message.metalog_position);
             uint32_t new_position = locked_logspace->replicated_metalog_position();
+            uint32_t max_position = 0;
             for (uint32_t pos = old_position; pos < new_position; pos++) {
                 if (auto metalog = locked_logspace->GetMetaLog(pos); metalog.has_value()) {
+                    max_position = std::max(0u, metalog->metalog_seqnum());
                     replicated_metalogs.push_back(std::move(*metalog));
                 } else {
                     HLOG_F(FATAL, "Cannot get meta log at position {}", pos);
                 }
+            }
+            {
+                absl::MutexLock matalog_tail_lk(&metalog_tail_mu_);
+                last_propagated_metalog_pos_[message.logspace_id] = max_position;
             }
         }
     }

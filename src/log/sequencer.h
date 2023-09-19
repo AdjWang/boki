@@ -26,6 +26,10 @@ private:
 
     log_utils::FutureRequests future_requests_;
 
+    absl::Mutex metalog_tail_mu_;
+    absl::flat_hash_map<uint32_t /*logspace_id*/, uint32_t /*metalog_position*/>
+        last_propagated_metalog_pos_ ABSL_GUARDED_BY(metalog_tail_mu_);
+
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;

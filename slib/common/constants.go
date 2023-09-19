@@ -25,4 +25,5 @@ const AsyncWaitTimeout = 60 * time.Second
 const TagKeyBase = 36
 
 // set at linking by 'go build -ldflags="-X cs.utexas.edu/zjia/faas/slib/common.CONSISTENCY"'
-var CONSISTENCY = "SEQUENTIAL" // or STRONG
+var CONSISTENCY = "SEQUENTIAL"    // or STRONG
+var TXN_CHECK_METHOD = "CHECKSEQ" // or APPEND

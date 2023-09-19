@@ -15,6 +15,9 @@ const (
 	// for single object -> linearizable
 	// for txn -> strict serializable
 	STRONG_CONSISTENCY = "STRONG"
+
+	TXN_CHECK_SEQUENCER = "CHECKSEQ"
+	TXN_CHECK_APPEND    = "APPEND"
 )
 
 type Env interface {
@@ -24,20 +27,23 @@ type Env interface {
 }
 
 type envImpl struct {
-	faasCtx     context.Context
-	faasEnv     types.Environment
-	objsMu      sync.Mutex
-	objs        map[string]*ObjectRef
-	txnCtx      *txnContext
-	consistency string
+	faasCtx context.Context
+	faasEnv types.Environment
+	objsMu  sync.Mutex
+	objs    map[string]*ObjectRef
+	txnCtx  *txnContext
+	// global config
+	consistency    string
+	txnCheckMethos string
 }
 
 func CreateEnv(ctx context.Context, faasEnv types.Environment) Env {
 	return &envImpl{
-		faasCtx:     ctx,
-		faasEnv:     faasEnv,
-		objs:        make(map[string]*ObjectRef),
-		txnCtx:      nil,
-		consistency: common.CONSISTENCY,
+		faasCtx:        ctx,
+		faasEnv:        faasEnv,
+		objs:           make(map[string]*ObjectRef),
+		txnCtx:         nil,
+		consistency:    common.CONSISTENCY,
+		txnCheckMethos: common.TXN_CHECK_METHOD,
 	}
 }

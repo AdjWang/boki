@@ -71,7 +71,15 @@ func (obj *ObjectRef) ensureView() error {
 				return nil
 			}
 		} else {
-			seqNum, err := obj.appendNormalOpSyncLog()
+			var seqNum uint64
+			var err error
+			if obj.env.txnCheckMethos == TXN_CHECK_SEQUENCER {
+				seqNum, err = obj.env.faasEnv.SharedLogLinearizableCheckTail(obj.env.faasCtx, 0 /*tag*/)
+			} else if obj.env.txnCheckMethos == TXN_CHECK_APPEND {
+				seqNum, err = obj.appendNormalOpSyncLog()
+			} else {
+				panic("unreachable")
+			}
 			if err != nil {
 				return err
 			}
