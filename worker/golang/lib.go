@@ -3,10 +3,6 @@ package faas
 import (
 	"encoding/binary"
 	"log"
-<<<<<<< HEAD
-=======
-	_ "net/http/pprof"
->>>>>>> e164229 (add IPC stat)
 	"os"
 	"runtime"
 	"strconv"
