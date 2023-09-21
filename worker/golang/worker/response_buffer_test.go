@@ -26,15 +26,15 @@ func TestResponseBuffer(t *testing.T) {
 		rb.Enqueue(dummyMessage2)
 		msg := rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 0 {
-			t.Fatalf("response count=%v, need=%v", rc, 0)
+			t.Panicf("response count=%v, need=%v", rc, 0)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 1 {
-			t.Fatalf("response count=%v, need=%v", rc, 1)
+			t.Panicf("response count=%v, need=%v", rc, 1)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 2 {
-			t.Fatalf("response count=%v, need=%v", rc, 2)
+			t.Panicf("response count=%v, need=%v", rc, 2)
 		}
 	}
 	{
@@ -44,15 +44,15 @@ func TestResponseBuffer(t *testing.T) {
 		rb.Enqueue(dummyMessage2)
 		msg := rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 0 {
-			t.Fatalf("response count=%v, need=%v", rc, 0)
+			t.Panicf("response count=%v, need=%v", rc, 0)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 1 {
-			t.Fatalf("response count=%v, need=%v", rc, 1)
+			t.Panicf("response count=%v, need=%v", rc, 1)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 2 {
-			t.Fatalf("response count=%v, need=%v", rc, 2)
+			t.Panicf("response count=%v, need=%v", rc, 2)
 		}
 	}
 	{
@@ -62,15 +62,15 @@ func TestResponseBuffer(t *testing.T) {
 		rb.Enqueue(dummyMessage0)
 		msg := rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 0 {
-			t.Fatalf("response count=%v, need=%v", rc, 0)
+			t.Panicf("response count=%v, need=%v", rc, 0)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 1 {
-			t.Fatalf("response count=%v, need=%v", rc, 1)
+			t.Panicf("response count=%v, need=%v", rc, 1)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 2 {
-			t.Fatalf("response count=%v, need=%v", rc, 2)
+			t.Panicf("response count=%v, need=%v", rc, 2)
 		}
 	}
 	{
@@ -80,15 +80,15 @@ func TestResponseBuffer(t *testing.T) {
 		rb.Enqueue(dummyMessage1)
 		msg := rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 0 {
-			t.Fatalf("response count=%v, need=%v", rc, 0)
+			t.Panicf("response count=%v, need=%v", rc, 0)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 1 {
-			t.Fatalf("response count=%v, need=%v", rc, 1)
+			t.Panicf("response count=%v, need=%v", rc, 1)
 		}
 		msg = rb.Dequeue()
 		if rc := protocol.GetResponseIdFromMessage(msg); rc != 2 {
-			t.Fatalf("response count=%v, need=%v", rc, 2)
+			t.Panicf("response count=%v, need=%v", rc, 2)
 		}
 	}
 }

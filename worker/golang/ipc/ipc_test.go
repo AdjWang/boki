@@ -163,7 +163,7 @@ func BenchmarkFifo(b *testing.B) {
 				iIPC = (iIPC + 1) % ipcgroup
 				_, err := ipc.getWriter().Write(buf)
 				if err != nil {
-					log.Fatalf("fifo write failed: %v", err)
+					log.Panicf("fifo write failed: %v", err)
 				}
 			}
 			wg.Done()
@@ -184,7 +184,7 @@ func BenchmarkFifo(b *testing.B) {
 						break
 					}
 					if n != buflen {
-						log.Fatalf("inconsistent buflen recv_n=%v expected=%v", n, buflen)
+						log.Panicf("inconsistent buflen recv_n=%v expected=%v", n, buflen)
 					}
 					bufCh <- buf
 				}

@@ -138,7 +138,7 @@ func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Start new FuncWorker with client id %d", w.clientId)
 	err := w.doHandshake()
 	if err != nil {
-		log.Fatalf("[FATAL] Handshake failed: %v", err)
+		log.Panicf("[FATAL] Handshake failed: %v", err)
 	}
 	log.Printf("[INFO] Handshake with engine done")
 
@@ -163,15 +163,41 @@ func (w *FuncWorker) Run() {
 		for {
 			message := protocol.NewEmptyMessage()
 			if n, err := w.inputPipe.Read(message); err != nil {
-				log.Fatalf("[FATAL] Failed to read engine message: %v", err)
+				log.Panicf("[FATAL] Failed to read engine message: %v", err)
 			} else if n != protocol.MessageFullByteSize {
-				log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+				log.Panicf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 			}
 			// DEBUG: PROF
 			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
 			fifoSc.AddSample(float64(dispatchDelay))
 
 			messageCh <- message
+
+			flags := protocol.GetFlagsFromMessage(message)
+			if (flags & protocol.FLAG_kLogResponseBatchFlag) != 0 {
+				funcCall := protocol.GetFuncCallFromMessage(message)
+				opId := protocol.GetLogClientDataFromMessage(message)
+				respId := protocol.GetResponseIdFromMessage(message)
+				// func_call:client_op_id:response_id
+				shmName := ipc.GetSharedLogRespShmName(funcCall.FullCallId(), opId, respId)
+				outputRegion, err := ipc.ShmOpen(shmName, true /*readOnly*/)
+				if err != nil {
+					log.Panicf("[FATAL] Failed to read shm %v messages: %v", shmName, err)
+				}
+				if (outputRegion.Size % protocol.MessageFullByteSize) != 0 {
+					log.Panicf("[FATAL] Invalid message size: %d", outputRegion.Size)
+				}
+				messages, err := protocol.ReadMessageFromStream(outputRegion.Data)
+				for _, msg := range messages {
+					// DEBUG: PROF
+					dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+					shmSc.AddSample(float64(dispatchDelay))
+
+					messageCh <- msg
+				}
+				outputRegion.Close()
+				outputRegion.Remove()
+			}
 		}
 	}()
 	for message := range messageCh {
@@ -226,34 +252,6 @@ func (w *FuncWorker) Run() {
 			w.mux.Unlock()
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
-			flags := protocol.GetFlagsFromMessage(message)
-			if (flags & protocol.FLAG_kLogResponseBatchFlag) != 0 {
-				funcCall := protocol.GetFuncCallFromMessage(message)
-				respId := protocol.GetResponseIdFromMessage(message)
-				// func_call:client_op_id:response_id
-				shmName := fmt.Sprintf("%d_%d_%d.o", funcCall.FullCallId(), id, respId)
-				go func(shmName string) {
-					outputRegion, err := ipc.ShmOpen(shmName, true /*readOnly*/)
-					defer func() {
-						outputRegion.Close()
-						outputRegion.Remove()
-					}()
-					if err != nil {
-						log.Fatalf("[FATAL] Failed to read shm %v messages: %v", shmName, err)
-					}
-					if (outputRegion.Size % protocol.MessageFullByteSize) != 0 {
-						log.Fatalf("[FATAL] Invalid message size: %d", outputRegion.Size)
-					}
-					messages, err := protocol.ReadMessageFromStream(outputRegion.Data)
-					for _, msg := range messages {
-						// DEBUG: PROF
-						dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-						shmSc.AddSample(float64(dispatchDelay))
-
-						messageCh <- msg
-					}
-				}(shmName)
-			}
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if queue, exists := w.outgoingLogOps[id]; exists {
@@ -391,7 +389,7 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 		if methodId < len(w.configEntry.GrpcMethods) {
 			methodName = w.configEntry.GrpcMethods[methodId]
 		} else {
-			log.Fatalf("[FATAL] Invalid methodId: %d", funcCall.MethodId)
+			log.Panicf("[FATAL] Invalid methodId: %d", funcCall.MethodId)
 		}
 	}
 
@@ -526,7 +524,7 @@ func (w *FuncWorker) writeOutputToFifo(funcCall protocol.FuncCall, success bool,
 
 func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte, async bool) ([]byte, error) {
 	if async && w.useFifoForNestedCall {
-		log.Fatalf("[FATAL] Unsupported")
+		log.Panicf("[FATAL] Unsupported")
 	}
 
 	message := protocol.NewInvokeFuncCallMessage(funcCall, atomic.LoadUint64(&w.currentCall), async)
@@ -888,7 +886,7 @@ func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
 	responseData := protocol.GetInlineDataFromMessage(response)
 	logDataSize := len(responseData) - numTags*protocol.SharedLogTagByteSize - auxDataSize
 	if logDataSize <= 0 {
-		log.Fatalf("[FATAL] Size of inline data too smaler: size=%d, num_tags=%d, aux_data=%d", len(responseData), numTags, auxDataSize)
+		log.Panicf("[FATAL] Size of inline data too smaler: size=%d, num_tags=%d, aux_data=%d", len(responseData), numTags, auxDataSize)
 	}
 	tags := make([]uint64, numTags)
 	for i := 0; i < numTags; i++ {

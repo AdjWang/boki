@@ -44,7 +44,7 @@ func Serve(factory types.FuncHandlerFactory) {
 	}
 	err = config.InitFuncConfig(payload)
 	if err != nil {
-		log.Fatalf("[FATAL] InitFuncConfig failed: %s", err)
+		log.Panicf("[FATAL] InitFuncConfig failed: %s", err)
 	}
 	w, err := worker.NewFuncWorker(uint16(funcId), uint16(clientId), factory)
 	if err != nil {

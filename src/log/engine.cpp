@@ -659,12 +659,10 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             }
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
-            BufferLocalOpWithResponse(op, &response,
-                                        query_result.metalog_progress);
-            // SendLocalOpWithResponse( op, &response, query_result.metalog_progress,
-            //     [this] /*on_finished*/ (uint64_t op_id) {
-            //         ongoing_local_reads_.RemoveChecked(op_id);
-            //     });
+            SendLocalOpWithResponse( op, &response, query_result.metalog_progress,
+                [this] /*on_finished*/ (uint64_t op_id) {
+                    ongoing_local_reads_.RemoveChecked(op_id);
+                });
         } else {
             HVLOG_F(1, "Send remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
             SharedLogMessage response = SharedLogMessageHelper::NewReadOkResponse();
@@ -874,9 +872,6 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
         // avoid recursive on the stack
         query_results = DoProcessIndexQueryResults(query_results);
     }
-    ResolveLocalOpResponseBuffer([this] /*on_finished*/ (uint64_t op_id) {
-        ongoing_local_reads_.RemoveChecked(op_id);
-    });
 }
 Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResultVec& results) {
     Index::QueryResultVec more_results;
@@ -896,13 +891,11 @@ Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResul
                 LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
                 Message response = MessageHelper::NewSharedLogOpWithoutData(SharedLogResultType::EMPTY);
                 response.response_id = result.id;
-                BufferLocalOpWithResponse(op, &response,
-                                          result.metalog_progress);
-                // SendLocalOpWithResponse(
-                //     op, &response, result.metalog_progress,
-                //     [this] /*on_finished*/ (uint64_t op_id) {
-                //         ongoing_local_reads_.RemoveChecked(op_id);
-                //     });
+                SendLocalOpWithResponse(
+                    op, &response, result.metalog_progress,
+                    [this] /*on_finished*/ (uint64_t op_id) {
+                        ongoing_local_reads_.RemoveChecked(op_id);
+                    });
             } else {
                 SendReadResponseWithoutData(query, SharedLogResultType::EMPTY, result.metalog_progress);
             }
@@ -917,13 +910,11 @@ Index::QueryResultVec Engine::DoProcessIndexQueryResults(const Index::QueryResul
             if (query.origin_node_id == my_node_id()) {
                 Message response = BuildLocalReadOKResponseWithoutData(result.id);
                 LocalOp* op = ongoing_local_reads_.PeekChecked(query.client_data);
-                BufferLocalOpWithResponse(op, &response,
-                                          result.metalog_progress);
-                // SendLocalOpWithResponse(
-                //     op, &response, result.metalog_progress,
-                //     [this] /*on_finished*/ (uint64_t op_id) {
-                //         ongoing_local_reads_.RemoveChecked(op_id);
-                //     });
+                SendLocalOpWithResponse(
+                    op, &response, result.metalog_progress,
+                    [this] /*on_finished*/ (uint64_t op_id) {
+                        ongoing_local_reads_.RemoveChecked(op_id);
+                    });
             } else {
                 // perceive empty read ok as EOF
                 SendReadResponseWithoutData(query, SharedLogResultType::READ_OK, result.metalog_progress);

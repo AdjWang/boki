@@ -23,16 +23,16 @@ func TestCondPropagate(t *testing.T) {
 	{
 		client, restData, err := UnwrapData(rawData)
 		if err != nil {
-			t.Fatalf("deserialize op error: %v", err)
+			t.Panicf("deserialize op error: %v", err)
 		}
 		if !reflect.DeepEqual(restData, []byte{}) {
-			t.Fatalf("expected empty data, got %v", restData)
+			t.Panicf("expected empty data, got %v", restData)
 		}
 		if !reflect.DeepEqual(client.Deps, []uint64{future.GetLocalId()}) {
-			t.Fatalf("unexpected deps: %+v, expected %+v", client.Deps, []uint64{future.GetLocalId()})
+			t.Panicf("unexpected deps: %+v, expected %+v", client.Deps, []uint64{future.GetLocalId()})
 		}
 		if !reflect.DeepEqual(client.StreamTypes, []uint8{1}) {
-			t.Fatalf("unexpected stream types: %+v, expected %+v", client.StreamTypes, []uint8{1})
+			t.Panicf("unexpected stream types: %+v, expected %+v", client.StreamTypes, []uint8{1})
 		}
 	}
 }

@@ -102,17 +102,59 @@ void MessageConnection::SendPendingMessages() {
     size_t write_size = 0;
     {
         absl::MutexLock lk(&write_message_mu_);
-        write_size = pending_messages_.size() * sizeof(Message);
-        if (write_size > 0) {
-            write_message_buffer_.Reset();
+        size_t n_msg = pending_messages_.size();
+        size_t n_slog_msg = slog_pending_messages_.size();
+        if ((n_msg + n_slog_msg) == 0) {
+            return;
+        }
+        write_message_buffer_.Reset();
+        // handle shared log messages
+        if (n_slog_msg > 0) {
+            if (absl::GetFlag(FLAGS_func_worker_pipe_enable_batch)) {
+                // send idx[0] through fifo, send idx[1:] through shm
+                Message* head_msg = reinterpret_cast<Message*>(slog_pending_messages_.data());
+                if (n_slog_msg > 1) {
+                    head_msg->flags |= protocol::kLogResponseBatchFlag;
+                }
+
+                write_message_buffer_.AppendData(
+                    reinterpret_cast<char*>(slog_pending_messages_.data()),
+                    sizeof(Message));
+                write_size += sizeof(Message);
+                if (n_slog_msg > 1) {
+                    // full_call:message_type:client_op_id
+                    std::string shm_name = ipc::GetSharedLogRespShmName(*head_msg);
+                    // HLOG_F(INFO, "create shm name={}", shm_name);
+                    auto output_region = ipc::ShmCreate(shm_name,
+                                                        (n_slog_msg - 1) * sizeof(Message));
+                    if (output_region == nullptr) {
+                        LOG(FATAL) << "ShmCreate failed";
+                    }
+                    for (size_t i = 1; i < n_slog_msg; i++) {
+                        const char* msg_ptr = reinterpret_cast<char*>(slog_pending_messages_.data())
+                                            + i * sizeof(Message);
+                        memcpy(output_region->base() + (i - 1) * sizeof(Message),
+                            msg_ptr, sizeof(Message));
+                    }
+                }
+            } else {
+                size_t slog_write_size = n_slog_msg * sizeof(Message);
+                write_message_buffer_.AppendData(
+                    reinterpret_cast<char*>(slog_pending_messages_.data()),
+                    slog_write_size);
+                write_size += slog_write_size;
+            }
+            slog_pending_messages_.clear();
+        }
+        // handle other messages
+        if (n_msg > 0) {
+            size_t other_write_size = n_msg * sizeof(Message);
             write_message_buffer_.AppendData(
                 reinterpret_cast<char*>(pending_messages_.data()),
-                write_size);
+                other_write_size);
             pending_messages_.clear();
+            write_size += other_write_size;
         }
-    }
-    if (write_size == 0) {
-        return;
     }
     size_t n_msg = write_size / sizeof(Message);
     for (size_t i = 0; i < n_msg; i++) {
@@ -231,7 +273,11 @@ void MessageConnection::WriteMessage(const Message& message) {
     }
     {
         absl::MutexLock lk(&write_message_mu_);
-        pending_messages_.push_back(message);
+        if (protocol::MessageHelper::IsSharedLogOp(message)) {
+            slog_pending_messages_.push_back(message);
+        } else {
+            pending_messages_.push_back(message);
+        }
     }
     io_worker_->ScheduleFunction(
         this, absl::bind_front(&MessageConnection::SendPendingMessages, this));

@@ -78,5 +78,14 @@ std::string GetFuncCallOutputFifoName(uint64_t full_call_id) {
     return fmt::format("{}.o", full_call_id);
 }
 
+std::string GetSharedLogRespShmName(const protocol::Message& message) {
+    // func_call:client_op_id:response_id
+    return fmt::format(
+        "{}_{}_{}.o",
+        protocol::MessageHelper::GetFuncCall(message).full_call_id,
+        message.log_client_data,
+        message.response_id);
+}
+
 }  // namespace ipc
 }  // namespace faas
