@@ -207,7 +207,7 @@ struct Message {
     uint64_t log_tag;             // [40:48]
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
-    uint64_t _8_padding_8_;
+    uint64_t batch_size;          // [56:64] indicates batched messages through shm (without self)
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
         __attribute__ ((aligned (__FAAS_CACHE_LINE_SIZE)));
@@ -369,6 +369,11 @@ public:
         message->method_id = func_call.method_id;
         message->client_id = func_call.client_id;
         message->call_id = func_call.call_id;
+    }
+    static void SetFuncCall(Message* message, uint64_t full_call_id) {
+        FuncCall func_call;
+        func_call.full_call_id = full_call_id;
+        SetFuncCall(message, func_call);
     }
 
     static FuncCall GetFuncCall(const Message& message) {

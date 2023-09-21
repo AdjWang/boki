@@ -1,6 +1,5 @@
 #define __FAAS_USED_IN_BINDING
 #include "ipc/base.h"
-
 #include "utils/fs.h"
 
 namespace faas {
@@ -76,6 +75,15 @@ std::string GetFuncCallOutputShmName(uint64_t full_call_id) {
 
 std::string GetFuncCallOutputFifoName(uint64_t full_call_id) {
     return fmt::format("{}.o", full_call_id);
+}
+
+std::string GetSharedLogRespShmName(const protocol::Message& message) {
+    // full_call:message_type:client_op_id
+    return fmt::format(
+        "{}_{}_{}.o",
+        protocol::MessageHelper::GetFuncCall(message).full_call_id,
+        message.message_type,
+        message.log_client_data);
 }
 
 }  // namespace ipc

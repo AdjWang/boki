@@ -35,3 +35,8 @@ func GetFuncCallOutputShmName(fullCallId uint64) string {
 func GetFuncCallOutputFifoName(fullCallId uint64) string {
 	return fmt.Sprintf("%d.o", fullCallId)
 }
+
+func GetSharedLogRespShmName(fullCallId uint64, messageType uint16, opId uint64) string {
+	// full_call:message_type:client_op_id
+	return fmt.Sprintf("%d_%d_%d.o", fullCallId, messageType, opId)
+}

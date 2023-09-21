@@ -217,7 +217,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->client_id = message.log_client_id;
     op->client_data = message.log_client_data;
     op->query_index_only = false;
-    op->func_call_id = func_call.full_call_id;
+    op->full_call_id = func_call.full_call_id;
     op->user_logspace = ctx.user_logspace;
     op->metalog_progress = ctx.metalog_progress;
     op->type = MessageHelper::GetSharedLogOpType(message);
@@ -373,8 +373,8 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
                                                  uint64_t metalog_progress) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
-        if (fn_call_ctx_.contains(op->func_call_id)) {
-            FnCallContext& ctx = fn_call_ctx_[op->func_call_id];
+        if (fn_call_ctx_.contains(op->full_call_id)) {
+            FnCallContext& ctx = fn_call_ctx_[op->full_call_id];
             if (metalog_progress > ctx.metalog_progress) {
                 ctx.metalog_progress = metalog_progress;
             }
@@ -382,6 +382,7 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
     }
     SetLogReadRespTypeFlag(op, response);
     response->log_client_data = op->client_data;
+    protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
     engine_->SendFuncWorkerMessage(op->client_id, response);
 }
 

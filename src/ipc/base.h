@@ -1,6 +1,7 @@
 #pragma once
 
 #include "base/common.h"
+#include "common/protocol.h"
 
 namespace faas {
 namespace ipc {
@@ -18,6 +19,8 @@ std::string GetFuncWorkerOutputFifoName(uint16_t client_id);
 std::string GetFuncCallInputShmName(uint64_t full_call_id);
 std::string GetFuncCallOutputShmName(uint64_t full_call_id);
 std::string GetFuncCallOutputFifoName(uint64_t full_call_id);
+
+std::string GetSharedLogRespShmName(const protocol::Message& message);
 
 }  // namespace ipc
 }  // namespace faas

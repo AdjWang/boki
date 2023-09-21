@@ -55,6 +55,9 @@ private:
     absl::Mutex write_message_mu_;
     absl::InlinedVector<protocol::Message, 16>
         pending_messages_ ABSL_GUARDED_BY(write_message_mu_);
+    // Convenient for batch
+    absl::InlinedVector<protocol::Message, 64>
+        slog_pending_messages_ ABSL_GUARDED_BY(write_message_mu_);
 
     void RecvHandshakeMessage();
     void SendPendingMessages();

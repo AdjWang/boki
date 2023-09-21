@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"fmt"
 )
 
 type FuncCall struct {
@@ -169,39 +170,58 @@ func GetLogClientDataFromMessage(buffer []byte) uint64 {
 	return binary.LittleEndian.Uint64(buffer[48:56])
 }
 
-func getMessageType(buffer []byte) uint16 {
+func GetLogBatchSizeFromMessage(buffer []byte) uint64 {
+	return binary.LittleEndian.Uint64(buffer[56:64])
+}
+
+func GetMessageType(buffer []byte) uint16 {
 	firstByte := buffer[0]
 	return uint16(firstByte & ((1 << MessageTypeBits) - 1))
 }
 
 func IsHandshakeResponseMessage(buffer []byte) bool {
-	return getMessageType(buffer) == MessageType_HANDSHAKE_RESPONSE
+	return GetMessageType(buffer) == MessageType_HANDSHAKE_RESPONSE
 }
 
 func IsCreateFuncWorkerMessage(buffer []byte) bool {
-	return getMessageType(buffer) == MessageType_CREATE_FUNC_WORKER
+	return GetMessageType(buffer) == MessageType_CREATE_FUNC_WORKER
 }
 
 func IsDispatchFuncCallMessage(buffer []byte) bool {
-	return getMessageType(buffer) == MessageType_DISPATCH_FUNC_CALL
+	return GetMessageType(buffer) == MessageType_DISPATCH_FUNC_CALL
 }
 
 func IsFuncCallCompleteMessage(buffer []byte) bool {
-	return getMessageType(buffer) == MessageType_FUNC_CALL_COMPLETE
+	return GetMessageType(buffer) == MessageType_FUNC_CALL_COMPLETE
 }
 
 func IsFuncCallFailedMessage(buffer []byte) bool {
-	return getMessageType(buffer) == MessageType_FUNC_CALL_FAILED
+	return GetMessageType(buffer) == MessageType_FUNC_CALL_FAILED
 }
 
 func IsSharedLogOpMessage(buffer []byte) bool {
-	return getMessageType(buffer) == MessageType_SHARED_LOG_OP
+	return GetMessageType(buffer) == MessageType_SHARED_LOG_OP
 }
 
 func IsSharedLogAsyncResult(buffer []byte) bool {
 	resultType := GetSharedLogResultTypeFromMessage(buffer)
 	return (resultType >= SharedLogResultType_ASYNC_APPEND_OK &&
 		resultType < SharedLogResultType_BAD_ARGS)
+}
+
+func ReadMessageFromStream(buf []byte) ([][]byte, error) {
+	if (len(buf) % MessageFullByteSize) != 0 {
+		return nil, fmt.Errorf("[FATAL] Invalid message stream size: %d", len(buf))
+	}
+	nMessage := len(buf) / MessageFullByteSize
+	array := make([][]byte, nMessage)
+	for i := 0; i < nMessage; i++ {
+		buffer := make([]byte, MessageFullByteSize)
+		copy(buffer, buf[:MessageFullByteSize])
+		buf = buf[MessageFullByteSize:]
+		array[i] = buffer
+	}
+	return array, nil
 }
 
 func NewEmptyMessage() []byte {

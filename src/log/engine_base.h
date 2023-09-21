@@ -70,7 +70,7 @@ protected:
             uint64_t localid;
             uint64_t seqnum;
         };
-        uint64_t func_call_id;
+        uint64_t full_call_id;
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;

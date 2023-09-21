@@ -175,21 +175,59 @@ func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Start new FuncWorker with client id %d", w.clientId)
 	err := w.doHandshake()
 	if err != nil {
-		log.Fatalf("[FATAL] Handshake failed: %v", err)
+		log.Panicf("[FATAL] Handshake failed: %v", err)
 	}
 	log.Printf("[INFO] Handshake with engine done")
 
+	fifoSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Fifo delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	shmSc := common.NewStatisticsCollector(fmt.Sprintf("f%dc%d Shm delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	statInfoCh := make(chan statInfo, 200)
 	go reportStat(w.funcId, w.clientId, statInfoCh)
 
 	go w.servingLoop()
-	for {
-		message := protocol.NewEmptyMessage()
-		if n, err := w.inputPipe.Read(message); err != nil {
-			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
-		} else if n != protocol.MessageFullByteSize {
-			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+	messageCh := make(chan []byte, 1000)
+	go func(inputPipe *os.File) {
+		for {
+			message := protocol.NewEmptyMessage()
+			if n, err := inputPipe.Read(message); err != nil {
+				log.Panicf("[FATAL] Failed to read engine message: %v", err)
+			} else if n != protocol.MessageFullByteSize {
+				log.Panicf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+			}
+			messageCh <- message
+			// DEBUG: PROF
+			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+			fifoSc.AddSample(float64(dispatchDelay))
+			// only batch shared log ops now
+			if !protocol.IsSharedLogOpMessage(message) {
+				continue
+			}
+			if batchSize := protocol.GetLogBatchSizeFromMessage(message); batchSize > 0 {
+				funcCall := protocol.GetFuncCallFromMessage(message)
+				messageType := protocol.GetMessageType(message)
+				opId := protocol.GetLogClientDataFromMessage(message)
+				shmName := ipc.GetSharedLogRespShmName(funcCall.FullCallId(), messageType, opId)
+				outputRegion, err := ipc.ShmOpen(shmName, true /*readOnly*/)
+				log.Printf("[DEBUG] open shm %v", shmName)
+				if err != nil {
+					log.Panicf("[FATAL] Failed to read shm %v messages: %v", shmName, err)
+				}
+				if (outputRegion.Size % protocol.MessageFullByteSize) != 0 {
+					log.Panicf("[FATAL] Invalid message size: %d", outputRegion.Size)
+				}
+				messages, err := protocol.ReadMessageFromStream(outputRegion.Data)
+				for _, msg := range messages {
+					messageCh <- msg
+					// DEBUG: PROF
+					dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+					shmSc.AddSample(float64(dispatchDelay))
+				}
+				outputRegion.Close()
+				outputRegion.Remove()
+			}
 		}
+	}(w.inputPipe)
+	for message := range messageCh {
 		// DEBUG: PROF
 		dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
 		statInfoCh <- statInfo{delay: dispatchDelay, message: message}
@@ -336,7 +374,7 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 		if methodId < len(w.configEntry.GrpcMethods) {
 			methodName = w.configEntry.GrpcMethods[methodId]
 		} else {
-			log.Fatalf("[FATAL] Invalid methodId: %s", funcCall.MethodId)
+			log.Panicf("[FATAL] Invalid methodId: %s", funcCall.MethodId)
 		}
 	}
 
@@ -471,7 +509,7 @@ func (w *FuncWorker) writeOutputToFifo(funcCall protocol.FuncCall, success bool,
 
 func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte, async bool) ([]byte, error) {
 	if async && w.useFifoForNestedCall {
-		log.Fatalf("[FATAL] Unsupported")
+		log.Panicf("[FATAL] Unsupported")
 	}
 
 	message := protocol.NewInvokeFuncCallMessage(funcCall, atomic.LoadUint64(&w.currentCall), async)
@@ -845,7 +883,7 @@ func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
 	responseData := protocol.GetInlineDataFromMessage(response)
 	logDataSize := len(responseData) - numTags*protocol.SharedLogTagByteSize - auxDataSize
 	if logDataSize <= 0 {
-		log.Fatalf("[FATAL] Size of inline data too smaler: size=%d, num_tags=%d, aux_data=%d", len(responseData), numTags, auxDataSize)
+		log.Panicf("[FATAL] Size of inline data too smaler: size=%d, num_tags=%d, aux_data=%d", len(responseData), numTags, auxDataSize)
 	}
 	tags := make([]uint64, numTags)
 	for i := 0; i < numTags; i++ {
