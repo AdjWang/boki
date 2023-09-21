@@ -831,6 +831,155 @@ void Index::ProcessReadNextUntilContinue(const IndexQuery& query) {
     }
 }
 
+void Index::ProcessScan(const IndexQuery& query) {
+    DCHECK(query.direction == IndexQuery::kReadNextU);
+    DCHECK(query.initial);
+    uint64_t result_id = query.next_result_id;
+    // TODO: remove this if check after integrating view to localid
+    if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+        uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
+        if (query_view_id < view_->id()) {
+            pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
+            HVLOG(1) << "ProcessReadNextU: ViewContinueResult";
+            return;
+        }
+    }
+    uint64_t tag = query.user_tag;
+    uint64_t syncto_seqnum; // syncto not including self
+    bool sync_continue;
+    if ((query.flags & IndexQuery::kReadLocalIdFlag) == 0) {
+        // query use seqnum
+        syncto_seqnum = query.query_seqnum;
+        if (syncto_seqnum == 0) {
+            pending_query_results_.push_back(BuildResolvedResult(query, result_id));
+            HVLOG(1) << "ProcessReadNextU: ResolvedResult no preceding logs need to be synced";
+            return;
+        }
+        if ((query.flags & IndexQuery::kReadFromCachedFlag) == 0) {
+            DCHECK(!query.promised_auxdata.has_value());
+        }
+        if (query.promised_auxdata.has_value() && query.promised_auxdata->metadata.seqnum >= syncto_seqnum) {
+            // when log append finished before starting to query
+            DCHECK(result_id == 0);
+            pending_query_results_.push_back(BuildAuxContinueResult(query, syncto_seqnum));
+            HVLOG(1) << "ProcessReadNextU: AuxContinueResult";
+            return;
+        }
+        sync_continue = false;
+        HVLOG_F(1, "ProcessReadNextUntil: hop_times={} seqnum={:016X} logspace={} tag={} syncto_seqnum={:016X} continue={}",
+                query.hop_times, query.query_seqnum, query.user_logspace, tag, syncto_seqnum, sync_continue);
+    } else {
+        // query use localid
+        const auto& it = log_index_map_.find(query.query_localid);
+        if (it != log_index_map_.end()) {
+            // syncto future
+            syncto_seqnum = it->second;
+            if (syncto_seqnum == 0) {
+                pending_query_results_.push_back(BuildResolvedResult(query, result_id));
+                HVLOG(1) << "ProcessReadNextU: ResolvedResult no preceding logs need to be synced";
+                return;
+            }
+            if ((query.flags & IndexQuery::kReadFromCachedFlag) != 0) {
+                // Disable auxdata would not causing loop here: the IndexQuery::kReadLocalIdFlag
+                // would be clear in Engine::BuildIndexQuery, so the next query would never reach to here again.
+                if (!query.promised_auxdata.has_value() || query.promised_auxdata->metadata.seqnum >= syncto_seqnum) {
+                    // when log append finished before starting to query
+                    DCHECK(result_id == 0);
+                    pending_query_results_.push_back(BuildAuxContinueResult(query, syncto_seqnum));
+                    HVLOG(1) << "ProcessReadNextU: AuxContinueResult";
+                    return;
+                }
+            }
+            sync_continue = false;
+        } else {
+            // DEBUG: only scan propagated
+            UNREACHABLE();
+
+            // No need to check promised_auxdata here since querying a future seqnum,
+            // any auxdata(if got) must be previous than the future.
+            syncto_seqnum = kMaxLogSeqNum;
+            sync_continue = true;
+        }
+        HVLOG_F(1, "ProcessReadNextUntil: hop_times={} localid={:016X} logspace={} tag={} syncto_seqnum={:016X} continue={}",
+                query.hop_times, query.query_localid, query.user_logspace, tag, syncto_seqnum, sync_continue);
+    }
+    // DEBUG
+    DCHECK(!sync_continue);
+    // get index before target
+    size_t end_index;
+    uint64_t end_seqnum;
+    uint16_t end_engine_id;
+    uint64_t end_localid;
+    PerSpaceIndex* perspace_index = nullptr;
+    bool end_index_found;
+    if (!index_.contains(query.user_logspace)) {
+        end_index_found = false;
+    } else {
+        perspace_index = GetOrCreateIndex(query.user_logspace);
+        uint64_t query_end_seqnum =
+            syncto_seqnum == kMaxLogSeqNum ? syncto_seqnum : syncto_seqnum - 1;
+        end_index_found = perspace_index->FindPrev(query_end_seqnum, query.user_tag,
+            &end_seqnum, &end_engine_id, &end_localid, &end_index);
+        HVLOG_F(1, "ProcessReadNextUntil find end: found={} query_end_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
+                end_index_found, query_end_seqnum, end_seqnum, query.user_logspace, query.user_tag);
+    }
+    if (end_index_found) {
+        size_t start_index = 0;
+        uint64_t start_seqnum = query.query_start_seqnum;
+        DCHECK(result_id == 0);
+        // get view before target
+        if (query.promised_auxdata.has_value()) {
+            start_seqnum = query.promised_auxdata->metadata.seqnum;
+        }
+        uint16_t start_engine_id;
+        uint64_t start_localid;
+        if (start_seqnum != 0) {
+            uint64_t temp = start_seqnum;   // DEBUG
+            perspace_index->FindNext(start_seqnum, query.user_tag,
+                &start_seqnum, &start_engine_id, &start_localid, &start_index);
+            HVLOG_F(1, "ProcessReadNextUntil find start: query_start_seqnum={:016X} seqnum={:016X} logspace={} tag={}",
+                    temp, start_seqnum, query.user_logspace, query.user_tag);
+        }
+        if (start_seqnum < end_seqnum) {
+            // proceed multiple steps
+            absl::InlinedVector<uint64_t, 3> seqnum_to_end;
+            absl::InlinedVector<uint16_t, 3> engine_id_to_end;
+            absl::InlinedVector<uint64_t, 3> localid_to_end;
+            size_t n = perspace_index->GetRangeByIndex(start_index+1, end_index, tag,
+                [this, &seqnum_to_end, &engine_id_to_end, &localid_to_end](size_t index, uint64_t seqnum, uint16_t engine_id, uint64_t localid) {
+                    seqnum_to_end.push_back(seqnum);
+                    engine_id_to_end.push_back(engine_id);
+                    localid_to_end.push_back(localid);
+                    HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", seqnum);
+                    return false;   // stop
+                });
+            DCHECK_GT(n, 0u);
+            pending_query_results_.push_back(
+                BuildFoundRangeResult(query, view_->id(), start_seqnum, start_engine_id, start_localid,
+                end_seqnum, protocol::kInvalidLogLocalId,
+                seqnum_to_end, engine_id_to_end, localid_to_end,
+                result_id++));
+        } else if (start_seqnum == end_seqnum) {
+            // proceed only one step
+            pending_query_results_.push_back(
+                BuildFoundResult(query, view_->id(), end_seqnum, end_engine_id, end_localid, result_id++));
+            HVLOG_F(1, "ProcessReadNextU: FoundResult: seqnum=0x{:016X}", end_seqnum);
+        } else /* if (start_seqnum > end_seqnum) */ {
+            // this may happen when got a query_start_seqnum belongs to
+            // (last_seqnum, target_seqnum) of the tag, where end_seqnum = last_seqnum
+            HVLOG_F(1, "ProcessReadNextU: start_seqnum={:016X} out of range [{:016X}, {:016X}]",
+                        start_seqnum, query.query_start_seqnum, end_seqnum);
+            pending_query_results_.push_back(BuildResolvedResult(query, result_id));
+        }
+    } else if (view_->id() > 0) {
+        pending_query_results_.push_back(BuildViewContinueResult(query, false, 0, 0, 0, result_id));
+        HVLOG(1) << "ProcessReadNextU: ContinueResult";
+        return;
+    } else {
+        pending_query_results_.push_back(BuildNotFoundResult(query, result_id));
+        HVLOG(1) << "ProcessReadNextU: NotFoundResult";
+    }
+}
 void Index::ProcessReadNextUntil(const IndexQuery& query) {
     // if (query.initial) {
     //     ProcessReadNextUntilInitial(query);
@@ -838,6 +987,11 @@ void Index::ProcessReadNextUntil(const IndexQuery& query) {
     //     ProcessReadNextUntilContinue(query);
     // }
     // return;
+
+    DCHECK(query.initial);
+    ProcessReadNextUntilInitial(query);
+    // ProcessScan(query);
+    return;
 
     DCHECK(query.direction == IndexQuery::kReadNextU);
     uint64_t result_id = query.next_result_id;
@@ -1033,6 +1187,36 @@ IndexQueryResult Index::BuildFoundRangeResult(const IndexQuery& query,
 
             .end_seqnum = end_seqnum,
             .future_localid = future_localid,
+        },
+    };
+}
+IndexQueryResult Index::BuildFoundRangeResult(const IndexQuery& query,
+                                              uint16_t view_id, uint64_t seqnum,
+                                              uint16_t engine_id, uint64_t localid,
+                                              uint64_t end_seqnum, uint64_t future_localid,
+                                              absl::InlinedVector<uint64_t, 3> seqnum_to_end,
+                                              absl::InlinedVector<uint16_t, 3> engine_id_to_end,
+                                              absl::InlinedVector<uint64_t, 3> localid_to_end,
+                                              uint64_t result_id) {
+    DCHECK(query.direction == IndexQuery::ReadDirection::kReadNextU);
+    return IndexQueryResult {
+        .state = IndexQueryResult::kFoundRange,
+        .metalog_progress = query.initial ? index_metalog_progress()
+                                          : query.metalog_progress,
+        .next_view_id = view_id,
+        .id = result_id,
+        .original_query = query,
+        .found_result = IndexFoundResult {
+            .view_id = view_id,
+            .engine_id = engine_id,
+            .seqnum = seqnum,
+            .localid = localid,
+
+            .end_seqnum = end_seqnum,
+            .future_localid = future_localid,
+            .seqnum_to_end = seqnum_to_end,
+            .engine_id_to_end = engine_id_to_end,
+            .localid_to_end = localid_to_end,
         },
     };
 }

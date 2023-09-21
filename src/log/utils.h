@@ -638,6 +638,7 @@ public:
             absl::MutexLock lk(&mu_);
             counter_ = 0;
             target_ = std::numeric_limits<uint64_t>::max();
+            response_buffer_.clear();
         }
         {
             absl::MutexLock lk(&buffer_mu_);
@@ -645,22 +646,35 @@ public:
         }
     }
 
-    bool AddCountAndCheck() {
+    bool AddCountAndCheck(uint64_t response_id, const protocol::Message& response) {
         absl::MutexLock lk(&mu_);
         ++counter_;
+
+        DCHECK(response_buffer_.find(response_id) == response_buffer_.end());
+        response_buffer_.emplace(response_id, response);
         // VLOG_F(1, "AddCountAndCheck n={}, check={}, bt={}", 
         //              n, counter_==target_, utils::DumpStackTrace());
         return counter_ == target_;
     }
-    bool SetTargetAndCheck(uint64_t target) {
+    bool SetTargetAndCheck(uint64_t target, const protocol::Message& response) {
         absl::MutexLock lk(&mu_);
         DCHECK(target >= 0);
-        DCHECK(target_ == std::numeric_limits<uint64_t>::max())
-            << fmt::format("[{}] target_={}", (void*)this, target_);    // should set only once
+        DCHECK_EQ(target_, std::numeric_limits<uint64_t>::max());
         target_ = target;
+
+        DCHECK(response_buffer_.find(target) == response_buffer_.end());
+        response_buffer_.emplace(target, response);
         // VLOG_F(1, "SetTargetAndCheck[{}] target={}, check={}, bt={}", 
         //           (void*)this, target, counter_==target_, utils::DumpStackTrace());
         return counter_ == target_;
+    }
+    void PollAll(std::vector<protocol::Message>* responses) {
+        DCHECK_NE(responses, nullptr);
+        absl::MutexLock lk(&mu_);
+        for (auto& [response_id, message] : response_buffer_) {
+            responses->push_back(message);
+        }
+        response_buffer_.clear();
     }
 
     void BufferRequestId(uint64_t seqnum, uint64_t id) {
@@ -683,6 +697,7 @@ private:
     absl::Mutex mu_;
     uint64_t counter_ ABSL_GUARDED_BY(mu_);
     uint64_t target_ ABSL_GUARDED_BY(mu_);
+    std::map<uint64_t, protocol::Message> response_buffer_ ABSL_GUARDED_BY(mu_);
 
     absl::Mutex buffer_mu_;
     absl::flat_hash_map<uint64_t, uint64_t> seqnum_id_map_ ABSL_GUARDED_BY(buffer_mu_);

@@ -548,6 +548,15 @@ bool Engine::SendFuncWorkerMessage(uint16_t client_id, Message* message) {
     return true;
 }
 
+bool Engine::SendFuncWorkerMessage(uint16_t client_id, std::vector<Message>& messages) {
+    auto func_worker = worker_manager_.GetFuncWorker(client_id);
+    if (func_worker == nullptr) {
+        return false;
+    }
+    func_worker->SendMessage(messages);
+    return true;
+}
+
 void Engine::ExternalFuncCallCompleted(const FuncCall& func_call,
                                        std::span<const char> output, int32_t processing_time) {
     inflight_external_requests_.fetch_add(-1, std::memory_order_relaxed);

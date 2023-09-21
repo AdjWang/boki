@@ -146,6 +146,7 @@ private:
     void SendGatewayMessage(const protocol::GatewayMessage& message,
                             std::span<const char> payload = EMPTY_CHAR_SPAN);
     bool SendFuncWorkerMessage(uint16_t client_id, protocol::Message* message);
+    bool SendFuncWorkerMessage(uint16_t client_id, std::vector<protocol::Message>& messages);
     void OnExternalFuncCall(const protocol::FuncCall& func_call, uint32_t logspace,
                             std::span<const char> input);
     void ExternalFuncCallCompleted(const protocol::FuncCall& func_call,

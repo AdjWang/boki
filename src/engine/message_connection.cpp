@@ -266,11 +266,6 @@ void MessageConnection::RecvHandshakeMessage() {
 }
 
 void MessageConnection::WriteMessage(const Message& message) {
-    if (is_func_worker_connection()
-            && absl::GetFlag(FLAGS_func_worker_pipe_direct_write)
-            && WriteMessageWithFifo(message)) {
-        return;
-    }
     {
         absl::MutexLock lk(&write_message_mu_);
         if (protocol::MessageHelper::IsSharedLogOp(message)) {
@@ -278,6 +273,18 @@ void MessageConnection::WriteMessage(const Message& message) {
         } else {
             pending_messages_.push_back(message);
         }
+    }
+    io_worker_->ScheduleFunction(
+        this, absl::bind_front(&MessageConnection::SendPendingMessages, this));
+}
+
+void MessageConnection::WriteMessage(const std::vector<Message>& messages) {
+    for (const Message& message : messages) {
+        DCHECK(protocol::MessageHelper::IsSharedLogOp(message));
+    }
+    {
+        absl::MutexLock lk(&write_message_mu_);
+        slog_pending_messages_.insert(slog_pending_messages_.end(), messages.begin(), messages.end());
     }
     io_worker_->ScheduleFunction(
         this, absl::bind_front(&MessageConnection::SendPendingMessages, this));

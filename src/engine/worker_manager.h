@@ -50,6 +50,7 @@ public:
 
     // Must be thread-safe
     void SendMessage(protocol::Message* message);
+    void SendMessage(std::vector<protocol::Message>& messages);
 
 private:
     uint16_t func_id_;

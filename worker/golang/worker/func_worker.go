@@ -849,11 +849,19 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 		result := protocol.GetSharedLogResultTypeFromMessage(response)
 		if result == protocol.SharedLogResultType_ASYNC_APPEND_OK {
 			localId := protocol.GetLogLocalIdFromMessage(response)
-			resolve := func() (uint64, error) {
-				return w.AwaitSharedLogAppend(ctx, localId)
+			// resolve := func() (uint64, error) {
+			// 	return w.AwaitSharedLogAppend(ctx, localId)
+			// }
+			// // seqNum is invalid when appending
+			// return types.NewFuture(localId, protocol.InvalidLogSeqNum, resolve), nil
+			// DEBUG
+			seqNum, err := w.AwaitSharedLogAppend(ctx, localId)
+			if err != nil {
+				return nil, err
 			}
-			// seqNum is invalid when appending
-			return types.NewFuture(localId, protocol.InvalidLogSeqNum, resolve), nil
+			return types.NewDummyFuture(localId, seqNum, func() (uint64, error) {
+				return seqNum, nil
+			}), nil
 		} else if result == protocol.SharedLogResultType_DISCARDED {
 			log.Printf("[ERROR] Async Append first discarded, will retry")
 			if remainingRetries > 0 {

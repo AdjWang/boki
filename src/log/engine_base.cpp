@@ -377,19 +377,26 @@ void EngineBase::SendLocalOpWithResponse(LocalOp* op, Message* response,
     SetLogReadRespTypeFlag(op, response);
     protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
     response->log_client_data = op->client_data;
-    engine_->SendFuncWorkerMessage(op->client_id, response);
+    if (op->type != protocol::SharedLogOpType::READ_SYNCTO) {
+        engine_->SendFuncWorkerMessage(op->client_id, response);
+    }
     // HVLOG_F(1, "EngineBase send response op_id={} response_id={} cid={} resp_flags={:08X} seqnum={:016X} aux_size={}",
     //     op->id, response->response_id, op->client_data, response->flags, response->log_seqnum, response->log_aux_data_size);
 
     bool finished;
     if ((response->flags & protocol::kLogResponseContinueFlag) != 0) {
         // Continue
-        finished = op->response_counter.AddCountAndCheck();
+        finished = op->response_counter.AddCountAndCheck(response->response_id, *response);
     } else {
         // EOFData or EOF
-        finished = op->response_counter.SetTargetAndCheck(response->response_id);
+        finished = op->response_counter.SetTargetAndCheck(response->response_id, *response);
     }
     if (finished) {
+        if (op->type == protocol::SharedLogOpType::READ_SYNCTO) {
+            std::vector<protocol::Message> responses;
+            op->response_counter.PollAll(&responses);
+            engine_->SendFuncWorkerMessage(op->client_id, responses);
+        }
         // reclaim resources
         if (on_finished != nullptr) {
             // Resource reclaiming operations from engine must be performed

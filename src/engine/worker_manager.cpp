@@ -150,5 +150,12 @@ void FuncWorker::SendMessage(Message* message) {
     message_connection_->as_ptr<MessageConnection>()->WriteMessage(*message);
 }
 
+void FuncWorker::SendMessage(std::vector<Message>& messages) {
+    for (Message& message : messages) {
+        message.send_timestamp = GetMonotonicMicroTimestamp();
+    }
+    message_connection_->as_ptr<MessageConnection>()->WriteMessage(messages);
+}
+
 }  // namespace engine
 }  // namespace faas

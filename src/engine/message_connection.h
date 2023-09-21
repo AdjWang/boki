@@ -30,6 +30,7 @@ public:
 
     // Must be thread-safe
     void WriteMessage(const protocol::Message& message);
+    void WriteMessage(const std::vector<protocol::Message>& messages);
 
 private:
     enum State { kCreated, kHandshake, kRunning, kClosing, kClosed };

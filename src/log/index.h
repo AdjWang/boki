@@ -16,6 +16,9 @@ struct IndexFoundResult {
     // Used by syncto
     uint64_t end_seqnum;
     uint64_t future_localid;
+    absl::InlinedVector<uint64_t, 3> seqnum_to_end;
+    absl::InlinedVector<uint16_t, 3> engine_id_to_end;
+    absl::InlinedVector<uint64_t, 3> localid_to_end;
 };
 
 struct IndexQuery {
@@ -149,6 +152,7 @@ private:
     void ProcessReadNextUntil(const IndexQuery& query);
     void ProcessReadNextUntilInitial(const IndexQuery& query);
     void ProcessReadNextUntilContinue(const IndexQuery& query);
+    void ProcessScan(const IndexQuery& query);
 
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id, uint64_t* localid);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id, uint64_t* localid);
@@ -159,6 +163,13 @@ private:
     IndexQueryResult BuildFoundRangeResult(const IndexQuery& query, uint16_t view_id,
                                            uint64_t seqnum, uint16_t engine_id, uint64_t localid,
                                            uint64_t end_seqnum, uint64_t future_localid, uint64_t result_id=0);
+    IndexQueryResult BuildFoundRangeResult(const IndexQuery& query, uint16_t view_id,
+                                           uint64_t seqnum, uint16_t engine_id, uint64_t localid,
+                                           uint64_t end_seqnum, uint64_t future_localid,
+                                           absl::InlinedVector<uint64_t, 3> seqnum_to_end,
+                                           absl::InlinedVector<uint16_t, 3> engine_id_to_end,
+                                           absl::InlinedVector<uint64_t, 3> localid_to_end,
+                                           uint64_t result_id=0);
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
                                       uint64_t seqnum, uint16_t engine_id, uint64_t localid, uint64_t result_id=0);
     IndexQueryResult BuildResolvedResult(const IndexQuery& query, uint64_t result_id=0);
