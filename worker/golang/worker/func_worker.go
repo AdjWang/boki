@@ -76,9 +76,9 @@ type FuncWorker struct {
 	engineConn           net.Conn
 	newFuncCallChan      chan []byte
 	inputPipe            *os.File
-	// outputPipe           *os.File // protected by mux
+	outputPipe           *os.File // protected by mux
 	// DEBUG
-	outputPipe        *dbgPipe                 // protected by mux
+	// outputPipe        *dbgPipe                 // protected by mux
 	outgoingFuncCalls map[uint64](chan []byte) // protected by mux
 	// an async request returns twice, first to asyncOutgoing, second to outgoing
 	asyncOutgoingLogOps map[uint64](chan []byte) // protected by mux
@@ -179,7 +179,9 @@ func (w *FuncWorker) Run() {
 			} else {
 				if ch, exists := w.outgoingLogOps[id]; exists {
 					ch <- message
-					delete(w.outgoingLogOps, id)
+					if !protocol.IsSharedLogIPCBenchResult(message) {
+						delete(w.outgoingLogOps, id)
+					}
 				} else {
 					log.Printf("[WARN] Unexpected log message id for sync ops: %d", id)
 				}
@@ -250,8 +252,8 @@ func (w *FuncWorker) doHandshake() error {
 		return err
 	}
 	// DEBUG
-	w.outputPipe = newDebugPipe(op)
-	// w.outputPipe = op
+	// w.outputPipe = newDebugPipe(op)
+	w.outputPipe = op
 
 	return nil
 }
@@ -1091,4 +1093,31 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	} else {
 		return fmt.Errorf("Failed to set auxiliary data for log (seqnum %#016x)", seqNum)
 	}
+}
+
+func (w *FuncWorker) SharedLogIPCBench(ctx context.Context, batchSize uint64) error {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewSharedLogIPCBenchMessage(currentCallId, w.clientId, batchSize, id)
+
+	w.mux.Lock()
+	outputChan := make(chan []byte, 1)
+	w.outgoingLogOps[id] = outputChan
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	if err != nil {
+		return err
+	}
+
+	for i := uint64(0); i < batchSize; i++ {
+		response := <-outputChan
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result != protocol.SharedLogResultType_IPC_BENCH_OK {
+			return fmt.Errorf("Failed to get ipc bench response, got=%d", result)
+		}
+	}
+	w.mux.Lock()
+	delete(w.outgoingLogOps, id)
+	w.mux.Unlock()
+	return nil
 }

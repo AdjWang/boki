@@ -108,7 +108,8 @@ enum class SharedLogOpType : uint16_t {
     ASYNC_READ_PREV    = 0x23,  // FuncWorker to Engine, Engine to Index
     ASYNC_READ_LOCALID = 0x24,  // FuncWorker to Engine, Engine to Index
 
-    RESPONSE           = 0x30
+    RESPONSE           = 0x30,
+    IPC_BENCH          = 0x31,
 };
 
 class SharedLogOpTypeHelper {
@@ -149,11 +150,12 @@ enum class SharedLogResultType : uint16_t {
     ASYNC_EMPTY       = 0x33,  // Cannot find log entries satisfying requirements
     // NO ASYNC_DATA_LOST because all async reads are local index reads
     // Error results
-    BAD_ARGS    = 0x40,
-    DISCARDED   = 0x41,  // Log to append is discarded
-    EMPTY       = 0x42,  // Cannot find log entries satisfying requirements
-    DATA_LOST   = 0x43,  // Failed to extract log data
-    TRIM_FAILED = 0x44
+    BAD_ARGS          = 0x40,
+    DISCARDED         = 0x41,  // Log to append is discarded
+    EMPTY             = 0x42,  // Cannot find log entries satisfying requirements
+    DATA_LOST         = 0x43,  // Failed to extract log data
+    TRIM_FAILED       = 0x44,
+    IPC_BENCH_OK      = 0x45,
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -199,10 +201,13 @@ struct Message {
     uint16_t log_num_tags;        // [36:38]
     uint16_t log_aux_data_size;   // [38:40]
 
-    uint64_t log_tag;             // [40:48]
+    union {
+        uint64_t log_tag;         // [40:48] Used in SHARED_LOG_OP, as query_tag in log reading
+        uint64_t response_id;     // [40:48] Used in SHARED_LOG_OP
+    };
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
-    uint64_t _8_padding_8_;
+    uint64_t bench_size;          // [56:64]
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
         __attribute__ ((aligned (__FAAS_CACHE_LINE_SIZE)));

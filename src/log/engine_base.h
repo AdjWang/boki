@@ -73,6 +73,7 @@ protected:
     virtual void HandleLocalTrim(LocalOp* op) = 0;
     virtual void HandleLocalRead(LocalOp* op) = 0;
     virtual void HandleLocalSetAuxData(LocalOp* op) = 0;
+    virtual void HandleLocalIPCBench(LocalOp* op) = 0;
 
     void LocalOpHandler(LocalOp* op);
 

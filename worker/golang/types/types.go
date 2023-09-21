@@ -88,6 +88,8 @@ type Environment interface {
 	AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
 	AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
 	AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
+
+	SharedLogIPCBench(ctx context.Context, batchSize uint64) error
 }
 
 type FuncHandler interface {

@@ -310,6 +310,17 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
     }
 }
 
+void Engine::HandleLocalIPCBench(LocalOp* op) {
+    uint64_t batch_size = op->seqnum;
+    // HVLOG_F(1, "[DEBUG] HandleLocalIPCBench batch_size={}", batch_size);
+    Message response = MessageHelper::NewSharedLogOpSucceeded(
+        SharedLogResultType::IPC_BENCH_OK);
+    for (uint64_t i = 1; i < batch_size; i++) {
+        IntermediateLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
+    }
+    FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
+}
+
 #undef ONHOLD_IF_SEEN_FUTURE_VIEW
 
 // Start handlers for remote messages

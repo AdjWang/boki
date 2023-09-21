@@ -61,6 +61,8 @@ const (
 	SharedLogOpType_ASYNC_READ_NEXT_B  uint16 = 0x22
 	SharedLogOpType_ASYNC_READ_PREV    uint16 = 0x23
 	SharedLogOpType_ASYNC_READ_LOCALID uint16 = 0x24
+
+	SharedLogOpType_IPC_BENCH uint16 = 0x31
 )
 
 // SharedLogResultType enum
@@ -79,11 +81,12 @@ const (
 	SharedLogResultType_ASYNC_EMPTY     uint16 = 0x33
 	// NO ASYNC_DATA_LOST because all async reads are local index reads
 	// Error results
-	SharedLogResultType_BAD_ARGS    uint16 = 0x40
-	SharedLogResultType_DISCARDED   uint16 = 0x41
-	SharedLogResultType_EMPTY       uint16 = 0x42
-	SharedLogResultType_DATA_LOST   uint16 = 0x43
-	SharedLogResultType_TRIM_FAILED uint16 = 0x44
+	SharedLogResultType_BAD_ARGS     uint16 = 0x40
+	SharedLogResultType_DISCARDED    uint16 = 0x41
+	SharedLogResultType_EMPTY        uint16 = 0x42
+	SharedLogResultType_DATA_LOST    uint16 = 0x43
+	SharedLogResultType_TRIM_FAILED  uint16 = 0x44
+	SharedLogResultType_IPC_BENCH_OK uint16 = 0x45
 )
 
 const MaxLogSeqnum = uint64(0xffff000000000000)
@@ -177,6 +180,11 @@ func IsSharedLogAsyncResult(buffer []byte) bool {
 	resultType := GetSharedLogResultTypeFromMessage(buffer)
 	return (resultType >= SharedLogResultType_ASYNC_APPEND_OK &&
 		resultType < SharedLogResultType_BAD_ARGS)
+}
+
+func IsSharedLogIPCBenchResult(buffer []byte) bool {
+	resultType := GetSharedLogResultTypeFromMessage(buffer)
+	return resultType == SharedLogResultType_IPC_BENCH_OK
 }
 
 func NewEmptyMessage() []byte {
@@ -299,6 +307,17 @@ func NewSharedLogSetAuxDataMessage(currentCallId uint64, myClientId uint16, seqN
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
+	return buffer
+}
+
+func NewSharedLogIPCBenchMessage(currentCallId uint64, myClientId uint16, batchSize uint64, clientData uint64) []byte {
+	buffer := NewEmptyMessage()
+	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
+	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
+	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_IPC_BENCH)
+	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
+	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	binary.LittleEndian.PutUint64(buffer[56:64], batchSize)
 	return buffer
 }
 

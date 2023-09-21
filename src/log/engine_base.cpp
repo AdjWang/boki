@@ -130,6 +130,9 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::SET_AUXDATA:
         HandleLocalSetAuxData(op);
         break;
+    case SharedLogOpType::IPC_BENCH:
+        HandleLocalIPCBench(op);
+        break;
     default:
         UNREACHABLE();
     }
@@ -240,6 +243,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::SET_AUXDATA:
         op->seqnum = message.log_seqnum;
         op->data.AppendData(MessageHelper::GetInlineData(message));
+        break;
+    case SharedLogOpType::IPC_BENCH:
+        op->seqnum = message.bench_size;
         break;
     default:
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
