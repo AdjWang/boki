@@ -33,12 +33,14 @@ func (sc *StatisticsCollector) AddSample(item float64) {
 	// add sample
 	sc.samples = append(sc.samples, item)
 	// check report
-	if len(sc.samples) >= sc.reportSamples && time.Since(sc.lastReportTime) > sc.reportInterval {
+	elapsed := time.Since(sc.lastReportTime)
+	if len(sc.samples) >= sc.reportSamples && elapsed > sc.reportInterval {
 		stat_res := getStatistics(sc.samples)
 		sc.samples = sc.samples[:0] // clear all
 		sc.lastReportTime = time.Now()
-		log.Printf("[STAT] %v statistics (%v samples) p30=%.2f p50=%.2f p70=%.2f p90=%.2f p99=%.2f p99.9=%.2f",
-			sc.title, stat_res.num, stat_res.p30, stat_res.p50, stat_res.p70, stat_res.p90, stat_res.p99, stat_res.p99_9)
+		log.Printf("[STAT] %v statistics (%v samples %.1f ops) p30=%.2f p50=%.2f p70=%.2f p90=%.2f p99=%.2f p99.9=%.2f",
+			sc.title, stat_res.num, float64(stat_res.num)/elapsed.Seconds(),
+			stat_res.p30, stat_res.p50, stat_res.p70, stat_res.p90, stat_res.p99, stat_res.p99_9)
 	}
 }
 

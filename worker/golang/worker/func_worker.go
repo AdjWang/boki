@@ -124,25 +124,43 @@ func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Start new FuncWorker with client id %d", w.clientId)
 	err := w.doHandshake()
 	if err != nil {
-		log.Fatalf("[FATAL] Handshake failed: %v", err)
+		log.Panicf("[FATAL] Handshake failed: %v", err)
 	}
 	log.Printf("[INFO] Handshake with engine done")
 
 	go w.servingLoop()
-	appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	dispatchSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Dispatch delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	callSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Call delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	slogSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d SLog delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+
 	for {
 		message := protocol.NewEmptyMessage()
 		if n, err := w.inputPipe.Read(message); err != nil {
-			log.Fatalf("[FATAL] Failed to read engine message: %v", err)
+			log.Panicf("[FATAL] Failed to read engine message: %v", err)
 		} else if n != protocol.MessageFullByteSize {
-			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
+			log.Panicf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
+		// DEBUG: PROF
+		dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		sc.AddSample(float64(dispatchDelay))
+
 		if protocol.IsDispatchFuncCallMessage(message) {
+			// DEBUG: PROF
+			// go func(dispatchDelay int64, message []byte) {
+			dispatchSc.AddSample(float64(dispatchDelay))
+			// }(dispatchDelay, message)
+
 			w.newFuncCallChan <- message
 		} else if protocol.IsFuncCallCompleteMessage(message) || protocol.IsFuncCallFailedMessage(message) {
+			// DEBUG: PROF
+			// go func(dispatchDelay int64, message []byte) {
+			callSc.AddSample(float64(dispatchDelay))
+			// }(dispatchDelay, message)
+
 			funcCall := protocol.GetFuncCallFromMessage(message)
 			w.mux.Lock()
 			if ch, exists := w.outgoingFuncCalls[funcCall.FullCallId()]; exists {
@@ -153,19 +171,20 @@ func (w *FuncWorker) Run() {
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			// DEBUG: PROF
-			dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-			sc.AddSample(float64(dispatchDelay))
-			resultType := protocol.GetSharedLogResultTypeFromMessage(message)
-			switch resultType {
-			case protocol.SharedLogResultType_APPEND_OK:
-				fallthrough
-			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
-				appendSc.AddSample(float64(dispatchDelay))
-			case protocol.SharedLogResultType_READ_OK:
-				readSc.AddSample(float64(dispatchDelay))
-			default:
-				otherSc.AddSample(float64(dispatchDelay))
-			}
+			// go func(dispatchDelay int64, message []byte) {
+			slogSc.AddSample(float64(dispatchDelay))
+			// 	resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+			// 	switch resultType {
+			// 	case protocol.SharedLogResultType_APPEND_OK:
+			// 		fallthrough
+			// 	case protocol.SharedLogResultType_ASYNC_APPEND_OK:
+			// 		appendSc.AddSample(float64(dispatchDelay))
+			// 	case protocol.SharedLogResultType_READ_OK:
+			// 		readSc.AddSample(float64(dispatchDelay))
+			// 	default:
+			// 		otherSc.AddSample(float64(dispatchDelay))
+			// 	}
+			// }(dispatchDelay, message)
 
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
@@ -300,7 +319,7 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 		if methodId < len(w.configEntry.GrpcMethods) {
 			methodName = w.configEntry.GrpcMethods[methodId]
 		} else {
-			log.Fatalf("[FATAL] Invalid methodId: %s", funcCall.MethodId)
+			log.Panicf("[FATAL] Invalid methodId: %s", funcCall.MethodId)
 		}
 	}
 
@@ -435,7 +454,7 @@ func (w *FuncWorker) writeOutputToFifo(funcCall protocol.FuncCall, success bool,
 
 func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte, async bool) ([]byte, error) {
 	if async && w.useFifoForNestedCall {
-		log.Fatalf("[FATAL] Unsupported")
+		log.Panicf("[FATAL] Unsupported")
 	}
 
 	message := protocol.NewInvokeFuncCallMessage(funcCall, atomic.LoadUint64(&w.currentCall), async)
@@ -809,7 +828,7 @@ func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
 	responseData := protocol.GetInlineDataFromMessage(response)
 	logDataSize := len(responseData) - numTags*protocol.SharedLogTagByteSize - auxDataSize
 	if logDataSize <= 0 {
-		log.Fatalf("[FATAL] Size of inline data too smaler: size=%d, num_tags=%d, aux_data=%d", len(responseData), numTags, auxDataSize)
+		log.Panicf("[FATAL] Size of inline data too smaler: size=%d, num_tags=%d, aux_data=%d", len(responseData), numTags, auxDataSize)
 	}
 	tags := make([]uint64, numTags)
 	for i := 0; i < numTags; i++ {
