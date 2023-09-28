@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"encoding/binary"
+
+	"cs.utexas.edu/zjia/faas/common"
 )
 
 type FuncCall struct {
@@ -107,6 +109,9 @@ const (
 	FLAG_UseFifoForNestedCall      uint32 = (1 << 1)
 	FLAG_kAsyncInvokeFuncFlag      uint32 = (1 << 2)
 	FLAG_kLogDataCachedFlag        uint32 = (1 << 3)
+
+	FLAG_kLogReadBenchCacheHitFlag   uint32 = (1 << 4) // Local cache hit or do remote read
+	FLAG_kLogReadBenchMetaInsideFlag uint32 = (1 << 5) // Index view satisified or pending the target metalog_position
 )
 
 func GetFlagsFromMessage(buffer []byte) uint32 {
@@ -265,6 +270,7 @@ func NewSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag uint64
 	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
+	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
 	return buffer
 }
 
@@ -285,6 +291,7 @@ func NewAsyncSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag u
 	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
+	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
 	return buffer
 }
 
@@ -296,6 +303,7 @@ func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, 
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], localId)
+	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
 	return buffer
 }
 
@@ -318,6 +326,7 @@ func NewSharedLogIPCBenchMessage(currentCallId uint64, myClientId uint16, batchS
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[56:64], batchSize)
+	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
 	return buffer
 }
 
@@ -355,8 +364,16 @@ func GetInlineDataFromMessage(buffer []byte) []byte {
 	}
 }
 
+func GetLogDispatchDelayInMessage(buffer []byte) int32 {
+	return int32(binary.LittleEndian.Uint32(buffer[40:48]))
+}
+
 func SetDispatchDelayInMessage(buffer []byte, dispatchDelay int32) {
 	binary.LittleEndian.PutUint32(buffer[8:12], uint32(dispatchDelay))
+}
+
+func GetQueryDelayInMessage(buffer []byte) int64 {
+	return int64(binary.LittleEndian.Uint64(buffer[56:64]))
 }
 
 func BuildLogTagsBuffer(tags []uint64) []byte {

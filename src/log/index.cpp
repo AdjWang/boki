@@ -253,7 +253,10 @@ since pending_query metalog_position={} not larger than indexed_metalog_position
                         uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
                 ProcessQuery(query);
             } else {
-                pending_queries_.insert(std::make_pair(position, query));
+                // DEBUG: stat temporary
+                IndexQuery& temp_query = const_cast<IndexQuery&>(query);
+                temp_query.metalog_inside = false;
+                pending_queries_.insert(std::make_pair(position, temp_query));
             }
         }
     } else {

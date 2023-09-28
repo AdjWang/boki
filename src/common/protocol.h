@@ -167,6 +167,9 @@ constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
 constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
 constexpr uint32_t kLogDataCachedFlag             = (1 << 3);   // Used to check if the first async response had carried the log data
 
+constexpr uint32_t kLogReadBenchCacheHitFlag      = (1 << 4);   // Local cache hit or do remote read
+constexpr uint32_t kLogReadBenchMetaInsideFlag    = (1 << 5);   // Index view satisified or pending the target metalog_position
+
 struct Message {
     struct {
         uint16_t message_type : 4;
@@ -204,10 +207,14 @@ struct Message {
     union {
         uint64_t log_tag;         // [40:48] Used in SHARED_LOG_OP, as query_tag in log reading
         uint64_t response_id;     // [40:48] Used in SHARED_LOG_OP
+        int64_t log_dispatch_delay;
     };
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
-    uint64_t bench_size;          // [56:64]
+    union {
+        uint64_t bench_size;          // [56:64]
+        int64_t query_delay;
+    };
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
         __attribute__ ((aligned (__FAAS_CACHE_LINE_SIZE)));
@@ -265,6 +272,7 @@ struct GatewayMessage {
 static_assert(sizeof(GatewayMessage) == 16, "Unexpected GatewayMessage size");
 
 constexpr uint16_t kReadInitialFlag = (1 << 0);
+constexpr uint32_t kReadBenchMetaInsideFlag    = (1 << 1);   // Index view satisified or pending the target metalog_position
 
 struct SharedLogMessage {
     uint16_t op_type;         // [0:2]

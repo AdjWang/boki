@@ -24,7 +24,9 @@ using protocol::SharedLogResultType;
 EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
-      next_local_op_id_(0) {}
+      next_local_op_id_(0),
+      read_delay_stat_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          "log_read_delay")) {}
 
 EngineBase::~EngineBase() {}
 
@@ -107,6 +109,34 @@ void EngineBase::OnFuncCallCompleted(const FuncCall& func_call) {
                     << FuncCallHelper::DebugString(func_call);
     }
     fn_call_ctx_.erase(func_call.full_call_id);
+}
+
+void EngineBase::RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay) {
+#if !defined(__FAAS_DISABLE_STAT)
+    absl::MutexLock lk(&stat_mu_);
+    switch (op_type) {
+    case SharedLogOpType::APPEND:
+    case SharedLogOpType::ASYNC_APPEND:
+        break;
+    case SharedLogOpType::READ_NEXT:
+    case SharedLogOpType::READ_PREV:
+    case SharedLogOpType::READ_NEXT_B:
+        read_delay_stat_.AddSample(delay);
+        break;
+    case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_NEXT_B:
+    case SharedLogOpType::ASYNC_READ_LOCALID:
+        break;
+    case SharedLogOpType::TRIM:
+        break;
+    case SharedLogOpType::SET_AUXDATA:
+        break;
+    case SharedLogOpType::IPC_BENCH:
+        break;
+    default:
+        UNREACHABLE();
+    }
+#endif  // !defined(__FAAS_DISABLE_STAT)
 }
 
 void EngineBase::LocalOpHandler(LocalOp* op) {
@@ -219,6 +249,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->query_tag = kInvalidLogTag;
     op->user_tags.clear();
     op->data.Reset();
+    op->log_dispatch_delay =
+        GetMonotonicMicroTimestamp() - message.send_timestamp;
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -319,7 +351,11 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
         }
     }
     response->log_client_data = op->client_data;
+    int32_t op_delay = gsl::narrow_cast<int32_t>(
+        GetMonotonicMicroTimestamp() - op->start_timestamp);
+    response->query_delay = static_cast<int64_t>(op_delay);
     engine_->SendFuncWorkerMessage(op->client_id, response);
+    RecordOpDelay(op->type, op_delay);
 }
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,

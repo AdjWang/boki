@@ -132,6 +132,7 @@ func (w *FuncWorker) Run() {
 	// appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	// readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	// otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+
 	sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	dispatchSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Dispatch delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	callSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Call delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
@@ -145,20 +146,20 @@ func (w *FuncWorker) Run() {
 			log.Panicf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
 		// DEBUG: PROF
-		dispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-		sc.AddSample(float64(dispatchDelay))
+		e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		sc.AddSample(float64(e2fDispatchDelay))
 
 		if protocol.IsDispatchFuncCallMessage(message) {
 			// DEBUG: PROF
 			// go func(dispatchDelay int64, message []byte) {
-			dispatchSc.AddSample(float64(dispatchDelay))
+			dispatchSc.AddSample(float64(e2fDispatchDelay))
 			// }(dispatchDelay, message)
 
 			w.newFuncCallChan <- message
 		} else if protocol.IsFuncCallCompleteMessage(message) || protocol.IsFuncCallFailedMessage(message) {
 			// DEBUG: PROF
 			// go func(dispatchDelay int64, message []byte) {
-			callSc.AddSample(float64(dispatchDelay))
+			callSc.AddSample(float64(e2fDispatchDelay))
 			// }(dispatchDelay, message)
 
 			funcCall := protocol.GetFuncCallFromMessage(message)
@@ -172,18 +173,25 @@ func (w *FuncWorker) Run() {
 			id := protocol.GetLogClientDataFromMessage(message)
 			// DEBUG: PROF
 			// go func(dispatchDelay int64, message []byte) {
-			slogSc.AddSample(float64(dispatchDelay))
-			// 	resultType := protocol.GetSharedLogResultTypeFromMessage(message)
-			// 	switch resultType {
-			// 	case protocol.SharedLogResultType_APPEND_OK:
-			// 		fallthrough
-			// 	case protocol.SharedLogResultType_ASYNC_APPEND_OK:
-			// 		appendSc.AddSample(float64(dispatchDelay))
-			// 	case protocol.SharedLogResultType_READ_OK:
-			// 		readSc.AddSample(float64(dispatchDelay))
-			// 	default:
-			// 		otherSc.AddSample(float64(dispatchDelay))
-			// 	}
+			slogSc.AddSample(float64(e2fDispatchDelay))
+			resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+			switch resultType {
+			case protocol.SharedLogResultType_APPEND_OK:
+				fallthrough
+			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
+				// appendSc.AddSample(float64(dispatchDelay))
+			case protocol.SharedLogResultType_READ_OK:
+				// readSc.AddSample(float64(dispatchDelay))
+				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
+				queryDelay := protocol.GetQueryDelayInMessage(message)
+				flags := protocol.GetFlagsFromMessage(message)
+				cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
+				metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
+				log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
+					f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
+			default:
+				// otherSc.AddSample(float64(dispatchDelay))
+			}
 			// }(dispatchDelay, message)
 
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))

@@ -67,6 +67,7 @@ protected:
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
+        int64_t log_dispatch_delay;
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;
@@ -136,10 +137,14 @@ private:
 
     std::optional<LRUCache> log_cache_;
 
+    absl::Mutex stat_mu_;
+    stat::StatisticsCollector<int32_t> read_delay_stat_   ABSL_GUARDED_BY(stat_mu_);
+
     void SetupZKWatchers();
     void SetupTimers();
 
     void PopulateLogTagsAndData(const protocol::Message& message, LocalOp* op);
+    void RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay);
 
     DISALLOW_COPY_AND_ASSIGN(EngineBase);
 };

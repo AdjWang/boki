@@ -511,6 +511,12 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
                 MessageHelper::AppendInlineData(&response, aux_data);
             }
+            // bench flags
+            response.flags &= ~protocol::kLogReadBenchCacheHitFlag;
+            if ((message.flags & protocol::kReadBenchMetaInsideFlag) != 0) {
+                response.flags |= protocol::kLogReadBenchMetaInsideFlag;
+            }
+            response.log_dispatch_delay = op->log_dispatch_delay;
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
             // Put the received log entry into log cache
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
@@ -593,6 +599,12 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
+            // bench flags
+            response.flags |= protocol::kLogReadBenchCacheHitFlag;
+            if (query.metalog_inside) {
+                response.flags |= protocol::kLogReadBenchMetaInsideFlag;
+            }
+            response.log_dispatch_delay = op->log_dispatch_delay;
             FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
         } else {
             SharedLogMessage response;
@@ -778,6 +790,9 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
     request.query_tag = query.user_tag;
     request.query_seqnum = query.query_seqnum;
     request.user_metalog_progress = result.metalog_progress;
+    if (query.metalog_inside) {
+        request.flags |= protocol::kReadBenchMetaInsideFlag;
+    }
     request.prev_view_id = result.found_result.view_id;
     request.prev_engine_id = result.found_result.engine_id;
     request.prev_found_seqnum = result.found_result.seqnum;
@@ -793,6 +808,7 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
         .hop_times = 0,
         .initial = true,
         .client_data = op->id,
+        .metalog_inside = true,
         .user_logspace = op->user_logspace,
         .user_tag = op->query_tag,
         .query_seqnum = op->seqnum,
@@ -815,6 +831,7 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
         .hop_times = message.hop_times,
         .initial = (message.flags | protocol::kReadInitialFlag) != 0,
         .client_data = message.client_data,
+        .metalog_inside = true,
         .user_logspace = message.user_logspace,
         .user_tag = message.query_tag,
         .query_seqnum = message.query_seqnum,
