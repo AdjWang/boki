@@ -110,6 +110,9 @@ __END_THIRD_PARTY_HEADERS
 
 #endif  // defined(__FAAS_HAVE_ABSL) && !defined(__FAAS_USED_IN_BINDING)
 
+// boost
+#include <boost/interprocess/sync/named_mutex.hpp>
+
 #include "base/macro.h"
 #include "base/logging.h"
 #include "base/std_span.h"
