@@ -100,3 +100,10 @@ cd $BASE_DIR/deps/rocksdb && rm -rf build && mkdir -p build && cd build && \
         -DCMAKE_INSTALL_PREFIX=${DEPS_INSTALL_PATH} .. && \
   make -j$(nproc) install && \
   rm -rf $BASE_DIR/deps/rocksdb/build
+
+# Build boost
+cd $BASE_DIR/deps/boost && rm -rf build && mkdir -p build && cd build && \
+  cmake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_CXX_STANDARD=17 \
+        -DCMAKE_INSTALL_PREFIX=${DEPS_INSTALL_PATH} -DCMAKE_INSTALL_LIBDIR=lib .. && \
+  make -j$(nproc) install && \
+  rm -rf $BASE_DIR/deps/boost/build
