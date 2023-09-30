@@ -241,7 +241,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->start_timestamp = GetMonotonicMicroTimestamp();
     op->client_id = message.log_client_id;
     op->client_data = message.log_client_data;
-    op->func_call_id = func_call.full_call_id;
+    op->full_call_id = func_call.full_call_id;
     op->user_logspace = ctx.user_logspace;
     op->metalog_progress = ctx.metalog_progress;
     op->type = MessageHelper::GetSharedLogOpType(message);
@@ -343,17 +343,18 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response,
                                                  uint64_t metalog_progress) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
-        if (fn_call_ctx_.contains(op->func_call_id)) {
-            FnCallContext& ctx = fn_call_ctx_[op->func_call_id];
+        if (fn_call_ctx_.contains(op->full_call_id)) {
+            FnCallContext& ctx = fn_call_ctx_[op->full_call_id];
             if (metalog_progress > ctx.metalog_progress) {
                 ctx.metalog_progress = metalog_progress;
             }
         }
     }
+    protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
     response->log_client_data = op->client_data;
     int32_t op_delay = gsl::narrow_cast<int32_t>(
         GetMonotonicMicroTimestamp() - op->start_timestamp);
-    response->query_delay = static_cast<int64_t>(op_delay);
+    response->op_delay = static_cast<int64_t>(op_delay);
     engine_->SendFuncWorkerMessage(op->client_id, response);
     RecordOpDelay(op->type, op_delay);
 }

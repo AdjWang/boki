@@ -213,7 +213,7 @@ struct Message {
 
     union {
         uint64_t bench_size;          // [56:64]
-        int64_t query_delay;
+        int64_t op_delay;
     };
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
@@ -373,6 +373,11 @@ public:
         message->method_id = func_call.method_id;
         message->client_id = func_call.client_id;
         message->call_id = func_call.call_id;
+    }
+    static void SetFuncCall(Message* message, uint64_t full_call_id) {
+        FuncCall func_call;
+        func_call.full_call_id = full_call_id;
+        SetFuncCall(message, func_call);
     }
 
     static FuncCall GetFuncCall(const Message& message) {

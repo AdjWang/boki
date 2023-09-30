@@ -372,7 +372,7 @@ func SetDispatchDelayInMessage(buffer []byte, dispatchDelay int32) {
 	binary.LittleEndian.PutUint32(buffer[8:12], uint32(dispatchDelay))
 }
 
-func GetQueryDelayInMessage(buffer []byte) int64 {
+func GetEngineOpDelayInMessage(buffer []byte) int64 {
 	return int64(binary.LittleEndian.Uint64(buffer[56:64]))
 }
 
