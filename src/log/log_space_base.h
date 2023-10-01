@@ -87,6 +87,9 @@ public:
     // Panic if not found. It ensures the return is never nullptr
     LockablePtr<T> GetLogSpaceChecked(uint32_t identifier) const;
 
+    // ProcSharedLockablePtr<T> GetLogSpace(uint32_t identifier) const;
+    // ProcSharedLockablePtr<T> GetLogSpaceChecked(uint32_t identifier) const;
+
     void InstallLogSpace(std::unique_ptr<T> log_space);
     // Only active LogSpace can be finalized
     bool FinalizeLogSpace(uint32_t identifier);
@@ -94,6 +97,8 @@ public:
     bool RemoveLogSpace(uint32_t identifier);
 
     using IterCallback = std::function<void(/* identifier */ uint32_t, LockablePtr<T>)>;
+    // using IterCallback = std::function<void(/* identifier */ uint32_t, ProcSharedLockablePtr<T>)>;
+
     void ForEachActiveLogSpace(const View* view, IterCallback cb) const;
     void ForEachActiveLogSpace(IterCallback cb) const;
     void ForEachFinalizedLogSpace(IterCallback cb) const;
@@ -103,6 +108,7 @@ private:
     std::set</* identifier */ uint32_t> finalized_log_spaces_;
 
     absl::flat_hash_map</* identifier */ uint32_t, LockablePtr<T>> log_spaces_;
+    // absl::flat_hash_map</* identifier */ uint32_t, ProcSharedLockablePtr<T>> log_spaces_;
 
     DISALLOW_COPY_AND_ASSIGN(LogSpaceCollection);
 };

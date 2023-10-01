@@ -9,15 +9,142 @@
 
 namespace faas {
 
+class Mutex {
+public:
+    Mutex(uint32_t mu_id) {
+        if (mu_id == std::numeric_limits<uint32_t>::max()) {
+            use_boost_mu = false;
+            absl_mu_.reset(new absl::Mutex());
+        } else {
+            use_boost_mu = true;
+            boost_mu_.reset(new boost::interprocess::named_mutex(
+                boost::interprocess::open_or_create,
+                std::to_string(mu_id).c_str()));
+        }
+    }
+
+    void Lock() {
+        if (use_boost_mu) {
+            BoostLock();
+        } else {
+            AbslLock();
+        }
+    }
+    void Unlock() {
+        if (use_boost_mu) {
+            BoostUnlock();
+        } else {
+            AbslUnlock();
+        }
+    }
+#if DCHECK_IS_ON()
+    void AssertHeld() {
+        if (use_boost_mu) {
+            BoostAssertHeld();
+        } else {
+            AbslAssertHeld();
+        }
+    }
+    void AssertNotHeld() {
+        if (use_boost_mu) {
+            BoostAssertNotHeld();
+        } else {
+            AbslAssertNotHeld();
+        }
+    }
+#endif
+
+    void ReaderLock() {
+        if (use_boost_mu) {
+            BoostReaderLock();
+        } else {
+            AbslReaderLock();
+        }
+    }
+    void ReaderUnlock() {
+        if (use_boost_mu) {
+            BoostReaderUnlock();
+        } else {
+            AbslReaderUnlock();
+        }
+    }
+#if DCHECK_IS_ON()
+    void AssertReaderHeld() {
+        if (use_boost_mu) {
+            BoostAssertReaderHeld();
+        } else {
+            AbslAssertReaderHeld();
+        }
+    }
+#endif
+
+private:
+    bool use_boost_mu;
+    std::unique_ptr<absl::Mutex> absl_mu_;
+    // Shared between processes. Each mutex must have an unique name.
+    // TODO: isolation between users
+    std::unique_ptr<boost::interprocess::named_mutex> boost_mu_;
+
+    void AbslLock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_->Lock();
+    }
+    void AbslUnlock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_->Unlock();
+    }
+#if DCHECK_IS_ON()
+    void AbslAssertHeld() {
+        absl_mu_->AssertHeld();
+    }
+    void AbslAssertNotHeld() {
+        absl_mu_->AssertNotHeld();
+    }
+#endif
+
+    void AbslReaderLock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_->ReaderLock();
+    }
+    void AbslReaderUnlock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_->ReaderUnlock();
+    }
+#if DCHECK_IS_ON()
+    void AbslAssertReaderHeld() {
+        absl_mu_->AssertReaderHeld();
+    }
+#endif
+
+    void BoostLock() {
+        boost_mu_->lock();
+    }
+    void BoostUnlock() {
+        boost_mu_->unlock();
+    }
+#if DCHECK_IS_ON()
+    void BoostAssertHeld() {}
+    void BoostAssertNotHeld() {}
+#endif
+
+    void BoostReaderLock() {
+        boost_mu_->lock();
+    }
+    void BoostReaderUnlock() {
+        boost_mu_->unlock();
+    }
+#if DCHECK_IS_ON()
+    void BoostAssertReaderHeld() {}
+#endif
+};
+
 template<class T>
 class LockablePtr {
 public:
     LockablePtr() : inner_(nullptr) {}
 
     // LockablePtr takes ownership of target
-    explicit LockablePtr(std::unique_ptr<T> target) : inner_(nullptr) {
+    explicit LockablePtr(std::unique_ptr<T> target,
+                         uint32_t mu_id = std::numeric_limits<uint32_t>::max())
+        : inner_(nullptr) {
         if (target != nullptr) {
-            inner_.reset(new Inner);
+            inner_.reset(new Inner(mu_id));
             inner_->target = std::move(target);
         }
     }
@@ -80,11 +207,11 @@ public:
 
     private:
         friend class LockablePtr;
-        absl::Mutex*  mutex_;
+        Mutex*        mutex_;
         T*            target_;
         base::Thread* thread_;
 
-        Guard(absl::Mutex* mutex, T* target,
+        Guard(Mutex* mutex, T* target,
               base::Thread* thread = nullptr)
             : mutex_(mutex), target_(target), thread_(thread) {}
 
@@ -132,11 +259,11 @@ public:
 
     private:
         friend class LockablePtr;
-        absl::Mutex*  mutex_;
+        Mutex*        mutex_;
         const T*      target_;
         base::Thread* thread_;
 
-        ReaderGuard(absl::Mutex* mutex, const T* target,
+        ReaderGuard(Mutex* mutex, const T* target,
                     base::Thread* thread = nullptr)
             : mutex_(mutex), target_(target), thread_(thread) {}
 
@@ -172,8 +299,10 @@ public:
 
 private:
     struct Inner {
-        absl::Mutex        mu;
+        Mutex              mu;
         std::unique_ptr<T> target;
+        Inner(uint32_t mu_id)
+            : mu(mu_id) {}
     };
     std::shared_ptr<Inner> inner_;
 };
@@ -185,126 +314,6 @@ bool operator==(const LockablePtr<T>& ptr, std::nullptr_t) noexcept {
 
 template<class T>
 bool operator!=(const LockablePtr<T>& ptr, std::nullptr_t) noexcept {
-    return ptr.not_null();
-}
-
-// Shared between processes. Each mutex must have an unique name.
-template<class T>
-class ProcSharedLockablePtr {
-public:
-    ProcSharedLockablePtr() : inner_(nullptr) {}
-
-    // ProcSharedLockablePtr takes ownership of target
-    explicit ProcSharedLockablePtr(const std::string& mu_name, std::unique_ptr<T> target)
-    : mu_name_(mu_name), inner_(nullptr) {
-        if (target != nullptr) {
-            inner_.reset(new Inner(mu_name.c_str()));
-            inner_->target = std::move(target);
-        }
-    }
-
-    // ProcSharedLockablePtr is copyable, thus can be shared between threads
-    ProcSharedLockablePtr(const ProcSharedLockablePtr& other) = default;
-    ProcSharedLockablePtr(ProcSharedLockablePtr&& other) = default;
-    ProcSharedLockablePtr& operator=(ProcSharedLockablePtr&& other) noexcept {
-        this->mu_name_ = std::move(other->mu_name_);
-        this->inner_ = std::move(other.inner_);
-        return *this;
-    }
-    ProcSharedLockablePtr& operator=(const ProcSharedLockablePtr& other) noexcept {
-        this->mu_name_ = other->mu_name_;
-        this->inner_ = other.inner_;
-        return *this;
-    }
-
-    // Check if holds a target object
-    inline bool is_null() const noexcept { return inner_ == nullptr; }
-    inline bool not_null() const noexcept { return inner_ != nullptr; }
-    explicit operator bool() const noexcept { return not_null(); }
-
-    class ProcSharedGuard {
-    public:
-        ~ProcSharedGuard() {
-            if (mutex_ == nullptr) {
-                return;
-            }
-#if DCHECK_IS_ON()
-            if (base::Thread::current() != thread_) {
-                LOG(FATAL) << "ProcSharedGuard moved between threads";
-            }
-#endif
-            mutex_->unlock();
-        }
-
-        T& operator*() const noexcept { return *DCHECK_NOTNULL(target_); }
-        T* operator->() const noexcept { return DCHECK_NOTNULL(target_); }
-
-        // ProcSharedGuard is movable, but should avoid doing so explicitly
-        ProcSharedGuard(ProcSharedGuard&& other) noexcept
-            : mutex_(other.mutex_),
-              target_(other.target_),
-              thread_(other.thread_) {
-            other.mutex_ = nullptr;
-            other.target_ = nullptr;
-            other.thread_ = nullptr;
-        }
-        ProcSharedGuard& operator=(ProcSharedGuard&& other) noexcept {
-            if (this != &other) {
-                mutex_ = other.mutex_;
-                target_ = other.target_;
-                thread_ = other.thread_;
-                other.mutex_ = nullptr;
-                other.target_ = nullptr;
-                other.thread_ = nullptr;
-            }
-            return *this;
-        }
-
-    private:
-        friend class ProcSharedLockablePtr;
-        boost::interprocess::named_mutex* mutex_;
-        T*            target_;
-        base::Thread* thread_;
-
-        ProcSharedGuard(boost::interprocess::named_mutex* mutex, T* target,
-              base::Thread* thread = nullptr)
-            : mutex_(mutex), target_(target), thread_(thread) {}
-
-        DISALLOW_COPY_AND_ASSIGN(ProcSharedGuard);
-    };
-
-    // Returned ProcSharedGuard must not live longer than parent ProcSharedLockablePtr
-    ProcSharedGuard Lock() {
-        if (__FAAS_PREDICT_FALSE(inner_ == nullptr)) {
-            LOG(FATAL) << "Cannot Lock() on null pointer";
-        }
-        inner_->mu.lock();
-#if DCHECK_IS_ON()
-        return ProcSharedGuard(&inner_->mu, inner_->target.get(), base::Thread::current());
-#else
-        return ProcSharedGuard(&inner_->mu, inner_->target.get());
-#endif
-    }
-
-private:
-    std::string mu_name_;
-
-    struct Inner {
-        boost::interprocess::named_mutex mu;
-        std::unique_ptr<T> target;
-        Inner(const char* mu_name)
-            : mu(boost::interprocess::open_or_create, mu_name) {}
-    };
-    std::shared_ptr<Inner> inner_;
-};
-
-template<class T>
-bool operator==(const ProcSharedLockablePtr<T>& ptr, std::nullptr_t) noexcept {
-    return ptr.is_null();
-}
-
-template<class T>
-bool operator!=(const ProcSharedLockablePtr<T>& ptr, std::nullptr_t) noexcept {
     return ptr.not_null();
 }
 
