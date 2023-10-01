@@ -42,7 +42,7 @@ void Engine::OnViewCreated(const View* view) {
                 producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(
                     my_node_id(), view, sequencer_id));
                 if (engine_node->HasIndexFor(sequencer_id)) {
-                    index_collection_.InstallLogSpace(std::make_unique<Index>(
+                    index_collection_.InstallSharedLogSpace(std::make_unique<Index>(
                         view, sequencer_id));
                 }
             }
