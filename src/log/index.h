@@ -1,69 +1,11 @@
 #pragma once
 
 #include "log/log_space_base.h"
+#include "log/index_types.h"
+#include "log/index_data.h"
 
 namespace faas {
 namespace log {
-
-struct IndexFoundResult {
-    uint16_t view_id;
-    uint16_t engine_id;
-    uint64_t seqnum;
-};
-
-struct IndexQuery {
-    // determines how to response
-    // kSync: return once with the log entry
-    // kAsync: return twice, first only seqnum, second the same as kSync
-    enum QueryType { kSync, kAsync };
-
-    // determines how to interpret the query_seqnum
-    // kReadNext, kReadPrev, kReadNextB: query_seqnum is the seqnum of the shared log
-    // kReadLocalId: query_seqnum is the local_id
-    enum ReadDirection { kReadNext, kReadPrev, kReadNextB, kReadLocalId };
-    QueryType type;
-    ReadDirection direction;
-    uint16_t origin_node_id;
-    uint16_t hop_times;
-    bool     initial;
-    uint64_t client_data;
-    bool     metalog_inside;
-
-    uint32_t user_logspace;
-    uint64_t user_tag;
-    uint64_t query_seqnum;
-    uint64_t metalog_progress;
-
-    IndexFoundResult prev_found_result;
-
-    static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);
-    protocol::SharedLogOpType DirectionToOpType() const;
-};
-
-struct IndexQueryResult {
-    enum State { kFound, kEmpty, kContinue };
-    State state;
-    uint64_t metalog_progress;
-    uint16_t next_view_id;
-
-    IndexQuery       original_query;
-    IndexFoundResult found_result;
-};
-
-class DebugQueryResultVec final : public absl::InlinedVector<IndexQueryResult, 4> {
-public:
-    void push_back(const IndexQueryResult& v) {
-        // DEBUG
-        DCHECK(v.original_query.origin_node_id != 28524) << utils::DumpStackTrace();
-        static_cast<void>(emplace_back(v));
-    }
-
-    void push_back(IndexQueryResult&& v) {
-        // DEBUG
-        DCHECK(v.original_query.origin_node_id != 28524) << utils::DumpStackTrace();
-        static_cast<void>(emplace_back(std::move(v)));
-    }
-};
 
 class Index final : public LogSpaceBase {
 public:
@@ -77,15 +19,10 @@ public:
     void MakeQuery(const IndexQuery& query);
 
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
-    // DEBUG
-    // using QueryResultVec = DebugQueryResultVec;
     void PollQueryResults(QueryResultVec* results);
 
 private:
-    class PerSpaceIndex;
-    absl::flat_hash_map</* user_logspace */ uint32_t,
-                        std::unique_ptr<PerSpaceIndex>> index_;
-
+    IndexDataManager index_data_;
     static constexpr uint32_t kMaxMetalogPosition = std::numeric_limits<uint32_t>::max();
 
     std::multimap</* metalog_position */ uint32_t,
@@ -98,12 +35,12 @@ private:
                          /* end_seqnum */ uint32_t>> cuts_;
     uint32_t indexed_metalog_position_;
 
-    struct IndexData {
+    struct RecvIndexData {
         uint64_t   local_id;
         uint32_t   user_logspace;
         UserTagVec user_tags;
     };
-    std::map</* seqnum */ uint32_t, IndexData> received_data_;
+    std::map</* seqnum */ uint32_t, RecvIndexData> received_data_;
     uint32_t data_received_seqnum_position_;
     uint32_t indexed_seqnum_position_;
 
@@ -121,7 +58,6 @@ private:
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
     void OnFinalized(uint32_t metalog_position) override;
     void AdvanceIndexProgress();
-    PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
 
     bool ProcessLocalIdQuery(const IndexQuery& query);
     void ProcessQuery(const IndexQuery& query);
