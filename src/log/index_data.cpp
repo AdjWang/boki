@@ -5,7 +5,10 @@ namespace log {
 
 IndexDataManager::IndexDataManager(uint32_t logspace_id)
     : log_header_(fmt::format("IndexDataManager[{}]: ", logspace_id)),
-      logspace_id_(logspace_id) {}
+      logspace_id_(logspace_id),
+      indexed_seqnum_position_(0),
+      indexed_metalog_position_(0)
+    {}
 
 PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
@@ -36,6 +39,25 @@ bool IndexDataManager::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, 
         query.query_seqnum, query.user_tag, seqnum, engine_id);
 }
 
+void IndexDataManager::AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags) {
+    DCHECK(log_index_map_.find(localid) == log_index_map_.end())
+        << "Duplicate index_data.local_id for log_index_map_";
+    log_index_map_[localid] = AsyncIndexData{
+        .seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf),
+        .user_tags = user_tags,
+    };
+}
+
+bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
+    auto it = log_index_map_.find(localid);
+    if (it == log_index_map_.end()) {
+        return false;
+    } else {
+        DCHECK_NE(seqnum, nullptr);
+        *seqnum = it->second.seqnum;
+        return true;
+    }
+}
 
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),

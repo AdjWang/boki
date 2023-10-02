@@ -36,20 +36,45 @@ private:
 
 // A wrapper holding all index datas for reading and writing.
 // Separate data accessing interface from control flow, so the module can be
-// shared with user function to direct read on the index data.
+// shared with user functions to direct read on the index data.
 class IndexDataManager {
 public:
     IndexDataManager(uint32_t logspace_id);
 
+    uint32_t indexed_seqnum_position() const {
+        return indexed_seqnum_position_;
+    }
+    void set_indexed_seqnum_position(uint32_t indexed_seqnum_position) {
+        indexed_seqnum_position_ = indexed_seqnum_position;
+    }
+    uint32_t indexed_metalog_position() const {
+        return indexed_metalog_position_;
+    }
+    void set_indexed_metalog_position(uint32_t indexed_metalog_position) {
+        indexed_metalog_position_ = indexed_metalog_position;
+    }
+
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+
+    void AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags);
+    bool IndexFindLocalId(uint64_t localid, uint64_t* seqnum);
 
 private:
     std::string log_header_;
     uint32_t logspace_id_;
     absl::flat_hash_map</* user_logspace */ uint32_t,
                         std::unique_ptr<PerSpaceIndex>> index_;
+    uint32_t indexed_seqnum_position_;
+    uint32_t indexed_metalog_position_;
+
+    // updated when receiving an index, used to serve async log query
+    struct AsyncIndexData {
+        uint64_t seqnum;
+        UserTagVec user_tags;
+    };
+    std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
 
     DISALLOW_COPY_AND_ASSIGN(IndexDataManager);
 };

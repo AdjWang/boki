@@ -54,9 +54,7 @@ protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
 Index::Index(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       index_data_(identifier()),
-      indexed_metalog_position_(0),
-      data_received_seqnum_position_(0),
-      indexed_seqnum_position_(0) {
+      data_received_seqnum_position_(0) {
     log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
 }
@@ -75,7 +73,7 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
     for (int i = 0; i < n; i++) {
         size_t num_tags = index_data.user_tag_sizes(i);
         uint32_t seqnum = index_data.seqnum_halves(i);
-        if (seqnum < indexed_seqnum_position_) {
+        if (seqnum < index_data_.indexed_seqnum_position()) {
             tag_iter += num_tags;
             continue;
         }
@@ -118,10 +116,10 @@ since pending_query viewid={} smaller than current viewid={}",
         } else {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
-            if (position <= indexed_metalog_position_) {
+            if (position <= index_data_.indexed_metalog_position()) {
                 HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
 since pending_query metalog_position={} not larger than indexed_metalog_position={}",
-                        uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
+                        uint16_t(query.type), query.query_seqnum, position, index_data_.indexed_metalog_position());
                 ProcessQuery(query);
             } else {
                 // DEBUG: stat temporary
@@ -198,19 +196,14 @@ void Index::AdvanceIndexProgress() {
             index_data_.GetOrCreateIndex(index_data.user_logspace)->Add(
                 seqnum, engine_id, index_data.user_tags);
             // update index map, to serve async log query
-            DCHECK(log_index_map_.find(index_data.local_id) == log_index_map_.end())
-                << "Duplicate index_data.local_id for log_index_map_";
-            log_index_map_[index_data.local_id] = AsyncIndexData{
-                .seqnum = bits::JoinTwo32(identifier(), seqnum),
-                .user_tags = index_data.user_tags,
-            };
+            index_data_.AddAsyncIndexData(index_data.local_id, seqnum, index_data.user_tags);
 
             iter = received_data_.erase(iter);
         }
-        DCHECK_GT(end_seqnum, indexed_seqnum_position_);
-        indexed_seqnum_position_ = end_seqnum;
+        DCHECK_GT(end_seqnum, index_data_.indexed_seqnum_position());
+        index_data_.set_indexed_seqnum_position(end_seqnum);
         uint32_t metalog_seqnum = cuts_.front().first;
-        indexed_metalog_position_ = metalog_seqnum + 1;
+        index_data_.set_indexed_metalog_position(metalog_seqnum + 1);
         cuts_.pop_front();
     }
     if (!blocking_reads_.empty()) {
@@ -236,13 +229,13 @@ void Index::AdvanceIndexProgress() {
     }
     auto iter = pending_queries_.begin();
     while (iter != pending_queries_.end()) {
-        if (iter->first > indexed_metalog_position_) {
+        if (iter->first > index_data_.indexed_metalog_position()) {
             break;
         }
         const IndexQuery& query = iter->second;
         HVLOG_F(1, "AdvanceIndexProgress Process query type=0x{:02X} seqnum=0x{:016X} \
 since pending_query metalog_position={} not larger than indexed_metalog_position={}",
-                uint16_t(query.type), query.query_seqnum, iter->first, indexed_metalog_position_);
+                uint16_t(query.type), query.query_seqnum, iter->first, index_data_.indexed_metalog_position());
         ProcessQuery(query);
         iter = pending_queries_.erase(iter);
     }
@@ -261,26 +254,24 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
     // metalog_position_ is old.
 
     // replace seqnum if querying by localid
-    uint64_t local_id = query.query_seqnum;
-    if (log_index_map_.find(local_id) == log_index_map_.end()) {
-        // not found
-        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
-        //         local_id);
-        return false;
-    } else {
-        // found
-        AsyncIndexData index_data = log_index_map_[local_id];
-        uint64_t seqnum = index_data.seqnum;
+    uint64_t localid = query.query_seqnum;
+    uint64_t seqnum = kInvalidLogSeqNum;
+    if (index_data_.IndexFindLocalId(localid, &seqnum)) {
         // HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
         //         local_id, seqnum);
         // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
         // causing functions failed to send back the query result to the target engine node.
         DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
 
-        uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(local_id));
+        uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
         auto result = BuildFoundResult(query, view_->id(), seqnum, engine_id);
         pending_query_results_.push_back(result);
         return true;
+    } else {
+        // not found
+        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
+        //         local_id);
+        return false;
     }
 }
 

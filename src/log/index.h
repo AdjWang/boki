@@ -33,7 +33,6 @@ private:
 
     std::deque<std::pair</* metalog_seqnum */ uint32_t,
                          /* end_seqnum */ uint32_t>> cuts_;
-    uint32_t indexed_metalog_position_;
 
     struct RecvIndexData {
         uint64_t   local_id;
@@ -42,17 +41,9 @@ private:
     };
     std::map</* seqnum */ uint32_t, RecvIndexData> received_data_;
     uint32_t data_received_seqnum_position_;
-    uint32_t indexed_seqnum_position_;
-
-    // updated when receiving an index, used to serve async log query
-    struct AsyncIndexData {
-        uint64_t seqnum;
-        UserTagVec user_tags;
-    };
-    std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
 
     uint64_t index_metalog_progress() const {
-        return bits::JoinTwo32(identifier(), indexed_metalog_position_);
+        return bits::JoinTwo32(identifier(), index_data_.indexed_metalog_position());
     }
 
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
