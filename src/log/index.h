@@ -42,27 +42,12 @@ private:
     std::map</* seqnum */ uint32_t, RecvIndexData> received_data_;
     uint32_t data_received_seqnum_position_;
 
-    uint64_t index_metalog_progress() const {
-        return bits::JoinTwo32(identifier(), index_data_.indexed_metalog_position());
-    }
-
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
     void OnFinalized(uint32_t metalog_position) override;
     void AdvanceIndexProgress();
 
     IndexQueryResult ProcessQuery(const IndexQuery& query);
-    IndexQueryResult ProcessLocalIdQuery(const IndexQuery& query);
-    IndexQueryResult ProcessReadNext(const IndexQuery& query);
-    IndexQueryResult ProcessReadPrev(const IndexQuery& query);
-    IndexQueryResult ProcessBlockingQuery(const IndexQuery& query);
     void ProcessQueryResult(const IndexQueryResult& result);
-
-    IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
-                                      uint64_t seqnum, uint16_t engine_id);
-    IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
-    IndexQueryResult BuildPendingResult(const IndexQuery& query);
-    IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
-                                         uint64_t seqnum, uint16_t engine_id);
 
     DISALLOW_COPY_AND_ASSIGN(Index);
 };

@@ -59,7 +59,7 @@ class IndexDataManager {
 public:
     IndexDataManager(uint32_t logspace_id);
 
-    // uint16_t view_id() const { return bits::HighHalf32(logspace_id_); }
+    uint16_t view_id() const { return bits::HighHalf32(logspace_id_); }
     uint32_t indexed_seqnum_position() const {
         return indexed_seqnum_position_;
     }
@@ -73,13 +73,22 @@ public:
         indexed_metalog_position_ = indexed_metalog_position;
     }
 
+    uint64_t index_metalog_progress() const {
+        return bits::JoinTwo32(logspace_id_, indexed_metalog_position_);
+    }
+
+    // Used by engine
     void AddIndexData(uint32_t user_logspace, uint32_t seqnum_lowhalf, uint16_t engine_id,
                       const UserTagVec& user_tags);
     void AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags);
 
-    // Used by engine
-    bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
-    bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+    IndexQueryResult ProcessLocalIdQuery(const IndexQuery& query);
+    IndexQueryResult ProcessReadNext(const IndexQuery& query);
+    IndexQueryResult ProcessReadPrev(const IndexQuery& query);
+    IndexQueryResult ProcessBlockingQuery(const IndexQuery& query);
+
+    // Used by engine and shared library
+    bool IndexFindLocalId(uint64_t localid, uint64_t* seqnum);
     // Used by shared library
     bool IndexFindNext(IndexQuery::ReadDirection direction,
                        uint32_t user_logspace, uint64_t query_seqnum,
@@ -90,7 +99,8 @@ public:
                        uint64_t query_tag, uint64_t* seqnum,
                        uint16_t* engine_id);
 
-    bool IndexFindLocalId(uint64_t localid, uint64_t* seqnum);
+    // Index requires this function to handle timeout
+    IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
 
 private:
     std::string log_header_;
@@ -107,7 +117,17 @@ private:
     };
     std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
 
+    // Used by engine
+    bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+    bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
+
+    IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
+                                      uint64_t seqnum, uint16_t engine_id);
+    IndexQueryResult BuildPendingResult(const IndexQuery& query);
+    IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
+                                         uint64_t seqnum, uint16_t engine_id);
 
     DISALLOW_COPY_AND_ASSIGN(IndexDataManager);
 };

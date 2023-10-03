@@ -209,16 +209,16 @@ void Index::AdvanceIndexProgress() {
         for (const auto& [start_timestamp, query] : blocking_reads_) {
             IndexQueryResult query_result;
             if (query.direction == IndexQuery::kReadLocalId) {
-                query_result = ProcessLocalIdQuery(query);
+                query_result = index_data_.ProcessLocalIdQuery(query);
             } else {
-                query_result = ProcessBlockingQuery(query);
+                query_result = index_data_.ProcessBlockingQuery(query);
             }
             if (query_result.state == IndexQueryResult::State::kPending) {
                 if (current_timestamp - start_timestamp
                         < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
                     unfinished.push_back(std::make_pair(start_timestamp, query));
                 } else {
-                    pending_query_results_.push_back(BuildNotFoundResult(query));
+                    pending_query_results_.push_back(index_data_.BuildNotFoundResult(query));
                 }
             } else {
                 pending_query_results_.push_back(query_result);
@@ -245,121 +245,15 @@ void Index::AdvanceIndexProgress() {
 IndexQueryResult Index::ProcessQuery(const IndexQuery& query) {
     HVLOG_F(1, "ProcessQuery: direction={}", query.direction);
     if (query.direction == IndexQuery::kReadLocalId) {
-        return ProcessLocalIdQuery(query);
+        return index_data_.ProcessLocalIdQuery(query);
     } else if (query.direction == IndexQuery::kReadNextB) {
-        return ProcessBlockingQuery(query);
+        return index_data_.ProcessBlockingQuery(query);
     } else if (query.direction == IndexQuery::kReadNext) {
-        return ProcessReadNext(query);
+        return index_data_.ProcessReadNext(query);
     } else if (query.direction == IndexQuery::kReadPrev) {
-        return ProcessReadPrev(query);
+        return index_data_.ProcessReadPrev(query);
     } else {
         UNREACHABLE();
-    }
-}
-
-IndexQueryResult Index::ProcessLocalIdQuery(const IndexQuery& query) {
-    DCHECK(query.direction == IndexQuery::kReadLocalId);
-    // Local id is propagated by user atop function arguments, it may faster
-    // than metalog_position_ propagation. In one user session, previously
-    // appended async log's local id must be always perceived as readable to
-    // gaurantee read-your-write. So local query is promised to be found, even
-    // metalog_position_ is old.
-
-    // replace seqnum if querying by localid
-    uint64_t localid = query.query_seqnum;
-    uint64_t seqnum = kInvalidLogSeqNum;
-    if (index_data_.IndexFindLocalId(localid, &seqnum)) {
-        // HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
-        //         local_id, seqnum);
-        // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
-        // causing functions failed to send back the query result to the target engine node.
-        DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
-
-        uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
-        return BuildFoundResult(query, view_->id(), seqnum, engine_id);
-    } else {
-        // not found
-        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
-        //         local_id);
-        return BuildPendingResult(query);
-    }
-}
-
-IndexQueryResult Index::ProcessReadNext(const IndexQuery& query) {
-    DCHECK(query.direction == IndexQuery::kReadNext);
-    HVLOG_F(1, "ProcessReadNext: seqnum={}, logspace={}, tag={}",
-            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
-    uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
-    if (query_view_id > view_->id()) {
-        HVLOG(1) << "ProcessReadNext: NotFoundResult";
-        return BuildNotFoundResult(query);
-    }
-    uint64_t seqnum;
-    uint16_t engine_id;
-    bool found = index_data_.IndexFindNext(query, &seqnum, &engine_id);
-    if (query_view_id == view_->id()) {
-        if (found) {
-            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum={}", seqnum);
-            return BuildFoundResult(query, view_->id(), seqnum, engine_id);
-        } else {
-            if (query.prev_found_result.seqnum != kInvalidLogSeqNum) {
-                const IndexFoundResult& found_result = query.prev_found_result;
-                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum={}",
-                        found_result.seqnum);
-                return BuildFoundResult(query, found_result.view_id,
-                                        found_result.seqnum, found_result.engine_id);
-            } else {
-                return BuildNotFoundResult(query);
-                HVLOG(1) << "ProcessReadNext: NotFoundResult";
-            }
-        }
-    } else {
-        HVLOG(1) << "ProcessReadNext: ContinueResult";
-        return BuildContinueResult(query, found, seqnum, engine_id);
-    }
-}
-
-IndexQueryResult Index::ProcessReadPrev(const IndexQuery& query) {
-    DCHECK(query.direction == IndexQuery::kReadPrev);
-    HVLOG_F(1, "ProcessReadPrev: seqnum={}, logspace={}, tag={}",
-            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
-    uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
-    if (query_view_id < view_->id()) {
-        HVLOG(1) << "ProcessReadPrev: ContinueResult";
-        return BuildContinueResult(query, false, 0, 0);
-    }
-    uint64_t seqnum;
-    uint16_t engine_id;
-    bool found = index_data_.IndexFindPrev(query, &seqnum, &engine_id);
-    if (found) {
-        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={}", seqnum);
-        return BuildFoundResult(query, view_->id(), seqnum, engine_id);
-    } else if (view_->id() > 0) {
-        HVLOG(1) << "ProcessReadPrev: ContinueResult";
-        return BuildContinueResult(query, false, 0, 0);
-    } else {
-        HVLOG(1) << "ProcessReadPrev: NotFoundResult";
-        return BuildNotFoundResult(query);
-    }
-}
-
-IndexQueryResult Index::ProcessBlockingQuery(const IndexQuery& query) {
-    DCHECK(query.direction == IndexQuery::kReadNextB && query.initial);
-    uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
-    if (query_view_id > view_->id()) {
-        return BuildNotFoundResult(query);
-    }
-    uint64_t seqnum;
-    uint16_t engine_id;
-    bool found = index_data_.IndexFindNext(query, &seqnum, &engine_id);
-    if (query_view_id == view_->id()) {
-        if (found) {
-            return BuildFoundResult(query, view_->id(), seqnum, engine_id);
-        } else {
-            return BuildPendingResult(query);
-        }
-    } else {
-        return BuildContinueResult(query, found, seqnum, engine_id);
     }
 }
 
@@ -369,85 +263,6 @@ void Index::ProcessQueryResult(const IndexQueryResult& result) {
     } else {
         pending_query_results_.push_back(result);
     }
-}
-
-IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_id,
-                                         uint64_t seqnum, uint16_t engine_id) {
-    return IndexQueryResult {
-        .state = IndexQueryResult::kFound,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
-        .next_view_id = 0,
-        .original_query = query,
-        .found_result = IndexFoundResult {
-            .view_id = view_id,
-            .engine_id = engine_id,
-            .seqnum = seqnum
-        },
-    };
-}
-
-IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query) {
-    return IndexQueryResult {
-        .state = IndexQueryResult::kEmpty,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
-        .next_view_id = 0,
-        .original_query = query,
-        .found_result = IndexFoundResult {
-            .view_id = 0,
-            .engine_id = 0,
-            .seqnum = kInvalidLogSeqNum
-        },
-    };
-}
-
-IndexQueryResult Index::BuildPendingResult(const IndexQuery& query) {
-    return IndexQueryResult {
-        .state = IndexQueryResult::kPending,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
-        .next_view_id = 0,
-        .original_query = query,
-        .found_result = IndexFoundResult {
-            .view_id = 0,
-            .engine_id = 0,
-            .seqnum = kInvalidLogSeqNum
-        },
-    };
-}
-
-IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
-                                            uint64_t seqnum, uint16_t engine_id) {
-    DCHECK(view_->id() > 0);
-    IndexQueryResult result = {
-        .state = IndexQueryResult::kContinue,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
-        .next_view_id = gsl::narrow_cast<uint16_t>(view_->id() - 1),
-        .original_query = query,
-        .found_result = IndexFoundResult {
-            .view_id = 0,
-            .engine_id = 0,
-            .seqnum = kInvalidLogSeqNum
-        },
-    };
-    if (query.direction == IndexQuery::kReadNextB) {
-        result.original_query.direction = IndexQuery::kReadNext;
-    }
-    if (!query.initial) {
-        result.found_result = query.prev_found_result;
-    }
-    if (found) {
-        result.found_result = IndexFoundResult {
-            .view_id = view_->id(),
-            .engine_id = engine_id,
-            .seqnum = seqnum
-        };
-    } else if (!query.initial && query.prev_found_result.seqnum != kInvalidLogSeqNum) {
-        result.found_result = query.prev_found_result;
-    }
-    return result;
 }
 
 }  // namespace log
