@@ -11,6 +11,22 @@ IndexDataManager::IndexDataManager(uint32_t logspace_id)
       indexed_metalog_position_(0)
     {}
 
+void IndexDataManager::AddIndexData(uint32_t user_logspace,
+                                    uint32_t seqnum_lowhalf, uint16_t engine_id,
+                                    const UserTagVec& user_tags) {
+    GetOrCreateIndex(user_logspace)->Add(seqnum_lowhalf, engine_id, user_tags);
+}
+
+void IndexDataManager::AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf,
+                                         UserTagVec user_tags) {
+    DCHECK(log_index_map_.find(localid) == log_index_map_.end())
+        << "Duplicate index_data.local_id for log_index_map_";
+    log_index_map_[localid] = AsyncIndexData{
+        .seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf),
+        .user_tags = user_tags,
+    };
+}
+
 PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
         return index_.at(user_logspace).get();
@@ -22,31 +38,13 @@ PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
 }
 
 bool IndexDataManager::IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
-    DCHECK(query.direction == IndexQuery::kReadNext
-            || query.direction == IndexQuery::kReadNextB);
-    if (!index_.contains(query.user_logspace)) {
-        return false;
-    }
-    return GetOrCreateIndex(query.user_logspace)->FindNext(
-        query.query_seqnum, query.user_tag, seqnum, engine_id);
+    return IndexFindNext(query.direction, query.user_logspace,
+                         query.query_seqnum, query.user_tag, seqnum, engine_id);
 }
 
 bool IndexDataManager::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
-    DCHECK(query.direction == IndexQuery::kReadPrev);
-    if (!index_.contains(query.user_logspace)) {
-        return false;
-    }
-    return GetOrCreateIndex(query.user_logspace)->FindPrev(
-        query.query_seqnum, query.user_tag, seqnum, engine_id);
-}
-
-void IndexDataManager::AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags) {
-    DCHECK(log_index_map_.find(localid) == log_index_map_.end())
-        << "Duplicate index_data.local_id for log_index_map_";
-    log_index_map_[localid] = AsyncIndexData{
-        .seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf),
-        .user_tags = user_tags,
-    };
+    return IndexFindPrev(query.direction, query.user_logspace,
+                         query.query_seqnum, query.user_tag, seqnum, engine_id);
 }
 
 bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
@@ -58,6 +56,29 @@ bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
         *seqnum = it->second.seqnum;
         return true;
     }
+}
+
+bool IndexDataManager::IndexFindNext(IndexQuery::ReadDirection direction,
+                                     uint32_t user_logspace,
+                                     uint64_t query_seqnum, uint64_t query_tag,
+                                     uint64_t* seqnum, uint16_t* engine_id) {
+    DCHECK(direction == IndexQuery::kReadNext ||
+           direction == IndexQuery::kReadNextB);
+    if (!index_.contains(user_logspace)) {
+        return false;
+    }
+    return GetOrCreateIndex(user_logspace)->FindNext(query_seqnum, query_tag, seqnum, engine_id);
+}
+
+bool IndexDataManager::IndexFindPrev(IndexQuery::ReadDirection direction,
+                                     uint32_t user_logspace,
+                                     uint64_t query_seqnum, uint64_t query_tag,
+                                     uint64_t* seqnum, uint16_t* engine_id) {
+    DCHECK(direction == IndexQuery::kReadPrev);
+    if (!index_.contains(user_logspace)) {
+        return false;
+    }
+    return GetOrCreateIndex(user_logspace)->FindPrev(query_seqnum, query_tag, seqnum, engine_id);
 }
 
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
@@ -190,4 +211,32 @@ void test_func() {
     auto index_data = faas::log::IndexDataManager(1u);
     index_data.set_indexed_metalog_position(4u);
     printf("test func create index_data\n");
+}
+
+void* ConstructIndexData(uint32_t logspace_id) {
+    return new faas::log::IndexDataManager(logspace_id);
+}
+
+void DestructIndexData(void* index_data) {
+    delete reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+}
+
+bool IndexFindNext(void* index_data, uint8_t direction,
+                   uint32_t user_logspace, uint64_t query_seqnum,
+                   uint64_t query_tag, uint64_t* seqnum, uint16_t* engine_id) {
+    return reinterpret_cast<faas::log::IndexDataManager*>(index_data)->IndexFindNext(
+        static_cast<faas::log::IndexQuery::ReadDirection>(direction),
+        user_logspace, query_seqnum, query_tag, seqnum, engine_id);
+}
+bool IndexFindPrev(void* index_data, uint8_t direction,
+                   uint32_t user_logspace, uint64_t query_seqnum,
+                   uint64_t query_tag, uint64_t* seqnum, uint16_t* engine_id) {
+    return reinterpret_cast<faas::log::IndexDataManager*>(index_data)->IndexFindPrev(
+        static_cast<faas::log::IndexQuery::ReadDirection>(direction),
+        user_logspace, query_seqnum, query_tag, seqnum, engine_id);
+}
+
+bool IndexFindLocalId(void* index_data, uint64_t localid, uint64_t* seqnum) {
+    return reinterpret_cast<faas::log::IndexDataManager*>(index_data)
+        ->IndexFindLocalId(localid, seqnum);
 }

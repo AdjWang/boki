@@ -41,7 +41,7 @@ struct IndexQuery {
 };
 
 struct IndexQueryResult {
-    enum State { kFound, kEmpty, kContinue };
+    enum State { kFound, kEmpty, kContinue, kPending };
     State state;
     uint64_t metalog_progress;
     uint16_t next_view_id;

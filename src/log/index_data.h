@@ -73,11 +73,23 @@ public:
         indexed_metalog_position_ = indexed_metalog_position;
     }
 
-    PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
+    void AddIndexData(uint32_t user_logspace, uint32_t seqnum_lowhalf, uint16_t engine_id,
+                      const UserTagVec& user_tags);
+    void AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags);
+
+    // Used by engine
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+    // Used by shared library
+    bool IndexFindNext(IndexQuery::ReadDirection direction,
+                       uint32_t user_logspace, uint64_t query_seqnum,
+                       uint64_t query_tag, uint64_t* seqnum,
+                       uint16_t* engine_id);
+    bool IndexFindPrev(IndexQuery::ReadDirection direction,
+                       uint32_t user_logspace, uint64_t query_seqnum,
+                       uint64_t query_tag, uint64_t* seqnum,
+                       uint16_t* engine_id);
 
-    void AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags);
     bool IndexFindLocalId(uint64_t localid, uint64_t* seqnum);
 
 private:
@@ -94,6 +106,8 @@ private:
         UserTagVec user_tags;
     };
     std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
+
+    PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
 
     DISALLOW_COPY_AND_ASSIGN(IndexDataManager);
 };

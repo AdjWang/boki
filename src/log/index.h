@@ -50,18 +50,17 @@ private:
     void OnFinalized(uint32_t metalog_position) override;
     void AdvanceIndexProgress();
 
-    bool ProcessLocalIdQuery(const IndexQuery& query);
-    void ProcessQuery(const IndexQuery& query);
-    void ProcessReadNext(const IndexQuery& query);
-    void ProcessReadPrev(const IndexQuery& query);
-    bool ProcessBlockingQuery(const IndexQuery& query);
-
-    bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
-    bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+    IndexQueryResult ProcessQuery(const IndexQuery& query);
+    IndexQueryResult ProcessLocalIdQuery(const IndexQuery& query);
+    IndexQueryResult ProcessReadNext(const IndexQuery& query);
+    IndexQueryResult ProcessReadPrev(const IndexQuery& query);
+    IndexQueryResult ProcessBlockingQuery(const IndexQuery& query);
+    void ProcessQueryResult(const IndexQueryResult& result);
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
                                       uint64_t seqnum, uint16_t engine_id);
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
+    IndexQueryResult BuildPendingResult(const IndexQuery& query);
     IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
                                          uint64_t seqnum, uint16_t engine_id);
 
