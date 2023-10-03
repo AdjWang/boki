@@ -5,11 +5,25 @@
 
 namespace faas {
 namespace log {
+using namespace boost::interprocess;
+// Typedefs of allocators and containers
+typedef managed_shared_memory::segment_manager segment_manager_t;
+typedef allocator<void, segment_manager_t> void_allocator_t;
+typedef allocator<uint32_t, segment_manager_t> uint32_allocator_t;
+
+// Definition of the map holding a string as key and complex_data as mapped type
+typedef vector<uint32_t, uint32_allocator_t> log_stream_vec_t;
+typedef std::pair<const uint32_t, log_stream_vec_t> map_value_type_t;
+typedef allocator<map_value_type_t, segment_manager_t> map_value_type_allocator_t;
+// typedef flat_map<uint64_t, log_stream_vec_t, std::less<uint64_t>, map_value_type_allocator_t> log_stream_map_t;
+typedef boost::unordered_map<uint64_t, log_stream_vec_t, boost::hash<uint64_t>,
+                             std::equal_to<uint64_t>, map_value_type_allocator_t>
+    log_stream_map_t;
 
 class PerSpaceIndex {
 public:
     PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace);
-    ~PerSpaceIndex() {}
+    ~PerSpaceIndex();
 
     void Add(uint32_t seqnum_lowhalf, uint16_t engine_id, const UserTagVec& user_tags);
 
@@ -21,14 +35,18 @@ public:
 private:
     uint32_t logspace_id_;
     uint32_t user_logspace_;
+    managed_shared_memory segment_;
+    void_allocator_t alloc_inst_;
 
     absl::flat_hash_map</* seqnum */ uint32_t, uint16_t> engine_ids_;
-    std::vector<uint32_t> seqnums_;
-    absl::flat_hash_map</* tag */ uint64_t, std::vector<uint32_t>> seqnums_by_tag_;
+    // std::vector<uint32_t> seqnums_;
+    log_stream_vec_t seqnums_;
+    // absl::flat_hash_map</* tag */ uint64_t, std::vector<uint32_t>> seqnums_by_tag_;
+    log_stream_map_t seqnums_by_tag_;
 
-    bool FindPrev(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
+    bool FindPrev(const log_stream_vec_t& seqnums, uint64_t query_seqnum,
                   uint32_t* result_seqnum) const;
-    bool FindNext(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
+    bool FindNext(const log_stream_vec_t& seqnums, uint64_t query_seqnum,
                   uint32_t* result_seqnum) const;
 
     DISALLOW_COPY_AND_ASSIGN(PerSpaceIndex);
@@ -41,6 +59,7 @@ class IndexDataManager {
 public:
     IndexDataManager(uint32_t logspace_id);
 
+    // uint16_t view_id() const { return bits::HighHalf32(logspace_id_); }
     uint32_t indexed_seqnum_position() const {
         return indexed_seqnum_position_;
     }

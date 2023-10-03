@@ -61,22 +61,39 @@ bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
 
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),
-      user_logspace_(user_logspace) {}
+      user_logspace_(user_logspace),
+      segment_(create_only, "MySharedMemory", 100*1024*1024),
+      alloc_inst_(segment_.get_segment_manager()),
+      seqnums_(alloc_inst_),
+      seqnums_by_tag_(*segment_.construct<log_stream_map_t>
+        //(object name), (first ctor parameter, second ctor parameter)
+        ("MyMap")(0u, boost::hash<uint64_t>(), std::equal_to<uint64_t>(), alloc_inst_))
+    {}
+
+PerSpaceIndex::~PerSpaceIndex() {
+    shared_memory_object::remove("MySharedMemory");
+}
 
 void PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
-                               const UserTagVec& user_tags) {
+                        const UserTagVec& user_tags) {
     DCHECK(!engine_ids_.contains(seqnum_lowhalf));
     engine_ids_[seqnum_lowhalf] = engine_id;
     DCHECK(seqnums_.empty() || seqnum_lowhalf > seqnums_.back());
     seqnums_.push_back(seqnum_lowhalf);
     for (uint64_t user_tag : user_tags) {
         DCHECK_NE(user_tag, kEmptyLogTag);
-        seqnums_by_tag_[user_tag].push_back(seqnum_lowhalf);
+        if (seqnums_by_tag_.contains(user_tag)) {
+            seqnums_by_tag_.at(user_tag).push_back(seqnum_lowhalf);
+        } else {
+            vector<uint32_t, uint32_allocator_t> value_vec(alloc_inst_);
+            value_vec.push_back(seqnum_lowhalf);
+            seqnums_by_tag_.emplace(user_tag, value_vec);
+        }
     }
 }
 
 bool PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
-                                    uint64_t* seqnum, uint16_t* engine_id) const {
+                             uint64_t* seqnum, uint16_t* engine_id) const {
     uint32_t seqnum_lowhalf;
     if (user_tag == kEmptyLogTag) {
         if (!FindPrev(seqnums_, query_seqnum, &seqnum_lowhalf)) {
@@ -98,7 +115,7 @@ bool PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
 }
 
 bool PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
-                                    uint64_t* seqnum, uint16_t* engine_id) const {
+                             uint64_t* seqnum, uint16_t* engine_id) const {
     uint32_t seqnum_lowhalf;
     if (user_tag == kEmptyLogTag) {
         if (!FindNext(seqnums_, query_seqnum, &seqnum_lowhalf)) {
@@ -119,13 +136,14 @@ bool PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
     return true;
 }
 
-bool PerSpaceIndex::FindPrev(const std::vector<uint32_t>& seqnums,
-                                    uint64_t query_seqnum, uint32_t* result_seqnum) const {
+bool PerSpaceIndex::FindPrev(const log_stream_vec_t& seqnums,
+                             uint64_t query_seqnum,
+                             uint32_t* result_seqnum) const {
     if (seqnums.empty() || bits::JoinTwo32(logspace_id_, seqnums.front()) > query_seqnum) {
         return false;
     }
     if (query_seqnum == kMaxLogSeqNum) {
-        *result_seqnum = seqnums.back();
+        *result_seqnum = *seqnums.rbegin();
         return true;
     }
     auto iter = absl::c_upper_bound(
@@ -142,9 +160,10 @@ bool PerSpaceIndex::FindPrev(const std::vector<uint32_t>& seqnums,
     }
 }
 
-bool PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
-                                    uint64_t query_seqnum, uint32_t* result_seqnum) const {
-    if (seqnums.empty() || bits::JoinTwo32(logspace_id_, seqnums.back()) < query_seqnum) {
+bool PerSpaceIndex::FindNext(const log_stream_vec_t& seqnums,
+                             uint64_t query_seqnum,
+                             uint32_t* result_seqnum) const {
+    if (seqnums.empty() || bits::JoinTwo32(logspace_id_, *seqnums.rbegin()) < query_seqnum) {
         return false;
     }
     auto iter = absl::c_lower_bound(

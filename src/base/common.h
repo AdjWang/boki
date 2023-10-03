@@ -112,6 +112,16 @@ __END_THIRD_PARTY_HEADERS
 
 // boost
 #include <boost/interprocess/sync/named_mutex.hpp>
+#include <boost/optional.hpp>
+#include <boost/unordered_map.hpp>
+#include <boost/convert/lexical_cast.hpp>
+#include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/managed_mapped_file.hpp>
+#include <boost/interprocess/allocators/allocator.hpp>
+#include <boost/interprocess/containers/map.hpp>
+#include <boost/interprocess/containers/flat_map.hpp>
+#include <boost/interprocess/containers/vector.hpp>
+#include <boost/interprocess/containers/string.hpp>
 
 #include "base/macro.h"
 #include "base/logging.h"
