@@ -8,7 +8,7 @@ SRC_PATH = ./src
 # General compiler flags
 COMPILE_FLAGS = -std=c++17 -march=haswell -D__FAAS_SRC \
 	-Wall -Wextra -Werror -Wno-unused-parameter \
-	-fdata-sections -ffunction-sections
+	-fdata-sections -ffunction-sections -fPIC
 # Additional release-specific flags
 RCOMPILE_FLAGS = -DNDEBUG -O3
 # Additional debug-specific flags
@@ -151,7 +151,7 @@ clean:
 	@echo "Deleting protobuf generated code"
 	@$(RM) -f src/proto/*.pb.h src/proto/*.pb.cc src/proto/*.pb.cpp
 
-binary: $(TARGET_BINS)
+binary: $(TARGET_BINS) $(BIN_PATH)/libindex.so
 
 # Proto files must be compiled before all objects
 $(OBJECTS): $(PROTO_HEADERS)
@@ -160,6 +160,10 @@ $(OBJECTS): $(PROTO_HEADERS)
 $(BIN_PATH)/%: $(BUILD_PATH)/bin/%.o $(NON_BIN_OBJECTS)
 	@echo "Linking: $@"
 	$(CMD_PREFIX)$(CXX) $^ $(LDFLAGS) $(LINK_FLAGS) -o $@
+
+$(BIN_PATH)/libindex.so: $(NON_BIN_OBJECTS)
+	@echo "Linking: $@"
+	$(CMD_PREFIX)$(CXX) $^ -shared $(LDFLAGS) $(LINK_FLAGS) -o $@
 
 .SECONDARY: $(OBJECTS)
 

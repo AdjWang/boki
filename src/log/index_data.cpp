@@ -1,4 +1,5 @@
 #include "log/index_data.h"
+#include "log/index_data_c.h"
 
 namespace faas {
 namespace log {
@@ -62,6 +63,7 @@ bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),
       user_logspace_(user_logspace),
+      // TODO: more reasonable name and size
       segment_(create_only, "MySharedMemory", 100*1024*1024),
       alloc_inst_(segment_.get_segment_manager()),
       seqnums_(alloc_inst_),
@@ -182,3 +184,10 @@ bool PerSpaceIndex::FindNext(const log_stream_vec_t& seqnums,
 
 }  // namespace log
 }  // namespace faas
+
+void test_func() {
+    printf("test func\n");
+    auto index_data = faas::log::IndexDataManager(1u);
+    index_data.set_indexed_metalog_position(4u);
+    printf("test func create index_data\n");
+}
