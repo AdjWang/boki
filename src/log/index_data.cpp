@@ -18,14 +18,10 @@ void IndexDataManager::AddIndexData(uint32_t user_logspace,
     GetOrCreateIndex(user_logspace)->Add(seqnum_lowhalf, engine_id, user_tags);
 }
 
-void IndexDataManager::AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf,
-                                         UserTagVec user_tags) {
+void IndexDataManager::AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf) {
     DCHECK(log_index_map_.find(localid) == log_index_map_.end())
         << "Duplicate index_data.local_id for log_index_map_";
-    log_index_map_[localid] = AsyncIndexData{
-        .seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf),
-        .user_tags = user_tags,
-    };
+    log_index_map_[localid] = seqnum_lowhalf;
 }
 
 IndexDataManager::QueryConsistencyType IndexDataManager::CheckConsistency(const IndexQuery& query) {
@@ -61,8 +57,8 @@ IndexQueryResult IndexDataManager::ProcessLocalIdQuery(const IndexQuery& query) 
 
     // replace seqnum if querying by localid
     uint64_t localid = query.query_seqnum;
-    uint64_t seqnum = kInvalidLogSeqNum;
-    if (IndexFindLocalId(localid, &seqnum)) {
+    uint32_t seqnum_lowhalf = gsl::narrow_cast<uint32_t>(kInvalidLogSeqNum);
+    if (IndexFindLocalId(localid, &seqnum_lowhalf)) {
         // HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
         //         local_id, seqnum);
         // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
@@ -70,6 +66,7 @@ IndexQueryResult IndexDataManager::ProcessLocalIdQuery(const IndexQuery& query) 
         DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
 
         uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
+        uint64_t seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
         return BuildFoundResult(query, view_id(), seqnum, engine_id);
     } else {
         // not found
@@ -176,13 +173,13 @@ bool IndexDataManager::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, 
         query.query_seqnum, query.user_tag, seqnum, engine_id);
 }
 
-bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
+bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint32_t* seqnum) {
     auto it = log_index_map_.find(localid);
     if (it == log_index_map_.end()) {
         return false;
     } else {
         DCHECK_NE(seqnum, nullptr);
-        *seqnum = it->second.seqnum;
+        *seqnum = it->second;
         return true;
     }
 }

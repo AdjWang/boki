@@ -194,7 +194,7 @@ void Index::AdvanceIndexProgress() {
             index_data_.AddIndexData(index_data.user_logspace, seqnum,
                                      engine_id, index_data.user_tags);
             // update index map, to serve async log query
-            index_data_.AddAsyncIndexData(index_data.local_id, seqnum, index_data.user_tags);
+            index_data_.AddAsyncIndexData(index_data.local_id, seqnum);
 
             iter = received_data_.erase(iter);
         }

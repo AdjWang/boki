@@ -1,3 +1,9 @@
+// TODO: put all status on shm
+// 1. engine_ids_
+// 2. index_
+// 3. indexed_seqnum_position_
+// 4. indexed_metalog_position_
+// 5. log_index_map_
 #pragma once
 
 #include "log/common.h"
@@ -80,7 +86,7 @@ public:
     // Used by engine
     void AddIndexData(uint32_t user_logspace, uint32_t seqnum_lowhalf, uint16_t engine_id,
                       const UserTagVec& user_tags);
-    void AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags);
+    void AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf);
 
     enum QueryConsistencyType {
         kInitFutureViewBail,
@@ -108,15 +114,12 @@ private:
     uint32_t indexed_metalog_position_;
 
     // updated when receiving an index, used to serve async log query
-    struct AsyncIndexData {
-        uint64_t seqnum;
-        UserTagVec user_tags;
-    };
-    std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
+    std::unordered_map</*local_id*/ uint64_t, /*seqnum_lowhalf*/ uint32_t>
+        log_index_map_;
 
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
-    bool IndexFindLocalId(uint64_t localid, uint64_t* seqnum);
+    bool IndexFindLocalId(uint64_t localid, uint32_t* seqnum);
 
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
 
