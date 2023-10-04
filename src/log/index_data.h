@@ -82,22 +82,19 @@ public:
                       const UserTagVec& user_tags);
     void AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf, UserTagVec user_tags);
 
+    enum QueryConsistencyType {
+        kInitFutureViewBail,
+        kInitPastViewOK,
+        kInitCurrentViewPending,
+        kInitCurrentViewOK,
+        kContOK,
+    };
+    QueryConsistencyType CheckConsistency(const IndexQuery& query);
+    // Used by engine and shared library
     IndexQueryResult ProcessLocalIdQuery(const IndexQuery& query);
     IndexQueryResult ProcessReadNext(const IndexQuery& query);
     IndexQueryResult ProcessReadPrev(const IndexQuery& query);
     IndexQueryResult ProcessBlockingQuery(const IndexQuery& query);
-
-    // Used by engine and shared library
-    bool IndexFindLocalId(uint64_t localid, uint64_t* seqnum);
-    // Used by shared library
-    bool IndexFindNext(IndexQuery::ReadDirection direction,
-                       uint32_t user_logspace, uint64_t query_seqnum,
-                       uint64_t query_tag, uint64_t* seqnum,
-                       uint16_t* engine_id);
-    bool IndexFindPrev(IndexQuery::ReadDirection direction,
-                       uint32_t user_logspace, uint64_t query_seqnum,
-                       uint64_t query_tag, uint64_t* seqnum,
-                       uint16_t* engine_id);
 
     // Index requires this function to handle timeout
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
@@ -117,9 +114,9 @@ private:
     };
     std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
 
-    // Used by engine
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
+    bool IndexFindLocalId(uint64_t localid, uint64_t* seqnum);
 
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
 

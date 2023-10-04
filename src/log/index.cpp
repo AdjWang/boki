@@ -101,39 +101,40 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
 }
 
 void Index::MakeQuery(const IndexQuery& query) {
-    if (query.initial) {
-        HVLOG(1) << "Receive initial query";
-        uint16_t view_id = log_utils::GetViewId(query.metalog_progress);
-        if (view_id > view_->id()) {
+    IndexDataManager::QueryConsistencyType consistency_type = index_data_.CheckConsistency(query);
+    switch (consistency_type) {
+        case IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
             HLOG_F(FATAL, "Cannot process query with metalog_progress from the future: "
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
-        } else if (view_id < view_->id()) {
+            break;
+        case IndexDataManager::QueryConsistencyType::kInitCurrentViewPending: {
+            // DEBUG: stat temporary
+            IndexQuery& temp_query = const_cast<IndexQuery&>(query);
+            temp_query.metalog_inside = false;
+
+            uint32_t position = bits::LowHalf64(query.metalog_progress);
+            pending_queries_.insert(std::make_pair(position, temp_query));
+            break;
+        }
+        case IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
+        case IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
             IndexQueryResult result = ProcessQuery(query);
             ProcessQueryResult(result);
-        } else {
-            DCHECK_EQ(view_id, view_->id());
-            uint32_t position = bits::LowHalf64(query.metalog_progress);
-            if (position <= index_data_.indexed_metalog_position()) {
+            break;
+        }
+        case IndexDataManager::QueryConsistencyType::kContOK:
+            if (finalized()) {
+                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} since finalized",
+                        uint16_t(query.type), query.query_seqnum);
                 IndexQueryResult result = ProcessQuery(query);
                 ProcessQueryResult(result);
             } else {
-                // DEBUG: stat temporary
-                IndexQuery& temp_query = const_cast<IndexQuery&>(query);
-                temp_query.metalog_inside = false;
-                pending_queries_.insert(std::make_pair(position, temp_query));
+                pending_queries_.insert(std::make_pair(kMaxMetalogPosition, query));
             }
-        }
-    } else {
-        HVLOG(1) << "Receive continue query";
-        if (finalized()) {
-            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} since finalized",
-                    uint16_t(query.type), query.query_seqnum);
-            IndexQueryResult result = ProcessQuery(query);
-            ProcessQueryResult(result);
-        } else {
-            pending_queries_.insert(std::make_pair(kMaxMetalogPosition, query));
-        }
+            break;
+        default:
+            UNREACHABLE();
     }
 }
 

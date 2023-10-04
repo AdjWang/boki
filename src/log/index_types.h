@@ -6,9 +6,9 @@ namespace faas {
 namespace log {
 
 struct IndexFoundResult {
-    uint16_t view_id;
-    uint16_t engine_id;
-    uint64_t seqnum;
+    uint16_t view_id;       // Used by remote index read to identify view/engine_node
+    uint16_t engine_id;     // Used by remote index read to identify view/engine_node
+    uint64_t seqnum;        // Return to the user function
 };
 
 struct IndexQuery {
@@ -50,5 +50,5 @@ struct IndexQueryResult {
     IndexFoundResult found_result;
 };
 
-}
-}
+}  // namespace log
+}  // namespace faas

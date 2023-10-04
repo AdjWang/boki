@@ -28,6 +28,29 @@ void IndexDataManager::AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowha
     };
 }
 
+IndexDataManager::QueryConsistencyType IndexDataManager::CheckConsistency(const IndexQuery& query) {
+    if (query.initial) {
+        HVLOG(1) << "Receive initial query";
+        uint16_t func_view_id = log_utils::GetViewId(query.metalog_progress);
+        if (func_view_id > view_id()) {
+            return IndexDataManager::QueryConsistencyType::kInitFutureViewBail;
+        } else if (func_view_id < view_id()) {
+            return IndexDataManager::QueryConsistencyType::kInitPastViewOK;
+        } else {
+            DCHECK_EQ(func_view_id, view_id());
+            uint32_t position = bits::LowHalf64(query.metalog_progress);
+            if (position <= indexed_metalog_position()) {
+                return IndexDataManager::QueryConsistencyType::kInitCurrentViewOK;
+            } else {
+                return IndexDataManager::QueryConsistencyType::kInitCurrentViewPending;
+            }
+        }
+    } else {
+        HVLOG(1) << "Receive continue query";
+        return IndexDataManager::QueryConsistencyType::kContOK;
+    }
+}
+
 IndexQueryResult IndexDataManager::ProcessLocalIdQuery(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadLocalId);
     // Local id is propagated by user atop function arguments, it may faster
@@ -80,8 +103,8 @@ IndexQueryResult IndexDataManager::ProcessReadNext(const IndexQuery& query) {
                 return BuildFoundResult(query, found_result.view_id,
                                         found_result.seqnum, found_result.engine_id);
             } else {
-                return BuildNotFoundResult(query);
                 HVLOG(1) << "ProcessReadNext: NotFoundResult";
+                return BuildNotFoundResult(query);
             }
         }
     } else {
@@ -135,13 +158,22 @@ IndexQueryResult IndexDataManager::ProcessBlockingQuery(const IndexQuery& query)
 }
 
 bool IndexDataManager::IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
-    return IndexFindNext(query.direction, query.user_logspace,
-                         query.query_seqnum, query.user_tag, seqnum, engine_id);
+    DCHECK(query.direction == IndexQuery::kReadNext ||
+           query.direction == IndexQuery::kReadNextB);
+    if (!index_.contains(query.user_logspace)) {
+        return false;
+    }
+    return GetOrCreateIndex(query.user_logspace)->FindNext(
+        query.query_seqnum, query.user_tag, seqnum, engine_id);
 }
 
 bool IndexDataManager::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
-    return IndexFindPrev(query.direction, query.user_logspace,
-                         query.query_seqnum, query.user_tag, seqnum, engine_id);
+    DCHECK(query.direction == IndexQuery::kReadPrev);
+    if (!index_.contains(query.user_logspace)) {
+        return false;
+    }
+    return GetOrCreateIndex(query.user_logspace)->FindPrev(
+        query.query_seqnum, query.user_tag, seqnum, engine_id);
 }
 
 bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
@@ -155,28 +187,7 @@ bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint64_t* seqnum) {
     }
 }
 
-bool IndexDataManager::IndexFindNext(IndexQuery::ReadDirection direction,
-                                     uint32_t user_logspace,
-                                     uint64_t query_seqnum, uint64_t query_tag,
-                                     uint64_t* seqnum, uint16_t* engine_id) {
-    DCHECK(direction == IndexQuery::kReadNext ||
-           direction == IndexQuery::kReadNextB);
-    if (!index_.contains(user_logspace)) {
-        return false;
-    }
-    return GetOrCreateIndex(user_logspace)->FindNext(query_seqnum, query_tag, seqnum, engine_id);
-}
-
-bool IndexDataManager::IndexFindPrev(IndexQuery::ReadDirection direction,
-                                     uint32_t user_logspace,
-                                     uint64_t query_seqnum, uint64_t query_tag,
-                                     uint64_t* seqnum, uint16_t* engine_id) {
-    DCHECK(direction == IndexQuery::kReadPrev);
-    if (!index_.contains(user_logspace)) {
-        return false;
-    }
-    return GetOrCreateIndex(user_logspace)->FindPrev(query_seqnum, query_tag, seqnum, engine_id);
-}
+// ----------------------------------------------------------------------------
 
 PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
@@ -393,6 +404,7 @@ bool PerSpaceIndex::FindNext(const log_stream_vec_t& seqnums,
 }  // namespace log
 }  // namespace faas
 
+
 void test_func() {
     printf("test func\n");
     auto index_data = faas::log::IndexDataManager(1u);
@@ -408,22 +420,102 @@ void DestructIndexData(void* index_data) {
     delete reinterpret_cast<faas::log::IndexDataManager*>(index_data);
 }
 
-bool IndexFindNext(void* index_data, uint8_t direction,
-                   uint32_t user_logspace, uint64_t query_seqnum,
-                   uint64_t query_tag, uint64_t* seqnum, uint16_t* engine_id) {
-    return reinterpret_cast<faas::log::IndexDataManager*>(index_data)->IndexFindNext(
-        static_cast<faas::log::IndexQuery::ReadDirection>(direction),
-        user_logspace, query_seqnum, query_tag, seqnum, engine_id);
-}
-bool IndexFindPrev(void* index_data, uint8_t direction,
-                   uint32_t user_logspace, uint64_t query_seqnum,
-                   uint64_t query_tag, uint64_t* seqnum, uint16_t* engine_id) {
-    return reinterpret_cast<faas::log::IndexDataManager*>(index_data)->IndexFindPrev(
-        static_cast<faas::log::IndexQuery::ReadDirection>(direction),
-        user_logspace, query_seqnum, query_tag, seqnum, engine_id);
+int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
+                        uint64_t localid, /*Out*/ uint64_t* seqnum) {
+    auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+    faas::log::IndexQuery query = faas::log::IndexQuery {
+        .direction = faas::log::IndexQuery::kReadLocalId,
+        .initial = true,
+        .query_seqnum = localid,
+        .metalog_progress = *metalog_progress,
+    };
+    faas::log::IndexDataManager::QueryConsistencyType consistency_type =
+        this_->CheckConsistency(query);
+    switch (consistency_type) {
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
+            return -1;
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewPending:
+            return -2;
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
+            faas::log::IndexQueryResult result =
+                this_->ProcessLocalIdQuery(query);
+            if (result.state == faas::log::IndexQueryResult::kFound) {
+                *metalog_progress = result.metalog_progress;
+                *seqnum = result.found_result.seqnum;
+            }
+            return static_cast<int>(result.state);
+        }
+        case faas::log::IndexDataManager::QueryConsistencyType::kContOK:
+        default:
+            return -3;
+    }
 }
 
-bool IndexFindLocalId(void* index_data, uint64_t localid, uint64_t* seqnum) {
-    return reinterpret_cast<faas::log::IndexDataManager*>(index_data)
-        ->IndexFindLocalId(localid, seqnum);
+int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
+                    uint32_t user_logspace, uint64_t query_seqnum,
+                    uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
+    auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+    faas::log::IndexQuery query = faas::log::IndexQuery {
+        .direction = faas::log::IndexQuery::kReadNext,
+        .initial = true,
+        .user_logspace = user_logspace,
+        .user_tag = query_tag,
+        .query_seqnum = query_seqnum,
+        .metalog_progress = *metalog_progress,
+    };
+    faas::log::IndexDataManager::QueryConsistencyType consistency_type =
+        this_->CheckConsistency(query);
+    switch (consistency_type) {
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
+            return -1;
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewPending:
+            return -2;
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
+            faas::log::IndexQueryResult result = this_->ProcessReadNext(query);
+            if (result.state == faas::log::IndexQueryResult::kFound) {
+                *metalog_progress = result.metalog_progress;
+                *seqnum = result.found_result.seqnum;
+            }
+            return static_cast<int>(result.state);
+        }
+        case faas::log::IndexDataManager::QueryConsistencyType::kContOK:
+        default:
+            return -3;
+    }
+}
+
+int ProcessReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
+                    uint32_t user_logspace, uint64_t query_seqnum,
+                    uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
+    auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+    faas::log::IndexQuery query = faas::log::IndexQuery {
+        .direction = faas::log::IndexQuery::kReadPrev,
+        .initial = true,
+        .user_logspace = user_logspace,
+        .user_tag = query_tag,
+        .query_seqnum = query_seqnum,
+        .metalog_progress = *metalog_progress,
+    };
+    faas::log::IndexDataManager::QueryConsistencyType consistency_type =
+        this_->CheckConsistency(query);
+    switch (consistency_type) {
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
+            return -1;
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewPending:
+            return -2;
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
+        case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
+            faas::log::IndexQueryResult result = this_->ProcessReadPrev(query);
+            if (result.state == faas::log::IndexQueryResult::kFound) {
+                *metalog_progress = result.metalog_progress;
+                *seqnum = result.found_result.seqnum;
+            }
+            return static_cast<int>(result.state);
+        }
+        case faas::log::IndexDataManager::QueryConsistencyType::kContOK:
+        default:
+            return -3;
+    }
 }
