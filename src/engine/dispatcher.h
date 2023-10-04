@@ -25,7 +25,8 @@ public:
     void OnFuncWorkerDisconnected(FuncWorker* func_worker);
     bool OnNewFuncCall(const protocol::FuncCall& func_call,
                        const protocol::FuncCall& parent_func_call,
-                       size_t input_size, std::span<const char> inline_input, bool shm_input);
+                       uint64_t parent_metalog_progress, size_t input_size,
+                       std::span<const char> inline_input, bool shm_input);
     bool OnFuncCallCompleted(const protocol::FuncCall& func_call,
                              int32_t processing_time, int32_t dispatch_delay, size_t output_size);
     bool OnFuncCallFailed(const protocol::FuncCall& func_call, int32_t dispatch_delay);

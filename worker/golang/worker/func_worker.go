@@ -100,6 +100,7 @@ type FuncWorker struct {
 	nextCallId          uint32
 	nextLogOpId         uint64
 	currentCall         uint64
+	metalogProgress     uint64
 	uidHighHalf         uint32
 	nextUidLowHalf      uint32
 	sharedLogReadCount  int32
@@ -129,6 +130,7 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		nextCallId:           0,
 		nextLogOpId:          0,
 		currentCall:          0,
+		metalogProgress:      0,
 		uidHighHalf:          uidHighHalf,
 		nextUidLowHalf:       0,
 		// STAT
@@ -136,6 +138,19 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		processStat: make(map[uint64][]statEntry),
 	}
 	return w, nil
+}
+
+// thread safe
+func (w *FuncWorker) updateMetalogProgress(metalogProgress uint64) {
+	for {
+		oldMetalogProgress := atomic.LoadUint64(&w.metalogProgress)
+		if oldMetalogProgress >= metalogProgress {
+			break
+		}
+		if atomic.CompareAndSwapUint64(&w.metalogProgress, oldMetalogProgress, metalogProgress) {
+			break
+		}
+	}
 }
 
 func (w *FuncWorker) statInit(fullCallId uint64) {
@@ -232,12 +247,12 @@ func (w *FuncWorker) Run() {
 			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
 				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
 				appendDelay := protocol.GetEngineOpDelayInMessage(message)
-				w.statAppend(funcCall.FullCallId(), LogOpType_Append, int64(f2eDispatchDelay)+appendDelay+e2fDispatchDelay)
+				w.statAppend(funcCall.FullCallId(), LogOpType_Append, int64(f2eDispatchDelay+appendDelay)+e2fDispatchDelay)
 				// appendSc.AddSample(float64(dispatchDelay))
 			case protocol.SharedLogResultType_READ_OK:
 				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
 				queryDelay := protocol.GetEngineOpDelayInMessage(message)
-				w.statAppend(funcCall.FullCallId(), LogOpType_Read, int64(f2eDispatchDelay)+queryDelay+e2fDispatchDelay)
+				w.statAppend(funcCall.FullCallId(), LogOpType_Read, int64(f2eDispatchDelay+queryDelay)+e2fDispatchDelay)
 				// readSc.AddSample(float64(dispatchDelay))
 				flags := protocol.GetFlagsFromMessage(message)
 				cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
@@ -247,13 +262,17 @@ func (w *FuncWorker) Run() {
 			case protocol.SharedLogResultType_AUXDATA_OK:
 				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
 				setAuxDelay := protocol.GetEngineOpDelayInMessage(message)
-				w.statAppend(funcCall.FullCallId(), LogOpType_SetAux, int64(f2eDispatchDelay)+setAuxDelay+e2fDispatchDelay)
+				w.statAppend(funcCall.FullCallId(), LogOpType_SetAux, int64(f2eDispatchDelay+setAuxDelay)+e2fDispatchDelay)
 			default:
 				// otherSc.AddSample(float64(dispatchDelay))
 			}
 			// }(dispatchDelay, message)
 
 			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
+			// Update metalogProgress for function
+			metalogProgress := protocol.GetMetalogProgressInMessage(message)
+			w.updateMetalogProgress(metalogProgress)
+			// Dispatch response
 			w.mux.Lock()
 			if protocol.IsSharedLogAsyncResult(message) {
 				if ch, exists := w.asyncOutgoingLogOps[id]; exists {
@@ -393,6 +412,9 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 	var output []byte
 	atomic.StoreInt32(&w.sharedLogReadCount, int32(0))
 	atomic.StoreUint64(&w.currentCall, funcCall.FullCallId())
+	// inherit from parent metalog_progress
+	metalogProgress := protocol.GetMetalogProgressInMessage(dispatchFuncMessage)
+	atomic.StoreUint64(&w.metalogProgress, metalogProgress)
 	// STAT
 	w.statInit(funcCall.FullCallId())
 
@@ -529,7 +551,7 @@ func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte,
 		log.Panicf("[FATAL] Unsupported")
 	}
 
-	message := protocol.NewInvokeFuncCallMessage(funcCall, atomic.LoadUint64(&w.currentCall), async)
+	message := protocol.NewInvokeFuncCallMessage(funcCall, atomic.LoadUint64(&w.metalogProgress), atomic.LoadUint64(&w.currentCall), async)
 
 	var inputRegion *ipc.ShmRegion
 	var outputFifo *os.File
@@ -752,7 +774,8 @@ func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []
 	for {
 		id := atomic.AddUint64(&w.nextLogOpId, 1)
 		currentCallId := atomic.LoadUint64(&w.currentCall)
-		message := protocol.NewSharedLogAppendMessage(currentCallId, w.clientId, uint16(len(tags)), id)
+		metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+		message := protocol.NewSharedLogAppendMessage(currentCallId, metalogProgress, w.clientId, uint16(len(tags)), id)
 		if len(tags) == 0 {
 			protocol.FillInlineDataInMessage(message, data)
 		} else {
@@ -830,7 +853,8 @@ func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []ty
 	for {
 		id := atomic.AddUint64(&w.nextLogOpId, 1)
 		currentCallId := atomic.LoadUint64(&w.currentCall)
-		message := protocol.NewAsyncSharedLogAppendMessage(currentCallId, w.clientId, uint16(len(bokiTags)), id)
+		metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+		message := protocol.NewAsyncSharedLogAppendMessage(currentCallId, metalogProgress, w.clientId, uint16(len(bokiTags)), id)
 		if len(bokiTags) == 0 {
 			protocol.FillInlineDataInMessage(message, data)
 		} else {
@@ -1054,7 +1078,8 @@ func (w *FuncWorker) GenerateUniqueID() uint64 {
 func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
@@ -1062,7 +1087,8 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
@@ -1070,7 +1096,8 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
@@ -1078,7 +1105,8 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -1086,7 +1114,8 @@ func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seq
 func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -1094,7 +1123,8 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64
 func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 
@@ -1103,7 +1133,8 @@ func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seq
 func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
@@ -1111,7 +1142,8 @@ func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, se
 func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
@@ -1119,7 +1151,8 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint6
 func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
 	return w.asyncSharedLogReadCommon2(ctx, message, id)
 }
 
@@ -1130,7 +1163,8 @@ func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, se
 func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, localId uint64) (*types.LogEntryWithMeta, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, localId, id)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, metalogProgress, w.clientId, localId, id)
 	return w.asyncSharedLogReadCommon(ctx, message, id)
 }
 

@@ -67,7 +67,7 @@ protected:
         int64_t start_timestamp;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
-        int64_t log_dispatch_delay;
+        int32_t log_dispatch_delay;
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;
@@ -126,7 +126,6 @@ private:
 
     struct FnCallContext {
         uint32_t user_logspace;
-        uint64_t metalog_progress;
         uint64_t parent_call_id;
     };
 
@@ -145,6 +144,8 @@ private:
 
     void PopulateLogTagsAndData(const protocol::Message& message, LocalOp* op);
     void RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay);
+
+    uint64_t UpdateAndGetMetalogProgress(uint64_t full_call_id, uint64_t metalog_progress);
 
     DISALLOW_COPY_AND_ASSIGN(EngineBase);
 };

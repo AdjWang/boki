@@ -289,12 +289,14 @@ void Engine::HandleInvokeFuncMessage(const Message& message) {
         if (message.payload_size < 0) {
             success = dispatcher->OnNewFuncCall(
                 func_call, is_async ? protocol::kInvalidFuncCall : parent_func_call,
+                message.metalog_progress,
                 /* input_size= */ gsl::narrow_cast<size_t>(-message.payload_size),
                 EMPTY_CHAR_SPAN, /* shm_input= */ true);
             
         } else {
             success = dispatcher->OnNewFuncCall(
                 func_call, is_async ? protocol::kInvalidFuncCall : parent_func_call,
+                message.metalog_progress,
                 /* input_size= */ gsl::narrow_cast<size_t>(message.payload_size),
                 MessageHelper::GetInlineData(message), /* shm_input= */ false);
         }
@@ -484,10 +486,12 @@ void Engine::OnExternalFuncCall(const FuncCall& func_call, uint32_t logspace,
     if (input.size() <= MESSAGE_INLINE_DATA_SIZE) {
         ret = dispatcher->OnNewFuncCall(
             func_call, protocol::kInvalidFuncCall,
+            /*parent_metalog_progress*/ 0u,
             input.size(), /* inline_input= */ input, /* shm_input= */ false);
     } else {
         ret = dispatcher->OnNewFuncCall(
             func_call, protocol::kInvalidFuncCall,
+            /*parent_metalog_progress*/ 0u,
             input.size(), /* inline_input= */ EMPTY_CHAR_SPAN, /* shm_input= */ true);
     }
     if (!ret) {

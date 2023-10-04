@@ -75,7 +75,6 @@ void EngineBase::OnNewExternalFuncCall(const FuncCall& func_call, uint32_t log_s
     }
     fn_call_ctx_[func_call.full_call_id] = FnCallContext {
         .user_logspace = log_space,
-        .metalog_progress = 0,
         .parent_call_id = protocol::kInvalidFuncCallId
     };
     // HLOG(INFO) << "Applying new external function call: "
@@ -243,14 +242,14 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->client_data = message.log_client_data;
     op->full_call_id = func_call.full_call_id;
     op->user_logspace = ctx.user_logspace;
-    op->metalog_progress = ctx.metalog_progress;
+    op->metalog_progress = message.metalog_progress;
     op->type = MessageHelper::GetSharedLogOpType(message);
     op->seqnum = kInvalidLogSeqNum;
     op->query_tag = kInvalidLogTag;
     op->user_tags.clear();
     op->data.Reset();
-    op->log_dispatch_delay =
-        GetMonotonicMicroTimestamp() - message.send_timestamp;
+    op->log_dispatch_delay = gsl::narrow_cast<int32_t>(
+        GetMonotonicMicroTimestamp() - message.send_timestamp);
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -277,7 +276,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         op->data.AppendData(MessageHelper::GetInlineData(message));
         break;
     case SharedLogOpType::IPC_BENCH:
-        op->seqnum = message.bench_size;
+        op->seqnum = message.batch_size;
         break;
     default:
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
@@ -341,20 +340,12 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
 // Used to send the first response to async operations.
 void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response, 
                                                  uint64_t metalog_progress) {
-    if (metalog_progress > 0) {
-        absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
-        if (fn_call_ctx_.contains(op->full_call_id)) {
-            FnCallContext& ctx = fn_call_ctx_[op->full_call_id];
-            if (metalog_progress > ctx.metalog_progress) {
-                ctx.metalog_progress = metalog_progress;
-            }
-        }
-    }
+    response->metalog_progress = metalog_progress;
     protocol::MessageHelper::SetFuncCall(response, op->full_call_id);
     response->log_client_data = op->client_data;
     int32_t op_delay = gsl::narrow_cast<int32_t>(
         GetMonotonicMicroTimestamp() - op->start_timestamp);
-    response->op_delay = static_cast<int64_t>(op_delay);
+    response->op_delay = op_delay;
     engine_->SendFuncWorkerMessage(op->client_id, response);
     RecordOpDelay(op->type, op_delay);
 }

@@ -74,13 +74,17 @@ void Dispatcher::OnFuncWorkerDisconnected(FuncWorker* func_worker) {
     workers_.erase(client_id);
 }
 
-bool Dispatcher::OnNewFuncCall(const FuncCall& func_call, const FuncCall& parent_func_call,
-                               size_t input_size, std::span<const char> inline_input,
+bool Dispatcher::OnNewFuncCall(const FuncCall& func_call,
+                               const FuncCall& parent_func_call,
+                               uint64_t parent_metalog_progress, size_t input_size,
+                               std::span<const char> inline_input,
                                bool shm_input) {
     VLOG(1) << "OnNewFuncCall " << FuncCallHelper::DebugString(func_call);
     DCHECK_EQ(func_id_, func_call.func_id);
     Message* dispatch_func_call_message = message_pool_.Get();
     *dispatch_func_call_message = MessageHelper::NewDispatchFuncCall(func_call);
+    // propagate user side parent metalog_progress to child
+    dispatch_func_call_message->metalog_progress = parent_metalog_progress;
     if (shm_input) {
         dispatch_func_call_message->payload_size = -gsl::narrow_cast<int32_t>(input_size);
     } else {

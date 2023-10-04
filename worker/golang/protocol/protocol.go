@@ -205,7 +205,7 @@ func NewFuncWorkerHandshakeMessage(funcId uint16, clientId uint16) []byte {
 	return buffer
 }
 
-func NewInvokeFuncCallMessage(funcCall FuncCall, parentCallId uint64, async bool) []byte {
+func NewInvokeFuncCallMessage(funcCall FuncCall, metalogProgress uint64, parentCallId uint64, async bool) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (funcCall.FullCallId() << MessageTypeBits) + uint64(MessageType_INVOKE_FUNC)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -213,6 +213,7 @@ func NewInvokeFuncCallMessage(funcCall FuncCall, parentCallId uint64, async bool
 	if async {
 		binary.LittleEndian.PutUint32(buffer[28:32], FLAG_kAsyncInvokeFuncFlag)
 	}
+	SetMetalogProgressInMessage(buffer, metalogProgress)
 	return buffer
 }
 
@@ -231,7 +232,7 @@ func NewFuncCallFailedMessage(funcCall FuncCall) []byte {
 	return buffer
 }
 
-func NewSharedLogAppendMessage(currentCallId uint64, myClientId uint16, numTags uint16, clientData uint64) []byte {
+func NewSharedLogAppendMessage(currentCallId uint64, metalogProgress uint64, myClientId uint16, numTags uint16, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -239,10 +240,11 @@ func NewSharedLogAppendMessage(currentCallId uint64, myClientId uint16, numTags 
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint16(buffer[36:38], numTags)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	SetMetalogProgressInMessage(buffer, metalogProgress)
 	return buffer
 }
 
-func NewAsyncSharedLogAppendMessage(currentCallId uint64, myClientId uint16, numTags uint16, clientData uint64) []byte {
+func NewAsyncSharedLogAppendMessage(currentCallId uint64, metalogProgress uint64, myClientId uint16, numTags uint16, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -250,10 +252,11 @@ func NewAsyncSharedLogAppendMessage(currentCallId uint64, myClientId uint16, num
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint16(buffer[36:38], numTags)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	SetMetalogProgressInMessage(buffer, metalogProgress)
 	return buffer
 }
 
-func NewSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag uint64, seqNum uint64, direction int, block bool, clientData uint64) []byte {
+func NewSharedLogReadMessage(currentCallId uint64, metalogProgress uint64, myClientId uint16, tag uint64, seqNum uint64, direction int, block bool, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -271,10 +274,11 @@ func NewSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag uint64
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
 	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
+	SetMetalogProgressInMessage(buffer, metalogProgress)
 	return buffer
 }
 
-func NewAsyncSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag uint64, seqNum uint64, direction int, block bool, clientData uint64) []byte {
+func NewAsyncSharedLogReadMessage(currentCallId uint64, metalogProgress uint64, myClientId uint16, tag uint64, seqNum uint64, direction int, block bool, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -292,10 +296,11 @@ func NewAsyncSharedLogReadMessage(currentCallId uint64, myClientId uint16, tag u
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
 	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
+	SetMetalogProgressInMessage(buffer, metalogProgress)
 	return buffer
 }
 
-func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, localId uint64, clientData uint64) []byte {
+func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, metalogProgress uint64, myClientId uint16, localId uint64, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -304,6 +309,7 @@ func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, myClientId uint16, 
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], localId)
 	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
+	SetMetalogProgressInMessage(buffer, metalogProgress)
 	return buffer
 }
 
@@ -365,15 +371,23 @@ func GetInlineDataFromMessage(buffer []byte) []byte {
 }
 
 func GetLogDispatchDelayInMessage(buffer []byte) int32 {
-	return int32(binary.LittleEndian.Uint32(buffer[40:48]))
+	return int32(binary.LittleEndian.Uint32(buffer[40:44]))
 }
 
 func SetDispatchDelayInMessage(buffer []byte, dispatchDelay int32) {
 	binary.LittleEndian.PutUint32(buffer[8:12], uint32(dispatchDelay))
 }
 
-func GetEngineOpDelayInMessage(buffer []byte) int64 {
-	return int64(binary.LittleEndian.Uint64(buffer[56:64]))
+func GetEngineOpDelayInMessage(buffer []byte) int32 {
+	return int32(binary.LittleEndian.Uint32(buffer[44:48]))
+}
+
+func SetMetalogProgressInMessage(buffer []byte, metalogProgress uint64) {
+	binary.LittleEndian.PutUint64(buffer[56:64], metalogProgress)
+}
+
+func GetMetalogProgressInMessage(buffer []byte) uint64 {
+	return binary.LittleEndian.Uint64(buffer[56:64])
 }
 
 func BuildLogTagsBuffer(tags []uint64) []byte {

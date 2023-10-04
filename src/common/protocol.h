@@ -207,13 +207,16 @@ struct Message {
     union {
         uint64_t log_tag;         // [40:48] Used in SHARED_LOG_OP, as query_tag in log reading
         uint64_t response_id;     // [40:48] Used in SHARED_LOG_OP
-        int64_t log_dispatch_delay;
+        struct {
+            int32_t log_dispatch_delay; // [40:44]
+            int32_t op_delay;           // [44:48]
+        } __attribute__ ((packed));
     };
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
     union {
-        uint64_t bench_size;          // [56:64]
-        int64_t op_delay;
+        uint64_t batch_size;          // [56:64]
+        uint64_t metalog_progress;    // [56:64]
     };
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
