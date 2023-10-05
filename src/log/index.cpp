@@ -79,14 +79,14 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
         }
         if (received_data_.count(seqnum) == 0) {
             received_data_[seqnum] = RecvIndexData {
-                .local_id      = index_data.local_ids(i),
+                .localid      = index_data.local_ids(i),
                 .user_logspace = index_data.user_logspaces(i),
                 .user_tags     = UserTagVec(tag_iter, tag_iter + num_tags)
             };
         } else {
 #if DCHECK_IS_ON()
             const RecvIndexData& data = received_data_[seqnum];
-            DCHECK_EQ(data.local_id, index_data.local_ids(i));
+            DCHECK_EQ(data.localid, index_data.local_ids(i));
             DCHECK_EQ(data.user_logspace, index_data.user_logspaces(i));
             DCHECK_EQ(data.user_tags.size(),
                       gsl::narrow_cast<size_t>(index_data.user_tag_sizes(i)));
@@ -190,11 +190,10 @@ void Index::AdvanceIndexProgress() {
             const RecvIndexData& index_data = iter->second;
             // update index (globab view)
             uint16_t engine_id = gsl::narrow_cast<uint16_t>(
-                bits::HighHalf64(index_data.local_id));
-            index_data_.AddIndexData(index_data.user_logspace, seqnum,
-                                     engine_id, index_data.user_tags);
-            // update index map, to serve async log query
-            index_data_.AddAsyncIndexData(index_data.local_id, seqnum);
+                bits::HighHalf64(index_data.localid));
+            index_data_.AddIndexData(index_data.user_logspace,
+                                     index_data.localid, seqnum, engine_id,
+                                     index_data.user_tags);
 
             iter = received_data_.erase(iter);
         }

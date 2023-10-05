@@ -19,7 +19,7 @@ struct IndexQuery {
 
     // determines how to interpret the query_seqnum
     // kReadNext, kReadPrev, kReadNextB: query_seqnum is the seqnum of the shared log
-    // kReadLocalId: query_seqnum is the local_id
+    // kReadLocalId: query_seqnum is the localid
     enum ReadDirection { kReadNext, kReadPrev, kReadNextB, kReadLocalId };
     QueryType type;
     ReadDirection direction;

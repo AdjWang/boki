@@ -35,7 +35,7 @@ private:
                          /* end_seqnum */ uint32_t>> cuts_;
 
     struct RecvIndexData {
-        uint64_t   local_id;
+        uint64_t   localid;
         uint32_t   user_logspace;
         UserTagVec user_tags;
     };

@@ -12,16 +12,10 @@ IndexDataManager::IndexDataManager(uint32_t logspace_id)
       indexed_metalog_position_(0)
     {}
 
-void IndexDataManager::AddIndexData(uint32_t user_logspace,
+void IndexDataManager::AddIndexData(uint32_t user_logspace, uint64_t localid,
                                     uint32_t seqnum_lowhalf, uint16_t engine_id,
                                     const UserTagVec& user_tags) {
-    GetOrCreateIndex(user_logspace)->Add(seqnum_lowhalf, engine_id, user_tags);
-}
-
-void IndexDataManager::AddAsyncIndexData(uint64_t localid, uint32_t seqnum_lowhalf) {
-    DCHECK(log_index_map_.find(localid) == log_index_map_.end())
-        << "Duplicate index_data.local_id for log_index_map_";
-    log_index_map_[localid] = seqnum_lowhalf;
+    GetOrCreateIndex(user_logspace)->Add(localid, seqnum_lowhalf, engine_id, user_tags);
 }
 
 IndexDataManager::QueryConsistencyType IndexDataManager::CheckConsistency(const IndexQuery& query) {
@@ -55,18 +49,17 @@ IndexQueryResult IndexDataManager::ProcessLocalIdQuery(const IndexQuery& query) 
     // gaurantee read-your-write. So local query is promised to be found, even
     // metalog_position_ is old.
 
-    // replace seqnum if querying by localid
-    uint64_t localid = query.query_seqnum;
-    uint32_t seqnum_lowhalf = gsl::narrow_cast<uint32_t>(kInvalidLogSeqNum);
-    if (IndexFindLocalId(localid, &seqnum_lowhalf)) {
+    // TODO: perform view check
+
+    uint16_t engine_id = 0;
+    uint64_t seqnum = kInvalidLogSeqNum;
+    if (IndexFindLocalId(query, &seqnum, &engine_id)) {
         // HVLOG_F(1, "ProcessQuery: found async map from local_id=0x{:016X} to seqnum=0x{:016X}",
         //         local_id, seqnum);
         // BUG: WOW! A reaaaaaaaaly strange bug! Triggered so many times with the magic result 28524,
         // causing functions failed to send back the query result to the target engine node.
         DCHECK(query.origin_node_id != 28524) << utils::DumpStackTrace();
 
-        uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
-        uint64_t seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
         return BuildFoundResult(query, view_id(), seqnum, engine_id);
     } else {
         // not found
@@ -173,18 +166,16 @@ bool IndexDataManager::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, 
         query.query_seqnum, query.user_tag, seqnum, engine_id);
 }
 
-bool IndexDataManager::IndexFindLocalId(uint64_t localid, uint32_t* seqnum) {
-    auto it = log_index_map_.find(localid);
-    if (it == log_index_map_.end()) {
+bool IndexDataManager::IndexFindLocalId(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id) {
+    DCHECK(query.direction == IndexQuery::kReadLocalId);
+    if (!index_.contains(query.user_logspace)) {
         return false;
-    } else {
-        DCHECK_NE(seqnum, nullptr);
-        *seqnum = it->second;
-        return true;
     }
+    // replace seqnum if querying by localid
+    uint64_t localid = query.query_seqnum;
+    return GetOrCreateIndex(query.user_logspace)->FindLocalId(
+        localid, seqnum, engine_id);
 }
-
-// ----------------------------------------------------------------------------
 
 PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
@@ -275,6 +266,7 @@ IndexQueryResult IndexDataManager::BuildContinueResult(const IndexQuery& query, 
     return result;
 }
 
+// ----------------------------------------------------------------------------
 
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),
@@ -282,20 +274,28 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
       // TODO: more reasonable name and size
       segment_(create_only, "MySharedMemory", 100*1024*1024),
       alloc_inst_(segment_.get_segment_manager()),
+      engine_ids_(*segment_.construct<log_engine_id_map_t>
+        ("EngineIdMap")(0u, boost::hash<uint32_t>(), std::equal_to<uint32_t>(), alloc_inst_)),
       seqnums_(alloc_inst_),
       seqnums_by_tag_(*segment_.construct<log_stream_map_t>
-        //(object name), (first ctor parameter, second ctor parameter)
-        ("MyMap")(0u, boost::hash<uint64_t>(), std::equal_to<uint64_t>(), alloc_inst_))
+        ("StreamMap")(0u, boost::hash<uint64_t>(), std::equal_to<uint64_t>(), alloc_inst_)),
+      seqnum_by_localid_(*segment_.construct<log_async_index_map_t>
+        ("AsyncIndexMap")(0u, boost::hash<uint64_t>(), std::equal_to<uint64_t>(), alloc_inst_))
     {}
 
 PerSpaceIndex::~PerSpaceIndex() {
     shared_memory_object::remove("MySharedMemory");
 }
 
-void PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
+void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engine_id,
                         const UserTagVec& user_tags) {
+    DCHECK(seqnum_by_localid_.find(localid) == seqnum_by_localid_.end())
+        << "Duplicate index_data.local_id for seqnum_by_localid_";
+    seqnum_by_localid_.emplace(localid, seqnum_lowhalf);
+
     DCHECK(!engine_ids_.contains(seqnum_lowhalf));
-    engine_ids_[seqnum_lowhalf] = engine_id;
+    engine_ids_.emplace(seqnum_lowhalf, engine_id);
+
     DCHECK(seqnums_.empty() || seqnum_lowhalf > seqnums_.back());
     seqnums_.push_back(seqnum_lowhalf);
     for (uint64_t user_tag : user_tags) {
@@ -352,6 +352,19 @@ bool PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
     DCHECK_GE(*seqnum, query_seqnum);
     *engine_id = engine_ids_.at(seqnum_lowhalf);
     return true;
+}
+
+bool PerSpaceIndex::FindLocalId(uint64_t localid, uint64_t* seqnum, uint16_t* engine_id) const {
+    auto it = seqnum_by_localid_.find(localid);
+    if (it == seqnum_by_localid_.end()) {
+        return false;
+    } else {
+        DCHECK_NE(seqnum, nullptr);
+        uint32_t seqnum_lowhalf = it->second;
+        *seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
+        *engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
+        return true;
+    }
 }
 
 bool PerSpaceIndex::FindPrev(const log_stream_vec_t& seqnums,
