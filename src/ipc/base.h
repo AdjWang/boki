@@ -19,5 +19,7 @@ std::string GetFuncCallInputShmName(uint64_t full_call_id);
 std::string GetFuncCallOutputShmName(uint64_t full_call_id);
 std::string GetFuncCallOutputFifoName(uint64_t full_call_id);
 
+std::string GetViewShmPath(uint16_t view_id);
+
 }  // namespace ipc
 }  // namespace faas

@@ -147,9 +147,6 @@ private:
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
     bool IndexFindLocalId(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
 
-    // TODO: should have different implementation on user func and engine
-    // user func: install view from shm
-    // engine: allocate on the heap
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,

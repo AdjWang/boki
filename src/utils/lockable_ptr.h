@@ -19,6 +19,7 @@ public:
             use_boost_mu = true;
             boost_mu_.reset(new boost::interprocess::named_mutex(
                 boost::interprocess::open_or_create,
+                // TODO: more reasonable lock name
                 std::to_string(mu_id).c_str()));
         }
     }

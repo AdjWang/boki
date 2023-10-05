@@ -87,7 +87,9 @@ public:
     // Panic if not found. It ensures the return is never nullptr
     LockablePtr<T> GetLogSpaceChecked(uint32_t identifier) const;
 
+    // Use local lock
     void InstallLogSpace(std::unique_ptr<T> log_space);
+    // Use inter-process shared lock
     void InstallSharedLogSpace(std::unique_ptr<T> log_space);
     // Only active LogSpace can be finalized
     bool FinalizeLogSpace(uint32_t identifier);

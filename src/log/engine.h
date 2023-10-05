@@ -32,6 +32,7 @@ private:
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_local_reads_;
 
+    void SetupViewIPCMeta(const View* view);
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;

@@ -78,5 +78,10 @@ std::string GetFuncCallOutputFifoName(uint64_t full_call_id) {
     return fmt::format("{}.o", full_call_id);
 }
 
+std::string GetViewShmPath(uint16_t view_id) {
+    return fs_utils::JoinPath(GetRootPathForShm(),
+                              fmt::format("view_{}", view_id));
+}
+
 }  // namespace ipc
 }  // namespace faas

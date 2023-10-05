@@ -4,6 +4,8 @@
 #include "log/flags.h"
 #include "utils/bits.h"
 #include "utils/random.h"
+#include "utils/fs.h"
+#include "utils/io.h"
 
 namespace faas {
 namespace log {
@@ -23,6 +25,40 @@ Engine::Engine(engine::Engine* engine)
 
 Engine::~Engine() {}
 
+void Engine::SetupViewIPCMeta(const View* view) {
+    // create view meta dir
+    std::string viewshm_path(ipc::GetViewShmPath(view->id()));
+    DCHECK(!viewshm_path.empty());
+    if (!fs_utils::Exists(viewshm_path)) {
+        PCHECK(fs_utils::MakeDirectory(viewshm_path));
+    }
+    // archive log_space_hash_tokens_
+    std::optional<int> fd;
+    auto close_file = gsl::finally([&fd] {
+        if (fd.has_value()) {
+            close(*fd);
+        }
+    });
+    std::string viewmeta_path(fs_utils::JoinPath(viewshm_path, "log_space_hash_meta"));
+    fd = fs_utils::Create(viewmeta_path);
+    if (!fd.has_value()) {
+        LOG(FATAL) << "Failed to create file for async call results";
+    }
+    // log_space_hash_seed_ as first 8 bytes
+    uint64_t log_space_hash_seed = view->log_space_hash_seed();
+    if (!io_utils::WriteData(
+            *fd, std::span<const char>(
+                        reinterpret_cast<const char*>(&log_space_hash_seed),
+                        sizeof(log_space_hash_seed)))) {
+        PLOG(ERROR) << "Failed to write log space hash seed to FIFO";
+    }
+    // log_space_hash_tokens_ as rest datas
+    View::NodeIdVec log_space_hash_tokens = view->log_space_hash_tokens();
+    if (!io_utils::WriteData(*fd, VECTOR_AS_CHAR_SPAN(log_space_hash_tokens))) {
+        PLOG(ERROR) << "Failed to write log space hash tokens to FIFO";
+    }
+}
+
 void Engine::OnViewCreated(const View* view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "New view {} created", view->id());
@@ -30,6 +66,7 @@ void Engine::OnViewCreated(const View* view) {
     if (!contains_myself) {
         HLOG_F(WARNING, "View {} does not include myself", view->id());
     }
+    SetupViewIPCMeta(view);
     std::vector<SharedLogRequest> ready_requests;
     {
         absl::MutexLock view_lk(&view_mu_);
