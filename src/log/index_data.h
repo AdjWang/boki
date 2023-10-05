@@ -9,6 +9,9 @@
 #include "log/common.h"
 #include "log/index_types.h"
 
+// DEBUG
+// #define COMPILE_AS_SHARED
+
 namespace faas {
 namespace log {
 using namespace boost::interprocess;
@@ -42,9 +45,6 @@ typedef boost::unordered_map<uint64_t, uint32_t, boost::hash<uint64_t>,
 
 class PerSpaceIndex {
 public:
-    // TODO: should have different implementation on user func and engine
-    // user func: open shm
-    // engine: create shm
     PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace);
     ~PerSpaceIndex();
 
@@ -62,7 +62,9 @@ private:
     uint32_t user_logspace_;
     // shm allocator
     managed_shared_memory segment_;
+#if !defined(COMPILE_AS_SHARED)
     void_allocator_t alloc_inst_;
+#endif
 
     // absl::flat_hash_map</* seqnum */ uint32_t, uint16_t> engine_ids_;
     log_engine_id_map_t engine_ids_;

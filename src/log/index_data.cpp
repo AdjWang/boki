@@ -5,19 +5,46 @@
 namespace faas {
 namespace log {
 
+#define SHM_OBJECT_NAME(name) \
+    fmt::format(#name"_{}_{}", user_logspace, logspace_id).c_str()
+
+#define ENGINE_SHM_INDEX_INITIALIZER_LIST                                       \
+    segment_(create_only, SHM_OBJECT_NAME(IndexShm), 100 * 1024 * 1024),        \
+    alloc_inst_(segment_.get_segment_manager()),                                \
+    engine_ids_(*segment_.construct<log_engine_id_map_t>                        \
+        (SHM_OBJECT_NAME(EngineIdMap))(0u, boost::hash<uint32_t>(),             \
+                                       std::equal_to<uint32_t>(),               \
+                                       alloc_inst_)),                           \
+    seqnums_(*segment_.construct<log_stream_vec_t>                              \
+        (SHM_OBJECT_NAME(StreamVec))(alloc_inst_)),                             \
+    seqnums_by_tag_(*segment_.construct<log_stream_map_t>                       \
+        (SHM_OBJECT_NAME(StreamMap))(0u, boost::hash<uint64_t>(),               \
+                                     std::equal_to<uint64_t>(),                 \
+                                     alloc_inst_)),                             \
+    seqnum_by_localid_(*segment_.construct<log_async_index_map_t>               \
+        (SHM_OBJECT_NAME(AsyncIndexMap))(0u, boost::hash<uint64_t>(),           \
+                                         std::equal_to<uint64_t>(),             \
+                                         alloc_inst_))
+
+#define FAASFUNC_SHM_INDEX_INITIALIZER_LIST                                     \
+    segment_(open_only, SHM_OBJECT_NAME(IndexShm)),                             \
+    engine_ids_(*segment_.find<log_engine_id_map_t>                             \
+        (SHM_OBJECT_NAME(EngineIdMap)).first),                                  \
+    seqnums_(*segment_.find<log_stream_vec_t>                                   \
+        (SHM_OBJECT_NAME(StreamVec)).first),                                    \
+    seqnums_by_tag_(*segment_.find<log_stream_map_t>                            \
+        (SHM_OBJECT_NAME(StreamMap)).first),                                    \
+    seqnum_by_localid_(*segment_.find<log_async_index_map_t>                    \
+        (SHM_OBJECT_NAME(AsyncIndexMap)).first)
+
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),
       user_logspace_(user_logspace),
-      // TODO: more reasonable name and size
-      segment_(create_only, "MySharedMemory", 100*1024*1024),
-      alloc_inst_(segment_.get_segment_manager()),
-      engine_ids_(*segment_.construct<log_engine_id_map_t>
-        ("EngineIdMap")(0u, boost::hash<uint32_t>(), std::equal_to<uint32_t>(), alloc_inst_)),
-      seqnums_(alloc_inst_),
-      seqnums_by_tag_(*segment_.construct<log_stream_map_t>
-        ("StreamMap")(0u, boost::hash<uint64_t>(), std::equal_to<uint64_t>(), alloc_inst_)),
-      seqnum_by_localid_(*segment_.construct<log_async_index_map_t>
-        ("AsyncIndexMap")(0u, boost::hash<uint64_t>(), std::equal_to<uint64_t>(), alloc_inst_))
+#if defined(COMPILE_AS_SHARED)
+      FAASFUNC_SHM_INDEX_INITIALIZER_LIST
+#else
+      ENGINE_SHM_INDEX_INITIALIZER_LIST
+#endif
     {}
 
 PerSpaceIndex::~PerSpaceIndex() {
@@ -26,6 +53,9 @@ PerSpaceIndex::~PerSpaceIndex() {
 
 void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engine_id,
                         const UserTagVec& user_tags) {
+#if defined(COMPILE_AS_SHARED)
+    UNREACHABLE();
+#else
     DCHECK(seqnum_by_localid_.find(localid) == seqnum_by_localid_.end())
         << "Duplicate index_data.local_id for seqnum_by_localid_";
     seqnum_by_localid_.emplace(localid, seqnum_lowhalf);
@@ -45,6 +75,7 @@ void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engi
             seqnums_by_tag_.emplace(user_tag, value_vec);
         }
     }
+#endif
 }
 
 bool PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
