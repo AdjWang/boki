@@ -8,6 +8,7 @@
 
 #include "log/common.h"
 #include "log/index_types.h"
+#include "ipc/shm_region.h"
 
 // DEBUG
 // #define COMPILE_AS_SHARED
@@ -88,6 +89,24 @@ private:
 
 // ----------------------------------------------------------------------------
 
+template<class T>
+class ShmSharedInteger {
+public:
+    ShmSharedInteger(const std::string& path)
+        : shm_(ipc::ShmCreateByPath(path, sizeof(T))) {}
+
+    T get() const {
+        return *(reinterpret_cast<const T*>(shm_->base()));
+    }
+
+    void set(T value) {
+        *(reinterpret_cast<T*>(shm_->base())) = value;
+    }
+
+private:
+    std::unique_ptr<ipc::ShmRegion> shm_;
+};
+
 // A wrapper holding all index datas for reading and writing.
 // Separate data accessing interface from control flow, so the module can be
 // shared with user functions to direct read on the index data.
@@ -97,20 +116,16 @@ public:
 
     uint16_t view_id() const { return bits::HighHalf32(logspace_id_); }
     uint32_t indexed_seqnum_position() const {
-        return indexed_seqnum_position_;
+        return indexed_seqnum_position_.get();
     }
     void set_indexed_seqnum_position(uint32_t indexed_seqnum_position) {
-        indexed_seqnum_position_ = indexed_seqnum_position;
+        indexed_seqnum_position_.set(indexed_seqnum_position);
     }
     uint32_t indexed_metalog_position() const {
-        return indexed_metalog_position_;
+        return indexed_metalog_position_.get();
     }
     void set_indexed_metalog_position(uint32_t indexed_metalog_position) {
-        indexed_metalog_position_ = indexed_metalog_position;
-    }
-
-    uint64_t index_metalog_progress() const {
-        return bits::JoinTwo32(logspace_id_, indexed_metalog_position_);
+        indexed_metalog_position_.set(indexed_metalog_position);
     }
 
     // Used by engine
@@ -136,12 +151,18 @@ public:
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
 
 private:
+    // fields set by constructor
     std::string log_header_;
     uint32_t logspace_id_;
+    // fields shared by shm
     absl::flat_hash_map</* user_logspace */ uint32_t,
                         std::unique_ptr<PerSpaceIndex>> index_;
-    uint32_t indexed_seqnum_position_;
-    uint32_t indexed_metalog_position_;
+    ShmSharedInteger<uint32_t> indexed_seqnum_position_;
+    ShmSharedInteger<uint32_t> indexed_metalog_position_;
+
+    uint64_t index_metalog_progress() const {
+        return bits::JoinTwo32(logspace_id_, indexed_metalog_position());
+    }
 
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);

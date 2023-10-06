@@ -1,6 +1,8 @@
 #include "log/utils.h"
 #include "log/index_data.h"
 #include "log/index_data_c.h"
+#include "utils/fs.h"
+#include "ipc/base.h"
 
 namespace faas {
 namespace log {
@@ -185,12 +187,25 @@ bool PerSpaceIndex::FindNext(const log_stream_vec_t& seqnums,
 
 // ----------------------------------------------------------------------------
 
+static std::string GetOrCreateIndexMetaPath(uint32_t logspace_id) {
+    uint16_t view_id = bits::HighHalf32(logspace_id);
+    std::string viewshm_path(ipc::GetViewShmPath(view_id));
+    // should have been created when installing the view by engine
+    DCHECK(fs_utils::Exists(viewshm_path));
+    std::string indexshm_path(fs_utils::JoinPath(viewshm_path, fmt::format("index_{}", logspace_id)));
+    if (!fs_utils::Exists(indexshm_path)) {
+        PCHECK(fs_utils::MakeDirectory(indexshm_path));
+    }
+    return indexshm_path;
+}
+
 IndexDataManager::IndexDataManager(uint32_t logspace_id)
     : log_header_(fmt::format("IndexDataManager[{}]: ", logspace_id)),
       logspace_id_(logspace_id),
-      indexed_seqnum_position_(0),
-      indexed_metalog_position_(0)
-    {}
+      indexed_seqnum_position_(fs_utils::JoinPath(
+          GetOrCreateIndexMetaPath(logspace_id), "indexed_seqnum_position")),
+      indexed_metalog_position_(fs_utils::JoinPath(
+          GetOrCreateIndexMetaPath(logspace_id), "indexed_metalog_position")) {}
 
 void IndexDataManager::AddIndexData(uint32_t user_logspace, uint64_t localid,
                                     uint32_t seqnum_lowhalf, uint16_t engine_id,

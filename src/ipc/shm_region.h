@@ -10,6 +10,7 @@ class ShmRegion;
 
 // Shm{Create, Open} returns nullptr on failure
 std::unique_ptr<ShmRegion> ShmCreate(std::string_view name, size_t size);
+std::unique_ptr<ShmRegion> ShmCreateByPath(const std::string& full_path, size_t size);
 std::unique_ptr<ShmRegion> ShmOpen(std::string_view name, bool readonly = true);
 
 class ShmRegion {
@@ -28,15 +29,16 @@ public:
     }
 
 private:
-    ShmRegion(std::string_view name, char* base, size_t size)
-        : name_(name), base_(base), size_(size), remove_on_destruction_(false) {}
+    ShmRegion(std::string_view full_path, char* base, size_t size)
+        : full_path_(full_path), base_(base), size_(size), remove_on_destruction_(false) {}
 
-    std::string name_;
+    std::string full_path_;
     char* base_;
     size_t size_;
     bool remove_on_destruction_;
 
     friend std::unique_ptr<ShmRegion> ShmCreate(std::string_view name, size_t size);
+    friend std::unique_ptr<ShmRegion> ShmCreateByPath(const std::string& full_path, size_t size);
     friend std::unique_ptr<ShmRegion> ShmOpen(std::string_view name, bool readonly);
 
     DISALLOW_COPY_AND_ASSIGN(ShmRegion);

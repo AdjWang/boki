@@ -16,6 +16,10 @@ namespace ipc {
 
 std::unique_ptr<ShmRegion> ShmCreate(std::string_view name, size_t size) {
     std::string full_path = fs_utils::JoinPath(GetRootPathForShm(), name);
+    return ShmCreateByPath(full_path, size);
+}
+
+std::unique_ptr<ShmRegion> ShmCreateByPath(const std::string& full_path, size_t size) {
     int fd = open(full_path.c_str(), O_CREAT|O_EXCL|O_RDWR, __FAAS_FILE_CREAT_MODE);
     if (fd == -1) {
         PLOG(ERROR) << "open " << full_path << " failed";
@@ -29,7 +33,7 @@ std::unique_ptr<ShmRegion> ShmCreate(std::string_view name, size_t size) {
         memset(ptr, 0, size);
     }
     PCHECK(close(fd) == 0) << "close failed";
-    return std::unique_ptr<ShmRegion>(new ShmRegion(name, reinterpret_cast<char*>(ptr), size));
+    return std::unique_ptr<ShmRegion>(new ShmRegion(full_path, reinterpret_cast<char*>(ptr), size));
 }
 
 std::unique_ptr<ShmRegion> ShmOpen(std::string_view name, bool readonly) {
@@ -56,9 +60,8 @@ ShmRegion::~ShmRegion() {
         PCHECK(munmap(base_, size_) == 0);
     }
     if (remove_on_destruction_) {
-        std::string full_path = fs_utils::JoinPath(GetRootPathForShm(), name_);
-        if (!fs_utils::Remove(full_path)) {
-            PLOG(ERROR) << "Failed to remove " << full_path;
+        if (!fs_utils::Remove(full_path_)) {
+            PLOG(ERROR) << "Failed to remove " << full_path_;
         }
     }
 }
