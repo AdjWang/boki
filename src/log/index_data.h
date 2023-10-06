@@ -62,7 +62,7 @@ private:
     uint32_t user_logspace_;
     // shm allocator
     managed_shared_memory segment_;
-#if !defined(COMPILE_AS_SHARED)
+#if !defined(__COMPILE_AS_SHARED)
     void_allocator_t alloc_inst_;
 #endif
 

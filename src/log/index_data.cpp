@@ -6,7 +6,7 @@ namespace faas {
 namespace log {
 
 #define SHM_OBJECT_NAME(name) \
-    fmt::format(#name"_{}_{}", user_logspace, logspace_id).c_str()
+    fmt::format(#name"_{}_{}", user_logspace_, logspace_id_).c_str()
 
 #define ENGINE_SHM_INDEX_INITIALIZER_LIST                                       \
     segment_(create_only, SHM_OBJECT_NAME(IndexShm), 100 * 1024 * 1024),        \
@@ -40,7 +40,7 @@ namespace log {
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),
       user_logspace_(user_logspace),
-#if defined(COMPILE_AS_SHARED)
+#if defined(__COMPILE_AS_SHARED)
       FAASFUNC_SHM_INDEX_INITIALIZER_LIST
 #else
       ENGINE_SHM_INDEX_INITIALIZER_LIST
@@ -48,12 +48,16 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     {}
 
 PerSpaceIndex::~PerSpaceIndex() {
-    shared_memory_object::remove("MySharedMemory");
+    shared_memory_object::remove(SHM_OBJECT_NAME(IndexShm));
 }
+
+#undef FAASFUNC_SHM_INDEX_INITALIZER_LIST
+#undef ENGINE_SHM_INDEX_INITALIZER_LIST
+#undef SHM_OBJECT_NAME
 
 void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engine_id,
                         const UserTagVec& user_tags) {
-#if defined(COMPILE_AS_SHARED)
+#if defined(__COMPILE_AS_SHARED)
     UNREACHABLE();
 #else
     DCHECK(seqnum_by_localid_.find(localid) == seqnum_by_localid_.end())
@@ -447,10 +451,10 @@ IndexQueryResult IndexDataManager::BuildContinueResult(const IndexQuery& query, 
 
 
 void test_func() {
-    printf("test func\n");
-    auto index_data = faas::log::IndexDataManager(1u);
-    index_data.set_indexed_metalog_position(4u);
-    printf("test func create index_data\n");
+    fprintf(stderr, "test func\n");
+    // auto index_data = faas::log::IndexDataManager(1u);
+    // index_data.set_indexed_metalog_position(4u);
+    fprintf(stderr, "test func create index_data\n");
 }
 
 void* ConstructIndexData(uint32_t logspace_id) {

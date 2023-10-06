@@ -8,7 +8,7 @@ SRC_PATH = ./src
 # General compiler flags
 COMPILE_FLAGS = -std=c++17 -march=haswell -D__FAAS_SRC \
 	-Wall -Wextra -Werror -Wno-unused-parameter \
-	-fdata-sections -ffunction-sections -fPIC
+	-fdata-sections -ffunction-sections -fPIC -fvisibility=hidden
 # Additional release-specific flags
 RCOMPILE_FLAGS = -DNDEBUG -O3
 # Additional debug-specific flags
@@ -161,7 +161,9 @@ $(BIN_PATH)/%: $(BUILD_PATH)/bin/%.o $(NON_BIN_OBJECTS)
 	@echo "Linking: $@"
 	$(CMD_PREFIX)$(CXX) $^ $(LDFLAGS) $(LINK_FLAGS) -o $@
 
-$(BIN_PATH)/libindex.so: $(NON_BIN_OBJECTS)
+# Link the shared library
+$(BIN_PATH)/libindex.so: $(filter-out $(BUILD_PATH)/log/index_data.o,$(NON_BIN_OBJECTS)) \
+						 $(BUILD_PATH)/log/index_data_shared.o
 	@echo "Linking: $@"
 	$(CMD_PREFIX)$(CXX) $^ -shared $(LDFLAGS) $(LINK_FLAGS) -o $@
 
@@ -176,6 +178,11 @@ $(BIN_PATH)/libindex.so: $(NON_BIN_OBJECTS)
 $(BUILD_PATH)/%.o: $(SRC_PATH)/%.$(SRC_EXT)
 	@echo "Compiling: $< -> $@"
 	$(CMD_PREFIX)$(CXX) $(CXXFLAGS) $(COMPILE_FLAGS) -MP -MMD -c $< -o $@
+
+# Shared library rules
+$(BUILD_PATH)/log/index_data_shared.o: $(SRC_PATH)/log/index_data.cpp
+	@echo "Compiling: $< -> $@"
+	$(CMD_PREFIX)$(CXX) $(CXXFLAGS) $(COMPILE_FLAGS) -MP -MMD -D__COMPILE_AS_SHARED -c $< -o $@
 
 # Protobuf-related rules
 $(SRC_PATH)/proto/%.pb.cpp $(SRC_PATH)/proto/%.pb.h: $(SRC_PATH)/proto/%.proto
