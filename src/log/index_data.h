@@ -1,17 +1,8 @@
-// TODO: put all status on shm
-// [x] 1. engine_ids_
-// [DEPRECATED] 2. index_
-// 3. indexed_seqnum_position_
-// 4. indexed_metalog_position_
-// [x] 5. seqnum_by_localid_
 #pragma once
 
 #include "log/common.h"
 #include "log/index_types.h"
 #include "ipc/shm_region.h"
-
-// DEBUG
-// #define COMPILE_AS_SHARED
 
 namespace faas {
 namespace log {
@@ -49,8 +40,10 @@ public:
     PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace);
     ~PerSpaceIndex();
 
+#if !defined(__COMPILE_AS_SHARED)
     void Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engine_id,
              const UserTagVec& user_tags);
+#endif
 
     bool FindPrev(uint64_t query_seqnum, uint64_t user_tag,
                   uint64_t* seqnum, uint16_t* engine_id) const;
@@ -93,15 +86,21 @@ template<class T>
 class ShmSharedInteger {
 public:
     ShmSharedInteger(const std::string& path)
+#if defined(__COMPILE_AS_SHARED)
+        : shm_(ipc::ShmOpenByPath(path, /*readonly*/ true)) {}
+#else
         : shm_(ipc::ShmCreateByPath(path, sizeof(T))) {}
+#endif
 
     T get() const {
         return *(reinterpret_cast<const T*>(shm_->base()));
     }
 
+#if !defined(__COMPILE_AS_SHARED)
     void set(T value) {
         *(reinterpret_cast<T*>(shm_->base())) = value;
     }
+#endif
 
 private:
     std::unique_ptr<ipc::ShmRegion> shm_;
@@ -118,20 +117,21 @@ public:
     uint32_t indexed_seqnum_position() const {
         return indexed_seqnum_position_.get();
     }
-    void set_indexed_seqnum_position(uint32_t indexed_seqnum_position) {
-        indexed_seqnum_position_.set(indexed_seqnum_position);
-    }
     uint32_t indexed_metalog_position() const {
         return indexed_metalog_position_.get();
+    }
+#if !defined(__COMPILE_AS_SHARED)
+    void set_indexed_seqnum_position(uint32_t indexed_seqnum_position) {
+        indexed_seqnum_position_.set(indexed_seqnum_position);
     }
     void set_indexed_metalog_position(uint32_t indexed_metalog_position) {
         indexed_metalog_position_.set(indexed_metalog_position);
     }
 
-    // Used by engine
     void AddIndexData(uint32_t user_logspace, uint64_t localid,
                       uint32_t seqnum_lowhalf, uint16_t engine_id,
                       const UserTagVec& user_tags);
+#endif
 
     enum QueryConsistencyType {
         kInitFutureViewBail,

@@ -57,11 +57,9 @@ PerSpaceIndex::~PerSpaceIndex() {
 #undef ENGINE_SHM_INDEX_INITALIZER_LIST
 #undef SHM_OBJECT_NAME
 
+#if !defined(__COMPILE_AS_SHARED)
 void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engine_id,
                         const UserTagVec& user_tags) {
-#if defined(__COMPILE_AS_SHARED)
-    UNREACHABLE();
-#else
     DCHECK(seqnum_by_localid_.find(localid) == seqnum_by_localid_.end())
         << "Duplicate index_data.local_id for seqnum_by_localid_";
     seqnum_by_localid_.emplace(localid, seqnum_lowhalf);
@@ -81,8 +79,8 @@ void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engi
             seqnums_by_tag_.emplace(user_tag, value_vec);
         }
     }
-#endif
 }
+#endif
 
 bool PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
                              uint64_t* seqnum, uint16_t* engine_id) const {
@@ -193,9 +191,13 @@ static std::string GetOrCreateIndexMetaPath(uint32_t logspace_id) {
     // should have been created when installing the view by engine
     DCHECK(fs_utils::Exists(viewshm_path));
     std::string indexshm_path(fs_utils::JoinPath(viewshm_path, fmt::format("index_{}", logspace_id)));
+#if defined(__COMPILE_AS_SHARED)
+    DCHECK(fs_utils::Exists(indexshm_path));
+#else
     if (!fs_utils::Exists(indexshm_path)) {
         PCHECK(fs_utils::MakeDirectory(indexshm_path));
     }
+#endif
     return indexshm_path;
 }
 
@@ -207,11 +209,13 @@ IndexDataManager::IndexDataManager(uint32_t logspace_id)
       indexed_metalog_position_(fs_utils::JoinPath(
           GetOrCreateIndexMetaPath(logspace_id), "indexed_metalog_position")) {}
 
+#if !defined(__COMPILE_AS_SHARED)
 void IndexDataManager::AddIndexData(uint32_t user_logspace, uint64_t localid,
                                     uint32_t seqnum_lowhalf, uint16_t engine_id,
                                     const UserTagVec& user_tags) {
     GetOrCreateIndex(user_logspace)->Add(localid, seqnum_lowhalf, engine_id, user_tags);
 }
+#endif
 
 IndexDataManager::QueryConsistencyType IndexDataManager::CheckConsistency(const IndexQuery& query) {
     if (query.initial) {

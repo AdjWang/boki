@@ -38,6 +38,10 @@ std::unique_ptr<ShmRegion> ShmCreateByPath(const std::string& full_path, size_t 
 
 std::unique_ptr<ShmRegion> ShmOpen(std::string_view name, bool readonly) {
     std::string full_path = fs_utils::JoinPath(GetRootPathForShm(), name);
+    return ShmOpenByPath(full_path, readonly);
+}
+
+std::unique_ptr<ShmRegion> ShmOpenByPath(const std::string& full_path, bool readonly) {
     int fd = open(full_path.c_str(), readonly ? O_RDONLY : O_RDWR);
     if (fd == -1) {
         PLOG(ERROR) << "open " << full_path << " failed";
@@ -52,7 +56,7 @@ std::unique_ptr<ShmRegion> ShmOpen(std::string_view name, bool readonly) {
         PCHECK(ptr != MAP_FAILED) << "mmap failed";
     }
     PCHECK(close(fd) == 0) << "close failed";
-    return std::unique_ptr<ShmRegion>(new ShmRegion(name, reinterpret_cast<char*>(ptr), size));
+    return std::unique_ptr<ShmRegion>(new ShmRegion(full_path, reinterpret_cast<char*>(ptr), size));
 }
 
 ShmRegion::~ShmRegion() {
