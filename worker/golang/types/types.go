@@ -90,6 +90,8 @@ type Environment interface {
 	AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (Future[*LogEntryWithMeta], error)
 
 	SharedLogIPCBench(ctx context.Context, batchSize uint64) error
+	// DEBUG
+	SharedLogTestBinding()
 }
 
 type FuncHandler interface {

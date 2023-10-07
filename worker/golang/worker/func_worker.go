@@ -140,6 +140,11 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 	return w, nil
 }
 
+// DEBUG
+func (w *FuncWorker) SharedLogTestBinding() {
+	ipc.TestBinding()
+}
+
 // thread safe
 func (w *FuncWorker) updateMetalogProgress(metalogProgress uint64) {
 	for {

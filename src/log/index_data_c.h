@@ -8,7 +8,8 @@ extern "C" {
 
 #define EXPORT __attribute__((visibility("default")))
 
-EXPORT extern void test_func();
+EXPORT extern int test_func(uint32_t var_in, uint64_t* var_in_out,
+                            uint64_t* var_out);
 EXPORT extern void* ConstructIndexData(uint32_t logspace_id);
 EXPORT extern void DestructIndexData(void* index_data);
 

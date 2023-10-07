@@ -468,12 +468,14 @@ IndexQueryResult IndexDataManager::BuildContinueResult(const IndexQuery& query, 
 }  // namespace log
 }  // namespace faas
 
-
-void test_func() {
-    fprintf(stderr, "test func\n");
+int test_func(uint32_t var_in, uint64_t* var_in_out, uint64_t* var_out) {
+    fprintf(stderr, "test func var_in=%d var_in_out=%ld\n", var_in, *var_in_out);
     // auto index_data = faas::log::IndexDataManager(1u);
     // index_data.set_indexed_metalog_position(4u);
-    fprintf(stderr, "test func create index_data\n");
+    *var_in_out = var_in + 1;
+    *var_out = var_in + 2;
+    fprintf(stderr, "test func create index_data var_out=%ld\n", *var_out);
+    return -1;
 }
 
 void* ConstructIndexData(uint32_t logspace_id) {

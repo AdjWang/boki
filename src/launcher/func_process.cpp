@@ -26,6 +26,8 @@ bool FuncProcess::Start(uv_loop_t* uv_loop, utils::BufferPool* read_buffer_pool)
     DCHECK(state_ == kCreated);
     uv_loop_ = uv_loop;
     read_buffer_pool_ = read_buffer_pool;
+    // dynamic shared library path should be identical to which in dockerfile
+    subprocess_.AddEnvVariable("LD_LIBRARY_PATH", "/boki");
     subprocess_.AddEnvVariable("FAAS_FUNC_ID", launcher_->func_id());
     subprocess_.AddEnvVariable("FAAS_FPROCESS_ID", id_);
     subprocess_.AddEnvVariable("FAAS_ENGINE_ID", launcher_->engine_id());
