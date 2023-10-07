@@ -104,7 +104,12 @@ LogMessage::LogMessage(const char* file, int line, LogSeverity severity, bool ap
     buffer[14] = '.';
     sprintf(buffer+15, "%06d", static_cast<int>(time_stamp.tv_nsec / 1000));
 #ifdef __FAAS_SRC
-    sprintf(buffer+21, " %-8.8s", base::Thread::current()->name());
+    base::Thread* current = base::Thread::current_no_check();
+    if (current != NULL) {
+        sprintf(buffer+21, " %-8.8s", current->name());
+    } else {
+        sprintf(buffer+21, " %-8.8s", "TNull");
+    }
 #else
     sprintf(buffer+21, " %d", static_cast<int>(__gettid()));
 #endif

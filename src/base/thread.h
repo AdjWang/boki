@@ -26,6 +26,10 @@ public:
     int tid() const { return tid_; }
 
     static Thread* current() { return DCHECK_NOTNULL(current_); }
+    // Used by LogMessage()
+    // Call LogMessage->current()->DCHECK->LogMessageFatal->LogMessage
+    // when current_ is NULL would cause stack overflow
+    static Thread* current_no_check() { return current_; }
 
     static void RegisterMainThread();
 
