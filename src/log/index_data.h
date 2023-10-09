@@ -51,26 +51,29 @@ public:
                   uint64_t* seqnum, uint16_t* engine_id) const;
     bool FindLocalId(uint64_t localid, uint64_t* seqnum, uint16_t* engine_id) const;
 
+    // DEBUG
+    void Inspect();
+
 private:
     uint32_t logspace_id_;
     uint32_t user_logspace_;
     // shm allocator
-    managed_shared_memory segment_;
+    managed_mapped_file segment_;
 #if !defined(__COMPILE_AS_SHARED)
     void_allocator_t alloc_inst_;
 #endif
 
     // absl::flat_hash_map</* seqnum */ uint32_t, uint16_t> engine_ids_;
-    log_engine_id_map_t engine_ids_;
+    log_engine_id_map_t* engine_ids_;
     // std::vector<uint32_t> seqnums_;
-    log_stream_vec_t seqnums_;
+    log_stream_vec_t* seqnums_;
     // absl::flat_hash_map</* tag */ uint64_t, std::vector<uint32_t>> seqnums_by_tag_;
-    log_stream_map_t seqnums_by_tag_;
+    log_stream_map_t* seqnums_by_tag_;
 
     // updated when receiving an index, used to serve async log query
     // std::unordered_map</*local_id*/ uint64_t, /*seqnum_lowhalf*/ uint32_t>
     //     seqnum_by_localid_;
-    log_async_index_map_t seqnum_by_localid_;
+    log_async_index_map_t* seqnum_by_localid_;
 
     bool FindPrev(const log_stream_vec_t& seqnums, uint64_t query_seqnum,
                   uint32_t* result_seqnum) const;
@@ -102,6 +105,11 @@ public:
     }
 #endif
 
+    // DEBUG
+    void Check() const {
+        CHECK(shm_.get() != nullptr);
+    }
+
 private:
     std::unique_ptr<ipc::ShmRegion> shm_;
 };
@@ -127,7 +135,11 @@ public:
     void set_indexed_metalog_position(uint32_t indexed_metalog_position) {
         indexed_metalog_position_.set(indexed_metalog_position);
     }
+#endif
 
+#if defined(__COMPILE_AS_SHARED)
+    void LoadIndexData(uint32_t user_logspace);
+#else
     void AddIndexData(uint32_t user_logspace, uint64_t localid,
                       uint32_t seqnum_lowhalf, uint16_t engine_id,
                       const UserTagVec& user_tags);
@@ -149,6 +161,9 @@ public:
 
     // Index requires this function to handle timeout
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
+
+    // DEBUG
+    void Inspect() const;
 
 private:
     // fields set by constructor

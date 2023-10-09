@@ -97,10 +97,7 @@ static void BTSignalHandler(int signo, siginfo_t *info, void *secret) {
 }
 }  // namespace
 
-void InitMain(int argc, char* argv[],
-              std::vector<char*>* positional_args) {
-    absl::InitializeSymbolizer(argv[0]);
-
+void SetupSignalHandler() {
     struct sigaction act;
     memset(&act, 0, sizeof(struct sigaction));
     act.sa_sigaction = BTSignalHandler;
@@ -117,6 +114,12 @@ void InitMain(int argc, char* argv[],
     absl::FailureSignalHandlerOptions options;
     options.call_previous_handler = true;
     absl::InstallFailureSignalHandler(options);
+}
+
+void InitMain(int argc, char* argv[],
+              std::vector<char*>* positional_args) {
+    absl::InitializeSymbolizer(argv[0]);
+    SetupSignalHandler();
 
     std::vector<char*> unparsed_args = absl::ParseCommandLine(argc, argv);
     logging::Init(absl::GetFlag(FLAGS_v));

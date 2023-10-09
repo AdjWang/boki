@@ -45,7 +45,7 @@ type IndexData struct {
 func InstallIndexData(logSpaceId uint32) (*IndexData, error) {
 	// TODO: this function should do only once
 	// TODO: call SharedLogInstallView(viewId) here to install view shm data
-	viewInst := unsafe.Pointer(C.ConstructIndexData(C.uint(logSpaceId)))
+	viewInst := unsafe.Pointer(C.ConstructIndexData(C.uint(logSpaceId), C.uint(0)))
 	return &IndexData{
 		instance:     viewInst,
 		userLogSpace: uint32(0), // TODO: return by SharedLogInstallView(viewId)
