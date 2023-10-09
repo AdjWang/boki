@@ -8,7 +8,7 @@ namespace faas {
 namespace log {
 using namespace boost::interprocess;
 
-typedef managed_shared_memory::segment_manager segment_manager_t;
+typedef managed_mapped_file::segment_manager segment_manager_t;
 typedef allocator<void, segment_manager_t> void_allocator_t;
 typedef allocator<uint32_t, segment_manager_t> uint32_allocator_t;
 

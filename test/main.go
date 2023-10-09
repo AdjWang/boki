@@ -1,7 +1,8 @@
 package main
 
 // #cgo CFLAGS: -I../src/base -I../src/log
-// #cgo LDFLAGS: -L../bin/debug -lrt -ldl -lindex
+// #cgo LDFLAGS: -L../lib/bin/debug -lrt -ldl -lindex
+// #include <stdlib.h>
 // #include <index_data_c.h>
 import "C"
 
@@ -14,6 +15,7 @@ import (
 
 func main() {
 	log.Println("main enter")
+	InitLibrary("/tmp/boki/ipc")
 	log.Println("test binding")
 	TestBinding()
 	log.Println("test allocation")
@@ -58,11 +60,15 @@ type IndexData struct {
 	userLogSpace uint32
 }
 
-// TODO: add index lock
-
 // DEBUG
 func (idx *IndexData) Inspect() {
 	C.Inspect(idx.instance)
+}
+
+func InitLibrary(ipcRootPath string) {
+	cIpcRootPath := C.CString(ipcRootPath)
+	defer C.free(unsafe.Pointer(cIpcRootPath))
+	C.Init(cIpcRootPath)
 }
 
 func InstallIndexData(logSpaceId uint32) (*IndexData, error) {

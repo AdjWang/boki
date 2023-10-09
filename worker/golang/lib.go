@@ -17,6 +17,7 @@ import (
 func Serve(factory types.FuncHandlerFactory) {
 	runtime.GOMAXPROCS(1)
 	ipc.SetRootPathForIpc(os.Getenv("FAAS_ROOT_PATH_FOR_IPC"))
+	ipc.InitLibrary(os.Getenv("FAAS_ROOT_PATH_FOR_IPC"))
 	funcId, err := strconv.Atoi(os.Getenv("FAAS_FUNC_ID"))
 	if err != nil {
 		log.Fatal("[FATAL] Failed to parse FAAS_FUNC_ID")

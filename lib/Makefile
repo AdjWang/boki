@@ -6,7 +6,7 @@ SRC_EXT = cpp
 # Path to the source directory, relative to the makefile
 SRC_PATH = ./src
 # General compiler flags
-COMPILE_FLAGS = -std=c++17 -march=haswell -D__FAAS_SRC \
+COMPILE_FLAGS = -std=c++17 -march=haswell -D__COMPILE_AS_SHARED \
 	-Wall -Wextra -Werror -Wno-unused-parameter \
 	-fdata-sections -ffunction-sections -fPIC -fvisibility=hidden
 # Additional release-specific flags
@@ -14,19 +14,20 @@ RCOMPILE_FLAGS = -DNDEBUG -O3
 # Additional debug-specific flags
 DCOMPILE_FLAGS = -DDEBUG -g
 # Add additional include paths
-INCLUDES = -I$(SRC_PATH) -I./include -I./deps/out/include \
+BOOST_HEADERS = $(shell find deps/boost/libs -name "include" | \
+					  	xargs -I{} echo "-I./{}")
+INCLUDES = -I$(SRC_PATH) -I./include \
+	-I./deps/abseil-cpp \
+	$(BOOST_HEADERS) \
 	-I./deps/fmt/include \
 	-I./deps/GSL/include \
-	-I./deps/json/single_include \
 	-I./deps/xxHash
-# Protobuf compiler
-PROTOC = LD_LIBRARY_PATH=./deps/out/lib/ ./deps/out/bin/protoc
 # General linker settings
 ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
 		| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
 LINK_FLAGS = -Ldeps/out/lib \
-	-Wl,-Bstatic -lrt -luv_a -lhttp_parser -lnghttp2 \
-	-luring -lprotobuf-lite -lrocksdb -ltkrzw -lzookeeper_st \
+	-Wl,-Bstatic -lrt \
+	-ltkrzw \
 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
 	-lzstd -ljemalloc \
 	-Wl,-Bdynamic -lpthread -ldl \
@@ -92,35 +93,19 @@ endif
 BUILD_PATH := build/$(BUILD_NAME)
 BIN_PATH := bin/$(BUILD_NAME)
 
-# Find all source files in the source directory, sorted by most
-# recently modified
-SOURCES = $(shell find $(SRC_PATH) -name '*.$(SRC_EXT)')
-BIN_SOURCES = $(shell find $(SRC_PATH)/bin -name '*.$(SRC_EXT)')
-BENCH_BIN_SOURCES = $(shell find $(SRC_PATH)/bin -name 'bench_*.$(SRC_EXT)')
-
-# Protobuf related
-PROTO_SOURCES = $(shell find $(SRC_PATH)/proto -name '*.proto')
-PROTO_HEADERS = $(PROTO_SOURCES:$(SRC_PATH)/proto/%.proto=$(SRC_PATH)/proto/%.pb.h)
-PROTO_OBJECTS = $(PROTO_SOURCES:$(SRC_PATH)/proto/%.proto=$(BUILD_PATH)/proto/%.pb.o)
+SOURCES = $(SRC_PATH)/log/index_data.cpp \
+	$(SRC_PATH)/base/init.cpp \
+	$(SRC_PATH)/base/logging.cpp \
+	$(SRC_PATH)/utils/debug.cpp \
+	$(SRC_PATH)/utils/fs.cpp \
+	$(SRC_PATH)/ipc/base.cpp \
+	$(SRC_PATH)/ipc/shm_region.cpp
 
 # Set the object file names, with the source directory stripped
 # from the path, and the build path prepended in its place
 OBJECTS = $(SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
-OBJECTS += $(PROTO_OBJECTS)
 # Set the dependency files that will be used to add header dependencies
 DEPS = $(OBJECTS:.o=.d)
-
-BIN_OBJECTS = $(BIN_SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
-NON_BIN_OBJECTS = $(filter-out $(BIN_OBJECTS),$(OBJECTS))
-
-BENCH_BIN_OUTPUTS = $(BENCH_BIN_SOURCES:$(SRC_PATH)/bin/%.$(SRC_EXT)=$(BIN_PATH)/%)
-BIN_OUTPUTS = $(BIN_OBJECTS:$(BUILD_PATH)/bin/%.o=$(BIN_PATH)/%)
-
-ifeq ($(BUILD_BENCH),1)
-TARGET_BINS = $(BIN_OUTPUTS)
-else
-TARGET_BINS = $(filter-out $(BENCH_BIN_OUTPUTS),$(BIN_OUTPUTS))
-endif
 
 TIME_FILE = $(dir $@).$(notdir $@)_time
 START_TIME = date '+%s' > $(TIME_FILE)
@@ -133,7 +118,7 @@ END_TIME = read st < $(TIME_FILE) ; \
 all: dirs
 	@echo "Beginning $(BUILD_NAME) build"
 	@$(START_TIME)
-	@$(MAKE) binary --no-print-directory
+	@$(MAKE) library --no-print-directory
 	@echo -n "Total build time: "
 	@$(END_TIME)
 
@@ -148,23 +133,11 @@ dirs:
 clean:
 	@echo "Deleting directories"
 	@$(RM) -r build bin
-	@echo "Deleting protobuf generated code"
-	@$(RM) -f src/proto/*.pb.h src/proto/*.pb.cc src/proto/*.pb.cpp
 
-binary: $(TARGET_BINS)
 library: $(BIN_PATH)/libindex.so
 
-# Proto files must be compiled before all objects
-$(OBJECTS): $(PROTO_HEADERS)
-
-# Link the executable
-$(BIN_PATH)/%: $(BUILD_PATH)/bin/%.o $(NON_BIN_OBJECTS)
-	@echo "Linking: $@"
-	$(CMD_PREFIX)$(CXX) $^ $(LDFLAGS) $(LINK_FLAGS) -o $@
-
 # Link the shared library
-$(BIN_PATH)/libindex.so: $(filter-out $(BUILD_PATH)/log/index_data.o,$(NON_BIN_OBJECTS)) \
-						 $(BUILD_PATH)/log/index_data_shared.o
+$(BIN_PATH)/libindex.so: $(OBJECTS)
 	@echo "Linking: $@"
 	$(CMD_PREFIX)$(CXX) $^ -shared $(LDFLAGS) $(LINK_FLAGS) -o $@
 
@@ -179,15 +152,3 @@ $(BIN_PATH)/libindex.so: $(filter-out $(BUILD_PATH)/log/index_data.o,$(NON_BIN_O
 $(BUILD_PATH)/%.o: $(SRC_PATH)/%.$(SRC_EXT)
 	@echo "Compiling: $< -> $@"
 	$(CMD_PREFIX)$(CXX) $(CXXFLAGS) $(COMPILE_FLAGS) -MP -MMD -c $< -o $@
-
-# Shared library rules
-$(BUILD_PATH)/log/index_data_shared.o: $(SRC_PATH)/log/index_data.cpp
-	@echo "Compiling: $< -> $@"
-	$(CMD_PREFIX)$(CXX) $(CXXFLAGS) $(COMPILE_FLAGS) -MP -MMD -D__COMPILE_AS_SHARED -c $< -o $@
-
-# Protobuf-related rules
-$(SRC_PATH)/proto/%.pb.cpp $(SRC_PATH)/proto/%.pb.h: $(SRC_PATH)/proto/%.proto
-	@echo "Compiling proto file $<"
-	$(CMD_PREFIX)$(PROTOC) --proto_path=$(SRC_PATH)/proto --cpp_out=$(SRC_PATH)/proto $<
-	@mv $(patsubst %.proto,%.pb.cc,$<) $(patsubst %.proto,%.pb.cpp,$<)
-$(SRC_PATH)/proto/%.pb.h: $(SRC_PATH)/proto/%.pb.cpp

@@ -1,7 +1,10 @@
+#include "base/common.h"
 #include "base/diagnostic.h"
 #include "base/init.h"
 #include "base/logging.h"
+#ifdef __FAAS_SRC
 #include "base/thread.h"
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -116,6 +119,7 @@ void SetupSignalHandler() {
     absl::InstallFailureSignalHandler(options);
 }
 
+#ifdef __FAAS_SRC
 void InitMain(int argc, char* argv[],
               std::vector<char*>* positional_args) {
     absl::InitializeSymbolizer(argv[0]);
@@ -135,14 +139,15 @@ void InitMain(int argc, char* argv[],
     }
 
     Thread::RegisterMainThread();
-    #if defined(DEBUG)
+#if defined(DEBUG)
     LOG(INFO) << "Running DEBUG built version";
     absl::SetMutexDeadlockDetectionMode(absl::OnDeadlockCycle::kAbort);
-    #endif
-    #if defined(NDEBUG)
+#endif
+#if defined(NDEBUG)
     LOG(INFO) << "Running RELEASE built version";
-    #endif
+#endif
 }
+#endif
 
 void ChainCleanupFn(std::function<void()> fn) {
     size_t idx = next_cleanup_fn.fetch_add(1);

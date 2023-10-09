@@ -1,9 +1,5 @@
 #pragma once
 
-#ifndef __FAAS_SRC
-#error base/init.h cannot be included outside
-#endif
-
 #include <vector>
 #include <functional>
 
@@ -11,8 +7,10 @@ namespace faas {
 namespace base {
 
 void SetupSignalHandler();
+#ifdef __FAAS_SRC
 void InitMain(int argc, char* argv[],
               std::vector<char*>* positional_args = nullptr);
+#endif
 
 // When SIGABRT, SIGTERM signals are received, clean-up functions will
 // be invoked before exit.

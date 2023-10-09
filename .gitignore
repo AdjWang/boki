@@ -1,6 +1,8 @@
 # Build related
 /build/
 /bin/
+/lib/build/
+/lib/bin/
 /deps/out*
 /.all_time
 /worker/cpp/.release_time

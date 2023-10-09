@@ -31,6 +31,10 @@
 #endif
 #endif
 
+#ifdef __COMPILE_AS_SHARED
+#define __FAAS_HAVE_ABSL
+#endif
+
 // C includes
 #include <stdio.h>
 #include <string.h>
@@ -111,11 +115,10 @@ __END_THIRD_PARTY_HEADERS
 #endif  // defined(__FAAS_HAVE_ABSL) && !defined(__FAAS_USED_IN_BINDING)
 
 // boost
-#include <boost/interprocess/sync/named_mutex.hpp>
 #include <boost/optional.hpp>
 #include <boost/unordered_map.hpp>
 #include <boost/convert/lexical_cast.hpp>
-#include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/sync/named_sharable_mutex.hpp>
 #include <boost/interprocess/managed_mapped_file.hpp>
 #include <boost/interprocess/allocators/allocator.hpp>
 #include <boost/interprocess/containers/map.hpp>

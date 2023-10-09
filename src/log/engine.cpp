@@ -125,8 +125,7 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
             finalized_view->view(),
             [finalized_view, &append_results] (uint32_t logspace_id,
                                                LockablePtr<LogProducer> producer_ptr) {
-                log_utils::FinalizedLogSpace<LogProducer>(
-                    producer_ptr, finalized_view);
+                FinalizedLogSpace<LogProducer>(producer_ptr, finalized_view);
                 auto locked_producer = producer_ptr.Lock();
                 LogProducer::AppendResultVec tmp;
                 locked_producer->PollAppendResults(&tmp);
@@ -137,8 +136,7 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
             finalized_view->view(),
             [finalized_view, &query_results] (uint32_t logspace_id,
                                               LockablePtr<Index> index_ptr) {
-                log_utils::FinalizedLogSpace<Index>(
-                    index_ptr, finalized_view);
+                FinalizedLogSpace<Index>(index_ptr, finalized_view);
                 auto locked_index = index_ptr.Lock();
                 locked_index->PollQueryResults(&query_results);
             }
@@ -222,7 +220,7 @@ static Message BuildLocalAsyncReadCachedOKResponse(const LogEntry& log_entry) {
 
 #define ONHOLD_IF_SEEN_FUTURE_VIEW(LOCAL_OP_VAR)                          \
     do {                                                                  \
-        uint16_t view_id = log_utils::GetViewId(                          \
+        uint16_t view_id = GetViewId(                          \
             (LOCAL_OP_VAR)->metalog_progress);                            \
         if (current_view_ == nullptr || view_id > current_view_->id()) {  \
             future_requests_.OnHoldRequest(                               \
@@ -337,7 +335,7 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
     }
     if (auto log_entry = LogCacheGet(seqnum); log_entry.has_value()) {
         if (auto aux_data = LogCacheGetAuxData(seqnum); aux_data.has_value()) {
-            uint16_t view_id = log_utils::GetViewId(seqnum);
+            uint16_t view_id = GetViewId(seqnum);
             absl::ReaderMutexLock view_lk(&view_mu_);
             if (view_id < views_.size()) {
                 const View* view = views_.at(view_id);

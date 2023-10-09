@@ -1,7 +1,7 @@
-#include "log/utils.h"
 #include "log/index_data.h"
 #include "log/index_data_c.h"
 #include "utils/fs.h"
+#include "utils/lockable_ptr.h"
 #include "ipc/base.h"
 #include "base/init.h"
 
@@ -74,13 +74,14 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
 
 PerSpaceIndex::~PerSpaceIndex() {
     // TODO
-    // shared_memory_object::remove(SHM_OBJECT_NAME(IndexShm));
-    file_mapping::remove(SHM_OBJECT_NAME(IndexShm));
+    // shared_memory_object::remove(SHM_SEG_PATH(IndexShm));
+    file_mapping::remove(SHM_SEG_PATH(IndexShm));
 }
 
 #undef FAASFUNC_SHM_INDEX_INITALIZER_LIST
 #undef ENGINE_SHM_INDEX_INITALIZER_LIST
 #undef SHM_OBJECT_NAME
+#undef SHM_SEG_PATH
 
 #if !defined(__COMPILE_AS_SHARED)
 void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engine_id,
@@ -255,7 +256,7 @@ void IndexDataManager::AddIndexData(uint32_t user_logspace, uint64_t localid,
 IndexDataManager::QueryConsistencyType IndexDataManager::CheckConsistency(const IndexQuery& query) {
     if (query.initial) {
         HVLOG(1) << "Receive initial query";
-        uint16_t func_view_id = log_utils::GetViewId(query.metalog_progress);
+        uint16_t func_view_id = GetViewId(query.metalog_progress);
         if (func_view_id > view_id()) {
             return IndexDataManager::QueryConsistencyType::kInitFutureViewBail;
         } else if (func_view_id < view_id()) {
@@ -307,7 +308,7 @@ IndexQueryResult IndexDataManager::ProcessReadNext(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadNext);
     HVLOG_F(1, "ProcessReadNext: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
-    uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
+    uint16_t query_view_id = GetViewId(query.query_seqnum);
     if (query_view_id > view_id()) {
         HVLOG(1) << "ProcessReadNext: NotFoundResult";
         return BuildNotFoundResult(query);
@@ -341,7 +342,7 @@ IndexQueryResult IndexDataManager::ProcessReadPrev(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadPrev);
     HVLOG_F(1, "ProcessReadPrev: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
-    uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
+    uint16_t query_view_id = GetViewId(query.query_seqnum);
     if (query_view_id < view_id()) {
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
         return BuildContinueResult(query, false, 0, 0);
@@ -363,7 +364,7 @@ IndexQueryResult IndexDataManager::ProcessReadPrev(const IndexQuery& query) {
 
 IndexQueryResult IndexDataManager::ProcessBlockingQuery(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadNextB && query.initial);
-    uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
+    uint16_t query_view_id = GetViewId(query.query_seqnum);
     if (query_view_id > view_id()) {
         return BuildNotFoundResult(query);
     }
@@ -516,16 +517,10 @@ void IndexDataManager::Inspect() const {
 }  // namespace faas
 
 #if defined(__COMPILE_AS_SHARED)
-// DEBUG
-// void TestAddIndexData(void* index_data) {
-//     auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
-//     uint32_t user_logspace = 0u;
-//     uint64_t localid = 1u;
-//     uint32_t seqnum_lowhalf = 1u;
-//     uint16_t engine_id = 1u;
-//     faas::log::UserTagVec tags = {2};
-//     this_->AddIndexData(user_logspace, localid, seqnum_lowhalf, engine_id, tags);
-// }
+typedef faas::LockablePtr<faas::log::IndexDataManager> shared_index_t;
+#define SHARED_INDEX_CAST(index_data_ptr) \
+    reinterpret_cast<shared_index_t*>(index_data_ptr)
+
 // DEBUG
 int test_func(uint32_t var_in, uint64_t* var_in_out, uint64_t* var_out) {
     fprintf(stderr, "test func var_in=%d var_in_out=%ld\n", var_in, *var_in_out);
@@ -534,31 +529,46 @@ int test_func(uint32_t var_in, uint64_t* var_in_out, uint64_t* var_out) {
     *var_in_out = var_in + 1;
     *var_out = var_in + 2;
     fprintf(stderr, "test func create index_data var_out=%ld\n", *var_out);
-
-    // DEBUG
-    faas::base::SetupSignalHandler();
-    faas::ipc::SetRootPathForIpc("/tmp/boki/ipc", /* create= */ false);
     return -1;
 }
 // DEBUG
 void Inspect(void* index_data) {
-    auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
-    this_->Inspect();
+    auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
+    locked_index_data->Inspect();
+}
+
+// Initialize explicitly to avoid manually setting priority for all global variables,
+// required by __attribute__ ((constructor)). Details see:
+// https://stackoverflow.com/questions/43941159/global-static-variables-initialization-issue-with-attribute-constructor-i
+void Init(const char* ipc_root_path) {
+    faas::base::SetupSignalHandler();
+    LOG_F(INFO, "Init set ipc_root_path={}", ipc_root_path);
+    faas::ipc::SetRootPathForIpc(ipc_root_path, /* create= */ false);
+#if defined(DEBUG)
+    LOG(INFO) << "Running DEBUG built version";
+    absl::SetMutexDeadlockDetectionMode(absl::OnDeadlockCycle::kAbort);
+#endif
+#if defined(NDEBUG)
+    LOG(INFO) << "Running RELEASE built version";
+#endif
 }
 
 void* ConstructIndexData(uint32_t logspace_id, uint32_t user_logspace) {
-    auto index_data = new faas::log::IndexDataManager(logspace_id);
+    auto index_data = std::unique_ptr<faas::log::IndexDataManager>(
+        new faas::log::IndexDataManager(logspace_id));
     index_data->LoadIndexData(user_logspace);
-    return index_data;
+    shared_index_t* lockable_index_data =
+        new faas::LockablePtr(std::move(index_data), logspace_id);
+    return lockable_index_data;
 }
 
 void DestructIndexData(void* index_data) {
-    delete reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+    delete SHARED_INDEX_CAST(index_data);
 }
 
 int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                         uint64_t localid, /*Out*/ uint64_t* seqnum) {
-    auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+    auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadLocalId,
         .initial = true,
@@ -566,7 +576,7 @@ int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         .metalog_progress = *metalog_progress,
     };
     faas::log::IndexDataManager::QueryConsistencyType consistency_type =
-        this_->CheckConsistency(query);
+        locked_index_data->CheckConsistency(query);
     switch (consistency_type) {
         case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
             return -1;
@@ -575,7 +585,7 @@ int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
         case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
             faas::log::IndexQueryResult result =
-                this_->ProcessLocalIdQuery(query);
+                locked_index_data->ProcessLocalIdQuery(query);
             if (result.state == faas::log::IndexQueryResult::kFound) {
                 *metalog_progress = result.metalog_progress;
                 *seqnum = result.found_result.seqnum;
@@ -591,7 +601,7 @@ int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
 int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                     uint32_t user_logspace, uint64_t query_seqnum,
                     uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
-    auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+    auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadNext,
         .initial = true,
@@ -601,7 +611,7 @@ int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         .metalog_progress = *metalog_progress,
     };
     faas::log::IndexDataManager::QueryConsistencyType consistency_type =
-        this_->CheckConsistency(query);
+        locked_index_data->CheckConsistency(query);
     switch (consistency_type) {
         case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
             return -1;
@@ -609,7 +619,7 @@ int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
             return -2;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
         case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
-            faas::log::IndexQueryResult result = this_->ProcessReadNext(query);
+            faas::log::IndexQueryResult result = locked_index_data->ProcessReadNext(query);
             if (result.state == faas::log::IndexQueryResult::kFound) {
                 *metalog_progress = result.metalog_progress;
                 *seqnum = result.found_result.seqnum;
@@ -625,7 +635,7 @@ int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
 int ProcessReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                     uint32_t user_logspace, uint64_t query_seqnum,
                     uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
-    auto this_ = reinterpret_cast<faas::log::IndexDataManager*>(index_data);
+    auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadPrev,
         .initial = true,
@@ -635,7 +645,7 @@ int ProcessReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         .metalog_progress = *metalog_progress,
     };
     faas::log::IndexDataManager::QueryConsistencyType consistency_type =
-        this_->CheckConsistency(query);
+        locked_index_data->CheckConsistency(query);
     switch (consistency_type) {
         case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
             return -1;
@@ -643,7 +653,7 @@ int ProcessReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
             return -2;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
         case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
-            faas::log::IndexQueryResult result = this_->ProcessReadPrev(query);
+            faas::log::IndexQueryResult result = locked_index_data->ProcessReadPrev(query);
             if (result.state == faas::log::IndexQueryResult::kFound) {
                 *metalog_progress = result.metalog_progress;
                 *seqnum = result.found_result.seqnum;

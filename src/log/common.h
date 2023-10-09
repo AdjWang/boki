@@ -3,12 +3,12 @@
 #include "base/common.h"
 #include "common/protocol.h"
 
-__BEGIN_THIRD_PARTY_HEADERS
-#include "proto/shared_log.pb.h"
-__END_THIRD_PARTY_HEADERS
-
 namespace faas {
 namespace log {
+
+inline uint16_t GetViewId(uint64_t value) {
+    return bits::HighHalf32(bits::HighHalf64(value));
+}
 
 constexpr uint64_t kEmptyLogTag      = 0;
 constexpr uint64_t kMaxLogSeqNum     = 0xffff000000000000ULL;

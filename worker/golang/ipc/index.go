@@ -40,7 +40,11 @@ type IndexData struct {
 	userLogSpace uint32
 }
 
-// TODO: add index lock
+func InitLibrary(ipcRootPath string) {
+	cIpcRootPath := C.CString(ipcRootPath)
+	defer C.free(unsafe.Pointer(cIpcRootPath))
+	C.Init(cIpcRootPath)
+}
 
 func InstallIndexData(logSpaceId uint32) (*IndexData, error) {
 	// TODO: this function should do only once

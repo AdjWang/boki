@@ -4,6 +4,7 @@
 #include "common/zk.h"
 #include "common/zk_utils.h"
 #include "log/view.h"
+#include "utils/lockable_ptr.h"
 
 __BEGIN_THIRD_PARTY_HEADERS
 #include "proto/shared_log.pb.h"
@@ -82,6 +83,19 @@ private:
 
     DISALLOW_COPY_AND_ASSIGN(FinalizedView);
 };
+
+template<class T>
+void FinalizedLogSpace(LockablePtr<T> logspace_ptr,
+                       const FinalizedView* finalized_view) {
+    auto locked_logspace = logspace_ptr.Lock();
+    uint32_t logspace_id = locked_logspace->identifier();
+    bool success = locked_logspace->Finalize(
+        finalized_view->final_metalog_position(logspace_id),
+        finalized_view->tail_metalogs(logspace_id));
+    if (!success) {
+        LOG_F(FATAL, "Failed to finalize log space {}", bits::HexStr0x(logspace_id));
+    }
+}
 
 }  // namespace log
 }  // namespace faas

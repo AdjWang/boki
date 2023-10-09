@@ -1,13 +1,13 @@
 #pragma once
 
-#ifndef __FAAS_SRC
-#error utils/lockable_ptr.h cannot be included outside
+#include "base/common.h"
+#ifdef __FAAS_SRC
+#include "base/thread.h"
 #endif
 
-#include "base/common.h"
-#include "base/thread.h"
-
 namespace faas {
+
+#define IPC_MU_NAME(id)  fmt::format("named_mu_{}", (id)).c_str()
 
 class Mutex {
 public:
@@ -17,10 +17,9 @@ public:
             absl_mu_.reset(new absl::Mutex());
         } else {
             use_boost_mu = true;
-            boost_mu_.reset(new boost::interprocess::named_mutex(
+            boost_mu_.reset(new boost::interprocess::named_sharable_mutex(
                 boost::interprocess::open_or_create,
-                // TODO: more reasonable lock name
-                std::to_string(mu_id).c_str()));
+                IPC_MU_NAME(mu_id)));
         }
     }
 
@@ -84,7 +83,8 @@ private:
     std::unique_ptr<absl::Mutex> absl_mu_;
     // Shared between processes. Each mutex must have an unique name.
     // TODO: isolation between users
-    std::unique_ptr<boost::interprocess::named_mutex> boost_mu_;
+    // TODO: use timed lock to resist malicious user side long term locking
+    std::unique_ptr<boost::interprocess::named_sharable_mutex> boost_mu_;
 
     void AbslLock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
         absl_mu_->Lock();
@@ -125,10 +125,10 @@ private:
 #endif
 
     void BoostReaderLock() {
-        boost_mu_->lock();
+        boost_mu_->lock_sharable();
     }
     void BoostReaderUnlock() {
-        boost_mu_->unlock();
+        boost_mu_->unlock_sharable();
     }
 #if DCHECK_IS_ON()
     void BoostAssertReaderHeld() {}
@@ -175,9 +175,11 @@ public:
             }
 #if DCHECK_IS_ON()
             mutex_->AssertHeld();
+#ifdef __FAAS_SRC
             if (base::Thread::current() != thread_) {
                 LOG(FATAL) << "Guard moved between threads";
             }
+#endif
 #endif
             mutex_->Unlock();
         }
@@ -186,6 +188,7 @@ public:
         T* operator->() const noexcept { return DCHECK_NOTNULL(target_); }
 
         // Guard is movable, but should avoid doing so explicitly
+#ifdef __FAAS_SRC
         Guard(Guard&& other) noexcept
             : mutex_(other.mutex_),
               target_(other.target_),
@@ -205,16 +208,38 @@ public:
             }
             return *this;
         }
+#else
+        Guard(Guard&& other) noexcept
+            : mutex_(other.mutex_),
+              target_(other.target_) {
+            other.mutex_ = nullptr;
+            other.target_ = nullptr;
+        }
+        Guard& operator=(Guard&& other) noexcept {
+            if (this != &other) {
+                mutex_ = other.mutex_;
+                target_ = other.target_;
+                other.mutex_ = nullptr;
+                other.target_ = nullptr;
+            }
+            return *this;
+        }
+#endif
 
     private:
         friend class LockablePtr;
         Mutex*        mutex_;
         T*            target_;
+#ifdef __FAAS_SRC
         base::Thread* thread_;
 
         Guard(Mutex* mutex, T* target,
               base::Thread* thread = nullptr)
             : mutex_(mutex), target_(target), thread_(thread) {}
+#else
+        Guard(Mutex* mutex, T* target)
+            : mutex_(mutex), target_(target) {}
+#endif
 
         DISALLOW_COPY_AND_ASSIGN(Guard);
     };
@@ -227,9 +252,11 @@ public:
             }
 #if DCHECK_IS_ON()
             mutex_->AssertReaderHeld();
+#ifdef __FAAS_SRC
             if (base::Thread::current() != thread_) {
                 LOG(FATAL) << "ReaderGuard moved between threads";
             }
+#endif
 #endif
             mutex_->ReaderUnlock();
         }
@@ -238,6 +265,7 @@ public:
         const T* operator->() const noexcept { return DCHECK_NOTNULL(target_); }
 
         // ReaderGuard is movable, but should avoid doing so explicitly
+#ifdef __FAAS_SRC
         ReaderGuard(ReaderGuard&& other) noexcept
             : mutex_(other.mutex_),
               target_(other.target_),
@@ -257,16 +285,38 @@ public:
             }
             return *this;
         }
+#else
+        ReaderGuard(ReaderGuard&& other) noexcept
+            : mutex_(other.mutex_),
+              target_(other.target_) {
+            other.mutex_ = nullptr;
+            other.target_ = nullptr;
+        }
+        ReaderGuard& operator=(ReaderGuard&& other) noexcept {
+            if (this != &other) {
+                mutex_ = other.mutex_;
+                target_ = other.target_;
+                other.mutex_ = nullptr;
+                other.target_ = nullptr;
+            }
+            return *this;
+        }
+#endif
 
     private:
         friend class LockablePtr;
         Mutex*        mutex_;
         const T*      target_;
+#ifdef __FAAS_SRC
         base::Thread* thread_;
 
         ReaderGuard(Mutex* mutex, const T* target,
                     base::Thread* thread = nullptr)
             : mutex_(mutex), target_(target), thread_(thread) {}
+#else
+        ReaderGuard(Mutex* mutex, const T* target)
+            : mutex_(mutex), target_(target) {}
+#endif
 
         DISALLOW_COPY_AND_ASSIGN(ReaderGuard);
     };
@@ -280,7 +330,7 @@ public:
         inner_->mu.AssertNotHeld();
 #endif
         inner_->mu.Lock();
-#if DCHECK_IS_ON()
+#if DCHECK_IS_ON() && defined(__FAAS_SRC)
         return Guard(&inner_->mu, inner_->target.get(), base::Thread::current());
 #else
         return Guard(&inner_->mu, inner_->target.get());
@@ -291,7 +341,7 @@ public:
             LOG(FATAL) << "Cannot ReaderLock() on null pointer";
         }
         inner_->mu.ReaderLock();
-#if DCHECK_IS_ON()
+#if DCHECK_IS_ON() && defined(__FAAS_SRC)
         return ReaderGuard(&inner_->mu, inner_->target.get(), base::Thread::current());
 #else
         return ReaderGuard(&inner_->mu, inner_->target.get());
