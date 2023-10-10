@@ -83,5 +83,15 @@ std::string GetViewShmPath(uint16_t view_id) {
                               fmt::format("view_{}", view_id));
 }
 
+std::string GetOrCreateCacheShmPath() {
+    DCHECK(fs_utils::Exists(GetRootPathForShm()));
+    std::string cacheshm_path(
+        fs_utils::JoinPath(GetRootPathForShm(), "cache"));
+    if (!fs_utils::Exists(cacheshm_path)) {
+        PCHECK(fs_utils::MakeDirectory(cacheshm_path));
+    }
+    return cacheshm_path;
+}
+
 }  // namespace ipc
 }  // namespace faas

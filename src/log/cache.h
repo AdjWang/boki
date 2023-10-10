@@ -40,5 +40,25 @@ private:
     DISALLOW_COPY_AND_ASSIGN(LRUCache);
 };
 
+class CacheManager {
+public:
+    CacheManager(bool enable, int capacity)
+    : log_header_("CacheManager"),
+      enable_cache_(enable),
+      cap_per_user_(capacity) {}
+
+    void Put(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
+                     std::span<const char> log_data);
+    std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum);
+    void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data);
+    std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum);
+
+private:
+    std::string log_header_;
+    bool enable_cache_;
+    int cap_per_user_;
+    absl::flat_hash_map<uint32_t /*user_logspace*/, LRUCache> log_caches_;
+};
+
 }  // namespace log
 }  // namespace faas

@@ -92,7 +92,7 @@ endif
 BUILD_PATH := build/$(BUILD_NAME)
 BIN_PATH := bin/$(BUILD_NAME)
 
-SROUCES = index_data_wrapper.cpp \
+SROUCES = lib.cpp \
 	$(SRC_PATH)/log/index_data.cpp \
 	$(SRC_PATH)/base/init.cpp \
 	$(SRC_PATH)/base/logging.cpp \

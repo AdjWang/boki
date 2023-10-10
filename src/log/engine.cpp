@@ -21,7 +21,9 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) {}
+      current_view_active_(false),
+      log_cache_(absl::GetFlag(FLAGS_slog_engine_enable_cache),
+                 absl::GetFlag(FLAGS_slog_storage_cache_cap_mb)) {}
 
 Engine::~Engine() {}
 
@@ -327,15 +329,15 @@ void Engine::HandleLocalRead(LocalOp* op) {
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
     uint32_t user_logspace = op->user_logspace;
     uint64_t seqnum = op->seqnum;
-    LogCachePutAuxData(user_logspace, seqnum, op->data.to_span());
+    log_cache_.PutAuxData(user_logspace, seqnum, op->data.to_span());
     Message response = MessageHelper::NewSharedLogOpSucceeded(
         SharedLogResultType::AUXDATA_OK, seqnum);
     FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
     if (!absl::GetFlag(FLAGS_slog_engine_propagate_auxdata)) {
         return;
     }
-    if (auto log_entry = LogCacheGet(user_logspace, seqnum); log_entry.has_value()) {
-        if (auto aux_data = LogCacheGetAuxData(user_logspace, seqnum); aux_data.has_value()) {
+    if (auto log_entry = log_cache_.Get(user_logspace, seqnum); log_entry.has_value()) {
+        if (auto aux_data = log_cache_.GetAuxData(user_logspace, seqnum); aux_data.has_value()) {
             uint16_t view_id = GetViewId(seqnum);
             absl::ReaderMutexLock view_lk(&view_mu_);
             if (view_id < views_.size()) {
@@ -509,9 +511,9 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
                 // Put the received log entry into log cache
                 LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
-                LogCachePut(log_metadata, user_tags, log_data);
+                log_cache_.Put(log_metadata, user_tags, log_data);
                 if (aux_data.size() > 0) {
-                    LogCachePutAuxData(log_metadata.user_logspace, seqnum, aux_data);
+                    log_cache_.PutAuxData(log_metadata.user_logspace, seqnum, aux_data);
                 }
             }
         } else if (result == SharedLogResultType::ASYNC_EMPTY) {
@@ -556,9 +558,9 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
             // Put the received log entry into log cache
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
-            LogCachePut(log_metadata, user_tags, log_data);
+            log_cache_.Put(log_metadata, user_tags, log_data);
             if (aux_data.size() > 0) {
-                LogCachePutAuxData(log_metadata.user_logspace, seqnum, aux_data);
+                log_cache_.PutAuxData(log_metadata.user_logspace, seqnum, aux_data);
             }
         } else if (result == SharedLogResultType::EMPTY) {
             FinishLocalOpWithFailure(
@@ -584,7 +586,7 @@ void Engine::ProcessAppendResults(const LogProducer::AppendResultVec& results) {
             LogMetaData log_metadata = MetaDataFromAppendOp(op);
             log_metadata.seqnum = result.seqnum;
             log_metadata.localid = result.localid;
-            LogCachePut(log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
+            log_cache_.Put(log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
             Message response = MessageHelper::NewSharedLogOpSucceeded(
                 SharedLogResultType::APPEND_OK, result.seqnum);
             FinishLocalOpWithResponse(op, &response, result.metalog_progress);
@@ -603,11 +605,11 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     // For async requests:
     // if the log is cached: return ONCE as an async response with kLogDataCachedFlag set.
     // if the log is not cached: return twice as usual.
-    if (auto cached_log_entry = LogCacheGet(query.user_logspace, seqnum); cached_log_entry.has_value()) {
+    if (auto cached_log_entry = log_cache_.Get(query.user_logspace, seqnum); cached_log_entry.has_value()) {
         // Cache hits
         HVLOG_F(1, "Cache hits for log entry seqnum={:016X}", seqnum);
         const LogEntry& log_entry = cached_log_entry.value();
-        std::optional<std::string> cached_aux_data = LogCacheGetAuxData(query.user_logspace, seqnum);
+        std::optional<std::string> cached_aux_data = log_cache_.GetAuxData(query.user_logspace, seqnum);
         std::span<const char> aux_data;
         if (cached_aux_data.has_value()) {
             size_t full_size = log_entry.data.size()

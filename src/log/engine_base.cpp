@@ -25,8 +25,9 @@ EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
       next_local_op_id_(0),
-      read_delay_stat_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
-          "log_read_delay")) {}
+      read_delay_stat_(
+          stat::StatisticsCollector<int32_t>::StandardReportCallback(
+              "log_read_delay")) {}
 
 EngineBase::~EngineBase() {}
 
@@ -37,7 +38,6 @@ zk::ZKSession* EngineBase::zk_session() {
 void EngineBase::Start() {
     SetupZKWatchers();
     SetupTimers();
-    enable_cache_ = absl::GetFlag(FLAGS_slog_engine_enable_cache);
 }
 
 void EngineBase::Stop() {}
@@ -357,46 +357,6 @@ void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType resul
                                           uint64_t metalog_progress) {
     Message response = MessageHelper::NewSharedLogOpFailed(result);
     FinishLocalOpWithResponse(op, &response, metalog_progress);
-}
-
-void EngineBase::LogCachePut(const LogMetaData& log_metadata,
-                             std::span<const uint64_t> user_tags,
-                             std::span<const char> log_data) {
-    if (!enable_cache_) {
-        return;
-    }
-    HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
-    uint32_t user_logspace = log_metadata.user_logspace;
-    if (__FAAS_PREDICT_FALSE(!log_caches_.contains(user_logspace))) {
-        // TODO: make cache shared
-        log_caches_.emplace(user_logspace, absl::GetFlag(FLAGS_slog_storage_cache_cap_mb));
-    }
-    log_caches_.at(user_logspace).Put(log_metadata, user_tags, log_data);
-}
-
-std::optional<LogEntry> EngineBase::LogCacheGet(uint32_t user_logspace, uint64_t seqnum) {
-    if (!enable_cache_ || !log_caches_.contains(user_logspace)) {
-        return std::nullopt;
-    }
-    return log_caches_.at(user_logspace).Get(seqnum);
-}
-
-void EngineBase::LogCachePutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data) {
-    if (!enable_cache_) {
-        return;
-    }
-    if (__FAAS_PREDICT_FALSE(!log_caches_.contains(user_logspace))) {
-        // TODO: make cache shared
-        log_caches_.emplace(user_logspace, absl::GetFlag(FLAGS_slog_storage_cache_cap_mb));
-    }
-    log_caches_.at(user_logspace).PutAuxData(seqnum, data);
-}
-
-std::optional<std::string> EngineBase::LogCacheGetAuxData(uint32_t user_logspace, uint64_t seqnum) {
-    if (!enable_cache_ || !log_caches_.contains(user_logspace)) {
-        return std::nullopt;
-    }
-    return log_caches_.at(user_logspace).GetAuxData(seqnum);
 }
 
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,
