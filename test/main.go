@@ -1,7 +1,7 @@
 package main
 
-// #cgo CFLAGS: -I../src/base -I../src/log
-// #cgo LDFLAGS: -L../lib/bin/debug -lrt -ldl -lindex
+// #cgo CFLAGS: -I../lib/shared_index/include
+// #cgo LDFLAGS: -L../lib/shared_index/bin/debug -lrt -ldl -lindex
 // #include <stdlib.h>
 // #include <index_data_c.h>
 import "C"

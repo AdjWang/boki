@@ -2,8 +2,7 @@ package ipc
 
 // TODO: use macro to config debug/release of LDFLAGS
 
-// #cgo CFLAGS: -I../../../src/base -I../../../src/log
-// #cgo LDFLAGS: -L../../../bin/debug -lrt -ldl -lindex
+// #include <stdlib.h>
 // #include <index_data_c.h>
 import "C"
 

@@ -1,8 +1,8 @@
 # Build related
 /build/
 /bin/
-/lib/build/
-/lib/bin/
+/lib/shared_index/build/
+/lib/shared_index/bin/
 /deps/out*
 /.all_time
 /worker/cpp/.release_time

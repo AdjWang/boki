@@ -8,7 +8,7 @@ SRC_PATH = ./src
 # General compiler flags
 COMPILE_FLAGS = -std=c++17 -march=haswell -D__FAAS_SRC \
 	-Wall -Wextra -Werror -Wno-unused-parameter \
-	-fdata-sections -ffunction-sections -fPIC -fvisibility=hidden
+	-fdata-sections -ffunction-sections
 # Additional release-specific flags
 RCOMPILE_FLAGS = -DNDEBUG -O3
 # Additional debug-specific flags
@@ -133,7 +133,7 @@ END_TIME = read st < $(TIME_FILE) ; \
 all: dirs
 	@echo "Beginning $(BUILD_NAME) build"
 	@$(START_TIME)
-	@$(MAKE) binary --no-print-directory
+	@$(MAKE) binary library --no-print-directory
 	@echo -n "Total build time: "
 	@$(END_TIME)
 
@@ -148,11 +148,14 @@ dirs:
 clean:
 	@echo "Deleting directories"
 	@$(RM) -r build bin
+	@echo "Deleting library directories"
+	@$(MAKE) -C lib/shared_index clean
 	@echo "Deleting protobuf generated code"
 	@$(RM) -f src/proto/*.pb.h src/proto/*.pb.cc src/proto/*.pb.cpp
 
 binary: $(TARGET_BINS)
-library: $(BIN_PATH)/libindex.so
+library:
+	@$(MAKE) -C lib/shared_index
 
 # Proto files must be compiled before all objects
 $(OBJECTS): $(PROTO_HEADERS)
@@ -161,12 +164,6 @@ $(OBJECTS): $(PROTO_HEADERS)
 $(BIN_PATH)/%: $(BUILD_PATH)/bin/%.o $(NON_BIN_OBJECTS)
 	@echo "Linking: $@"
 	$(CMD_PREFIX)$(CXX) $^ $(LDFLAGS) $(LINK_FLAGS) -o $@
-
-# Link the shared library
-$(BIN_PATH)/libindex.so: $(filter-out $(BUILD_PATH)/log/index_data.o,$(NON_BIN_OBJECTS)) \
-						 $(BUILD_PATH)/log/index_data_shared.o
-	@echo "Linking: $@"
-	$(CMD_PREFIX)$(CXX) $^ -shared $(LDFLAGS) $(LINK_FLAGS) -o $@
 
 .SECONDARY: $(OBJECTS)
 
@@ -179,11 +176,6 @@ $(BIN_PATH)/libindex.so: $(filter-out $(BUILD_PATH)/log/index_data.o,$(NON_BIN_O
 $(BUILD_PATH)/%.o: $(SRC_PATH)/%.$(SRC_EXT)
 	@echo "Compiling: $< -> $@"
 	$(CMD_PREFIX)$(CXX) $(CXXFLAGS) $(COMPILE_FLAGS) -MP -MMD -c $< -o $@
-
-# Shared library rules
-$(BUILD_PATH)/log/index_data_shared.o: $(SRC_PATH)/log/index_data.cpp
-	@echo "Compiling: $< -> $@"
-	$(CMD_PREFIX)$(CXX) $(CXXFLAGS) $(COMPILE_FLAGS) -MP -MMD -D__COMPILE_AS_SHARED -c $< -o $@
 
 # Protobuf-related rules
 $(SRC_PATH)/proto/%.pb.cpp $(SRC_PATH)/proto/%.pb.h: $(SRC_PATH)/proto/%.proto

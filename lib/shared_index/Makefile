@@ -4,7 +4,7 @@ CXX ?= g++
 # Extension of source files used in the project
 SRC_EXT = cpp
 # Path to the source directory, relative to the makefile
-SRC_PATH = ./src
+SRC_PATH = src
 # General compiler flags
 COMPILE_FLAGS = -std=c++17 -march=haswell -D__COMPILE_AS_SHARED \
 	-Wall -Wextra -Werror -Wno-unused-parameter \
@@ -25,9 +25,8 @@ INCLUDES = -I$(SRC_PATH) -I./include \
 # General linker settings
 ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
 		| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
-LINK_FLAGS = -Ldeps/out/lib \
-	-Wl,-Bstatic -lrt \
-	-ltkrzw \
+LINK_FLAGS = -shared -Ldeps/out/lib \
+	-Wl,-Bstatic -lrt -ltkrzw \
 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
 	-lzstd -ljemalloc \
 	-Wl,-Bdynamic -lpthread -ldl \
@@ -93,7 +92,8 @@ endif
 BUILD_PATH := build/$(BUILD_NAME)
 BIN_PATH := bin/$(BUILD_NAME)
 
-SOURCES = $(SRC_PATH)/log/index_data.cpp \
+SROUCES = index_data_wrapper.cpp \
+	$(SRC_PATH)/log/index_data.cpp \
 	$(SRC_PATH)/base/init.cpp \
 	$(SRC_PATH)/base/logging.cpp \
 	$(SRC_PATH)/utils/debug.cpp \
@@ -103,7 +103,7 @@ SOURCES = $(SRC_PATH)/log/index_data.cpp \
 
 # Set the object file names, with the source directory stripped
 # from the path, and the build path prepended in its place
-OBJECTS = $(SOURCES:$(SRC_PATH)/%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
+OBJECTS = $(SROUCES:%.$(SRC_EXT)=$(BUILD_PATH)/%.o)
 # Set the dependency files that will be used to add header dependencies
 DEPS = $(OBJECTS:.o=.d)
 
@@ -119,7 +119,7 @@ all: dirs
 	@echo "Beginning $(BUILD_NAME) build"
 	@$(START_TIME)
 	@$(MAKE) library --no-print-directory
-	@echo -n "Total build time: "
+	@echo -n "Total build time of lib: "
 	@$(END_TIME)
 
 # Create the directories used in the build
@@ -139,7 +139,7 @@ library: $(BIN_PATH)/libindex.so
 # Link the shared library
 $(BIN_PATH)/libindex.so: $(OBJECTS)
 	@echo "Linking: $@"
-	$(CMD_PREFIX)$(CXX) $^ -shared $(LDFLAGS) $(LINK_FLAGS) -o $@
+	$(CMD_PREFIX)$(CXX) $^ $(LDFLAGS) $(LINK_FLAGS) -o $@
 
 .SECONDARY: $(OBJECTS)
 
@@ -149,6 +149,6 @@ $(BIN_PATH)/libindex.so: $(OBJECTS)
 # Source file rules
 # After the first compilation they will be joined with the rules from the
 # dependency files to provide header dependencies
-$(BUILD_PATH)/%.o: $(SRC_PATH)/%.$(SRC_EXT)
+$(BUILD_PATH)/%.o: %.$(SRC_EXT)
 	@echo "Compiling: $< -> $@"
 	$(CMD_PREFIX)$(CXX) $(CXXFLAGS) $(COMPILE_FLAGS) -MP -MMD -c $< -o $@
