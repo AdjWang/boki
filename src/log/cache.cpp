@@ -1,9 +1,5 @@
 #include "log/cache.h"
 
-__BEGIN_THIRD_PARTY_HEADERS
-#include <tkrzw_dbm_cache.h>
-__END_THIRD_PARTY_HEADERS
-
 namespace faas {
 namespace log {
 
@@ -13,6 +9,17 @@ LRUCache::LRUCache(int mem_cap_mb) {
         cap_mem_size = int64_t{mem_cap_mb} << 20;
     }
     dbm_.reset(new tkrzw::CacheDBM(/* cap_rec_num= */ -1, cap_mem_size));
+}
+
+LRUCache::LRUCache(int mem_cap_mb, const char* shared_path, int32_t options) {
+    int64_t cap_mem_size = -1;
+    if (mem_cap_mb > 0) {
+        cap_mem_size = int64_t{mem_cap_mb} << 20;
+    }
+    dbm_.reset(
+        new tkrzw::CacheDBM(std::make_unique<tkrzw::MemoryMapParallelFile>(),
+                            /* cap_rec_num= */ -1, cap_mem_size));
+    dbm_->Open(shared_path, true, options);
 }
 
 LRUCache::~LRUCache() {}
@@ -67,7 +74,7 @@ void LRUCache::Put(const LogMetaData& log_metadata, std::span<const uint64_t> us
                    std::span<const char> log_data) {
     std::string key_str = fmt::format("0_{:016x}", log_metadata.seqnum);
     std::string data = EncodeLogEntry(log_metadata, user_tags, log_data);
-    dbm_->Set(key_str, data, /* overwrite= */ false);
+    dbm_->Set(key_str, data, /* overwrite= */ true);
 }
 
 std::optional<LogEntry> LRUCache::Get(uint64_t seqnum) {

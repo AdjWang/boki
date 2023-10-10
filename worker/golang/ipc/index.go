@@ -1,7 +1,5 @@
 package ipc
 
-// TODO: use macro to config debug/release of LDFLAGS
-
 // #include <stdlib.h>
 // #include <index_data_c.h>
 import "C"

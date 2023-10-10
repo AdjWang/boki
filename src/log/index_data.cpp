@@ -30,6 +30,7 @@ static std::string GetOrCreateIndexMetaPath(uint32_t logspace_id) {
 #define SHM_OBJECT_NAME(name) \
     fmt::format(#name "_{}_{}", user_logspace_, logspace_id_).c_str()
 
+// TODO: set index size in args
 #define ENGINE_SHM_INDEX_INITIALIZER_LIST                                       \
     segment_(create_only, SHM_SEG_PATH(IndexShm), 100 * 1024 * 1024),           \
     alloc_inst_(segment_.get_segment_manager()),                                \
@@ -70,8 +71,6 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     {}
 
 PerSpaceIndex::~PerSpaceIndex() {
-    // TODO
-    // shared_memory_object::remove(SHM_SEG_PATH(IndexShm));
     file_mapping::remove(SHM_SEG_PATH(IndexShm));
 }
 

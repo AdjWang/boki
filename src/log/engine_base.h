@@ -93,9 +93,9 @@ protected:
 
     void LogCachePut(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
                      std::span<const char> log_data);
-    std::optional<LogEntry> LogCacheGet(uint64_t seqnum);
-    void LogCachePutAuxData(uint64_t seqnum, std::span<const char> data);
-    std::optional<std::string> LogCacheGetAuxData(uint64_t seqnum);
+    std::optional<LogEntry> LogCacheGet(uint32_t user_logspace, uint64_t seqnum);
+    void LogCachePutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data);
+    std::optional<std::string> LogCacheGetAuxData(uint32_t user_logspace, uint64_t seqnum);
 
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);
@@ -134,7 +134,8 @@ private:
         fn_call_ctx_ ABSL_GUARDED_BY(fn_ctx_mu_);
     std::string DebugListExistingFnCall(const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>& fn_call_ctx);
 
-    std::optional<LRUCache> log_cache_;
+    bool enable_cache_;
+    absl::flat_hash_map<uint32_t /*user_logspace*/, LRUCache> log_caches_;
 
     absl::Mutex stat_mu_;
     stat::StatisticsCollector<int32_t> read_delay_stat_   ABSL_GUARDED_BY(stat_mu_);

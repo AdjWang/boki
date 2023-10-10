@@ -325,16 +325,17 @@ void Engine::HandleLocalRead(LocalOp* op) {
 }
 
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
+    uint32_t user_logspace = op->user_logspace;
     uint64_t seqnum = op->seqnum;
-    LogCachePutAuxData(seqnum, op->data.to_span());
+    LogCachePutAuxData(user_logspace, seqnum, op->data.to_span());
     Message response = MessageHelper::NewSharedLogOpSucceeded(
         SharedLogResultType::AUXDATA_OK, seqnum);
     FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
     if (!absl::GetFlag(FLAGS_slog_engine_propagate_auxdata)) {
         return;
     }
-    if (auto log_entry = LogCacheGet(seqnum); log_entry.has_value()) {
-        if (auto aux_data = LogCacheGetAuxData(seqnum); aux_data.has_value()) {
+    if (auto log_entry = LogCacheGet(user_logspace, seqnum); log_entry.has_value()) {
+        if (auto aux_data = LogCacheGetAuxData(user_logspace, seqnum); aux_data.has_value()) {
             uint16_t view_id = GetViewId(seqnum);
             absl::ReaderMutexLock view_lk(&view_mu_);
             if (view_id < views_.size()) {
@@ -510,7 +511,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
                 LogCachePut(log_metadata, user_tags, log_data);
                 if (aux_data.size() > 0) {
-                    LogCachePutAuxData(seqnum, aux_data);
+                    LogCachePutAuxData(log_metadata.user_logspace, seqnum, aux_data);
                 }
             }
         } else if (result == SharedLogResultType::ASYNC_EMPTY) {
@@ -557,7 +558,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
             LogCachePut(log_metadata, user_tags, log_data);
             if (aux_data.size() > 0) {
-                LogCachePutAuxData(seqnum, aux_data);
+                LogCachePutAuxData(log_metadata.user_logspace, seqnum, aux_data);
             }
         } else if (result == SharedLogResultType::EMPTY) {
             FinishLocalOpWithFailure(
@@ -602,11 +603,11 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     // For async requests:
     // if the log is cached: return ONCE as an async response with kLogDataCachedFlag set.
     // if the log is not cached: return twice as usual.
-    if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
+    if (auto cached_log_entry = LogCacheGet(query.user_logspace, seqnum); cached_log_entry.has_value()) {
         // Cache hits
-        HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
+        HVLOG_F(1, "Cache hits for log entry seqnum={:016X}", seqnum);
         const LogEntry& log_entry = cached_log_entry.value();
-        std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
+        std::optional<std::string> cached_aux_data = LogCacheGetAuxData(query.user_logspace, seqnum);
         std::span<const char> aux_data;
         if (cached_aux_data.has_value()) {
             size_t full_size = log_entry.data.size()
