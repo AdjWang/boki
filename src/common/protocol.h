@@ -537,6 +537,46 @@ public:
 
 #undef NEW_EMPTY_MESSAGE
 
+    static Message BuildIndexReadOKResponse(uint64_t seqnum) {
+        return NewSharedLogOpSucceeded(SharedLogResultType::READ_OK, seqnum);
+    }
+
+    static Message BuildLocalReadOKResponse(uint64_t seqnum,
+                                            std::span<const uint64_t> user_tags,
+                                            std::span<const char> log_data) {
+        Message response =
+            NewSharedLogOpSucceeded(SharedLogResultType::READ_OK, seqnum);
+        if (user_tags.size() * sizeof(uint64_t) + log_data.size() > MESSAGE_INLINE_DATA_SIZE) {
+            LOG_F(FATAL, "Log data too large: num_tags={}, size={}",
+                user_tags.size(), log_data.size());
+        }
+        response.log_num_tags = gsl::narrow_cast<uint16_t>(user_tags.size());
+        AppendInlineData(&response, user_tags);
+        AppendInlineData(&response, log_data);
+        return response;
+    }
+
+    static Message BuildLocalAsyncReadOKResponse(uint64_t seqnum) {
+        return NewSharedLogOpSucceeded(SharedLogResultType::ASYNC_READ_OK,
+                                       seqnum);
+    }
+
+    static Message BuildLocalAsyncReadCachedOKResponse(uint64_t seqnum,
+                                                       std::span<const uint64_t> user_tags,
+                                                       std::span<const char> log_data) {
+        Message response = BuildLocalAsyncReadOKResponse(seqnum);
+        if (user_tags.size() * sizeof(uint64_t) + log_data.size() > MESSAGE_INLINE_DATA_SIZE) {
+            LOG_F(FATAL, "Log data too large: num_tags={}, size={}",
+                user_tags.size(), log_data.size());
+        }
+        // client would not wait for the second response if log is cached
+        response.flags |= protocol::kLogDataCachedFlag;
+        response.log_num_tags = gsl::narrow_cast<uint16_t>(user_tags.size());
+        AppendInlineData(&response, user_tags);
+        AppendInlineData(&response, log_data);
+        return response;
+    }
+
 private:
     DISALLOW_IMPLICIT_CONSTRUCTORS(MessageHelper);
 };

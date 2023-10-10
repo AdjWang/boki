@@ -160,64 +160,6 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
     }
 }
 
-namespace {
-static Message BuildLocalReadOKResponse(uint64_t seqnum,
-                                        std::span<const uint64_t> user_tags,
-                                        std::span<const char> log_data) {
-    Message response = MessageHelper::NewSharedLogOpSucceeded(
-        SharedLogResultType::READ_OK, seqnum);
-    if (user_tags.size() * sizeof(uint64_t) + log_data.size() > MESSAGE_INLINE_DATA_SIZE) {
-        LOG_F(FATAL, "Log data too large: num_tags={}, size={}",
-              user_tags.size(), log_data.size());
-    }
-    response.log_num_tags = gsl::narrow_cast<uint16_t>(user_tags.size());
-    MessageHelper::AppendInlineData(&response, user_tags);
-    MessageHelper::AppendInlineData(&response, log_data);
-    return response;
-}
-
-static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
-    return BuildLocalReadOKResponse(
-        log_entry.metadata.seqnum,
-        VECTOR_AS_SPAN(log_entry.user_tags),
-        STRING_AS_SPAN(log_entry.data));
-}
-
-// unused for now
-// static Message BuildLocalReadOKResponse(uint64_t seqnum) {
-//     return MessageHelper::NewSharedLogOpSucceeded(
-//         SharedLogResultType::READ_OK, seqnum);
-// }
-
-static Message BuildLocalAsyncReadOKResponse(uint64_t seqnum) {
-    return MessageHelper::NewSharedLogOpSucceeded(
-        SharedLogResultType::ASYNC_READ_OK, seqnum);
-}
-
-static Message BuildLocalAsyncReadCachedOKResponse(uint64_t seqnum,
-                                                   std::span<const uint64_t> user_tags,
-                                                   std::span<const char> log_data) {
-    Message response = BuildLocalAsyncReadOKResponse(seqnum);
-    if (user_tags.size() * sizeof(uint64_t) + log_data.size() > MESSAGE_INLINE_DATA_SIZE) {
-        LOG_F(FATAL, "Log data too large: num_tags={}, size={}",
-              user_tags.size(), log_data.size());
-    }
-    // client would not wait for the second response if log is cached
-    response.flags |= protocol::kLogDataCachedFlag;
-    response.log_num_tags = gsl::narrow_cast<uint16_t>(user_tags.size());
-    MessageHelper::AppendInlineData(&response, user_tags);
-    MessageHelper::AppendInlineData(&response, log_data);
-    return response;
-}
-
-static Message BuildLocalAsyncReadCachedOKResponse(const LogEntry& log_entry) {
-    return BuildLocalAsyncReadCachedOKResponse(
-        log_entry.metadata.seqnum,
-        VECTOR_AS_SPAN(log_entry.user_tags),
-        STRING_AS_SPAN(log_entry.data));
-}
-}  // namespace
-
 // Start handlers for local requests (from functions)
 
 #define ONHOLD_IF_SEEN_FUTURE_VIEW(LOCAL_OP_VAR)                          \
@@ -483,7 +425,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
 
         Message response;
         if (result == SharedLogResultType::ASYNC_READ_OK) {
-            response = BuildLocalAsyncReadOKResponse(seqnum);
+            response = MessageHelper::BuildLocalAsyncReadOKResponse(seqnum);
             if (message.payload_size == 0) {
                 LocalOp* op;
                 if (!onging_local_reads_.Peak(op_id, &op)) {
@@ -503,7 +445,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 std::span<const char> log_data;
                 std::span<const char> aux_data;
                 log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_data);
-                Message response = BuildLocalAsyncReadCachedOKResponse(seqnum, user_tags, log_data);
+                Message response = MessageHelper::BuildLocalAsyncReadCachedOKResponse(seqnum, user_tags, log_data);
                 if (aux_data.size() > 0) {
                     response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
                     MessageHelper::AppendInlineData(&response, aux_data);
@@ -544,7 +486,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             std::span<const char> log_data;
             std::span<const char> aux_data;
             log_utils::SplitPayloadForMessage(message, payload, &user_tags, &log_data, &aux_data);
-            Message response = BuildLocalReadOKResponse(seqnum, user_tags, log_data);
+            Message response = MessageHelper::BuildLocalReadOKResponse(seqnum, user_tags, log_data);
             if (aux_data.size() > 0) {
                 response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
                 MessageHelper::AppendInlineData(&response, aux_data);
@@ -629,12 +571,17 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             Message response;
             if (query.type == IndexQuery::kAsync) {
                 HVLOG_F(1, "Send local async read cached response for log (seqnum {})", bits::HexStr0x(seqnum));
-                response = BuildLocalAsyncReadCachedOKResponse(log_entry);
+                response = MessageHelper::BuildLocalAsyncReadCachedOKResponse(
+                    log_entry.metadata.seqnum,
+                    VECTOR_AS_SPAN(log_entry.user_tags),
+                    STRING_AS_SPAN(log_entry.data));
             } else {
                 HVLOG_F(1, "Send local read response for log (seqnum {})", bits::HexStr0x(seqnum));
-                response = BuildLocalReadOKResponse(log_entry);
+                response = MessageHelper::BuildLocalReadOKResponse(
+                    log_entry.metadata.seqnum,
+                    VECTOR_AS_SPAN(log_entry.user_tags),
+                    STRING_AS_SPAN(log_entry.data));
             }
-            LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
             // bench flags
@@ -642,6 +589,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             if (query.metalog_inside) {
                 response.flags |= protocol::kLogReadBenchMetaInsideFlag;
             }
+            LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
             response.log_dispatch_delay = op->log_dispatch_delay;
             FinishLocalOpWithResponse(op, &response, query_result.metalog_progress);
         } else {
@@ -669,7 +617,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
             if(local_request) {
                 HVLOG_F(1, "Send local async read response for log (seqnum {})", bits::HexStr0x(seqnum));
                 LocalOp* op = onging_local_reads_.PeakChecked(query.client_data);
-                Message response = BuildLocalAsyncReadOKResponse(seqnum);
+                Message response = MessageHelper::BuildLocalAsyncReadOKResponse(seqnum);
                 IntermediateLocalOpWithResponse(op, &response, query_result.metalog_progress);
             } else {
                 HVLOG_F(1, "Send remote async read response for log (seqnum {})", bits::HexStr0x(seqnum));

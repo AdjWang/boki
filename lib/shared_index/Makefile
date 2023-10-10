@@ -21,7 +21,8 @@ INCLUDES = -I$(SRC_PATH) -I./include \
 	$(BOOST_HEADERS) \
 	-I./deps/fmt/include \
 	-I./deps/GSL/include \
-	-I./deps/xxHash
+	-I./deps/xxHash \
+	-I./deps/tkrzw
 # General linker settings
 ABSL_LIBRARIES = $(shell find deps/out/lib/libabsl_*.a -printf '%f\n' \
 		| sed -e 's/libabsl_\([a-z0-9_]\+\)\.a/-labsl_\1/g')
@@ -94,6 +95,7 @@ BIN_PATH := bin/$(BUILD_NAME)
 
 SROUCES = lib.cpp \
 	$(SRC_PATH)/log/index_data.cpp \
+	$(SRC_PATH)/log/cache.cpp \
 	$(SRC_PATH)/base/init.cpp \
 	$(SRC_PATH)/base/logging.cpp \
 	$(SRC_PATH)/utils/debug.cpp \

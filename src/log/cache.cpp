@@ -1,6 +1,4 @@
 #include "log/cache.h"
-#include "ipc/base.h"
-#include "utils/fs.h"
 
 namespace faas {
 namespace log {
@@ -111,21 +109,15 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
 }
 
 void CacheManager::Put(const LogMetaData& log_metadata,
-                             std::span<const uint64_t> user_tags,
-                             std::span<const char> log_data) {
+                       std::span<const uint64_t> user_tags,
+                       std::span<const char> log_data) {
     if (!enable_cache_) {
         return;
     }
     HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
     uint32_t user_logspace = log_metadata.user_logspace;
     if (__FAAS_PREDICT_FALSE(!log_caches_.contains(user_logspace))) {
-        // TODO: isolate by users
-        std::string shared_cache_path =
-            fs_utils::JoinPath(ipc::GetOrCreateCacheShmPath(),
-                               fmt::format("user_{}", user_logspace));
-        log_caches_.emplace(
-            std::piecewise_construct, std::forward_as_tuple(user_logspace),
-            std::forward_as_tuple(cap_per_user_, shared_cache_path.c_str()));
+        CreateCache(user_logspace);
     }
     log_caches_.at(user_logspace).Put(log_metadata, user_tags, log_data);
 }
@@ -142,13 +134,7 @@ void CacheManager::PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span
         return;
     }
     if (__FAAS_PREDICT_FALSE(!log_caches_.contains(user_logspace))) {
-        // TODO: isolate by users
-        std::string shared_cache_path =
-            fs_utils::JoinPath(ipc::GetOrCreateCacheShmPath(),
-                               fmt::format("user_{}", user_logspace));
-        log_caches_.emplace(
-            std::piecewise_construct, std::forward_as_tuple(user_logspace),
-            std::forward_as_tuple(cap_per_user_, shared_cache_path.c_str()));
+        CreateCache(user_logspace);
     }
     log_caches_.at(user_logspace).PutAuxData(seqnum, data);
 }
@@ -158,6 +144,13 @@ std::optional<std::string> CacheManager::GetAuxData(uint32_t user_logspace, uint
         return std::nullopt;
     }
     return log_caches_.at(user_logspace).GetAuxData(seqnum);
+}
+
+void CacheManager::CreateCache(uint32_t user_logspace) {
+    // TODO: isolate by users
+    log_caches_.emplace(
+        std::piecewise_construct, std::forward_as_tuple(user_logspace),
+        std::forward_as_tuple(cap_per_user_, GetCacheShmFile(user_logspace).c_str()));
 }
 
 }  // namespace log

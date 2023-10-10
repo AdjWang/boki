@@ -17,18 +17,27 @@ EXPORT extern void Init(const char* ipc_root_path);
 EXPORT extern void* ConstructIndexData(uint32_t logspace_id, uint32_t user_logspace);
 EXPORT extern void DestructIndexData(void* index_data);
 
-EXPORT extern int ProcessLocalIdQuery(void* index_data,
-                                      /*InOut*/ uint64_t* metalog_progress,
-                                      uint64_t localid,
-                                      /*Out*/ uint64_t* seqnum);
-EXPORT extern int ProcessReadNext(void* index_data,
-                                  /*InOut*/ uint64_t* metalog_progress,
-                                  uint32_t user_logspace, uint64_t query_seqnum,
-                                  uint64_t query_tag, /*Out*/ uint64_t* seqnum);
-EXPORT extern int ProcessReadPrev(void* index_data,
-                                  /*InOut*/ uint64_t* metalog_progress,
-                                  uint32_t user_logspace, uint64_t query_seqnum,
-                                  uint64_t query_tag, /*Out*/ uint64_t* seqnum);
+EXPORT extern int IndexReadLocalId(void* index_data,
+                                   /*InOut*/ uint64_t* metalog_progress,
+                                   uint32_t user_logspace, uint64_t localid,
+                                   /*Out*/ uint64_t* seqnum);
+EXPORT extern int IndexReadNext(void* index_data,
+                                /*InOut*/ uint64_t* metalog_progress,
+                                uint32_t user_logspace, uint64_t query_seqnum,
+                                uint64_t query_tag, /*Out*/ uint64_t* seqnum);
+EXPORT extern int IndexReadPrev(void* index_data,
+                                /*InOut*/ uint64_t* metalog_progress,
+                                uint32_t user_logspace, uint64_t query_seqnum,
+                                uint64_t query_tag, /*Out*/ uint64_t* seqnum);
+EXPORT extern int LogReadLocalId(void* index_data, uint64_t metalog_progress,
+                                 uint32_t user_logspace, uint64_t localid,
+                                 /*Out*/ void* response);
+EXPORT extern int LogReadNext(void* index_data, uint64_t metalog_progress,
+                              uint32_t user_logspace, uint64_t query_seqnum,
+                              uint64_t query_tag, /*Out*/ void* response);
+EXPORT extern int LogReadPrev(void* index_data, uint64_t metalog_progress,
+                              uint32_t user_logspace, uint64_t query_seqnum,
+                              uint64_t query_tag, /*Out*/ void* response);
 
 #ifdef __cplusplus
 }

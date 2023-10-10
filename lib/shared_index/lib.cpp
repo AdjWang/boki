@@ -1,7 +1,78 @@
 #include <index_data_c.h>
 #include "log/index_data.h"
+#include "log/cache.h"
 #include "utils/lockable_ptr.h"
 #include "base/init.h"
+
+static faas::log::LRUCache* g_cache = NULL;
+
+static faas::log::LRUCache* GetOrCreateCache(uint32_t user_logspace) {
+    if (g_cache != NULL) {
+        return g_cache;
+    }
+    std::string shared_cache_path = faas::log::GetCacheShmFile(user_logspace);
+    if (!faas::fs_utils::Exists(shared_cache_path)) {
+        return NULL;
+    }
+    g_cache = new faas::log::LRUCache(-1, shared_cache_path.c_str(), tkrzw::File::OPEN_NO_LOCK);
+    return g_cache;
+}
+
+static std::optional<faas::protocol::Message> TryGetCache(uint32_t user_logspace,
+                                                          uint64_t metalog_progress,
+                                                          uint64_t seqnum) {
+    faas::log::LRUCache* log_cache = GetOrCreateCache(user_logspace);
+    if (log_cache == NULL) {
+        return std::nullopt;
+    }
+    auto cached_log_entry = log_cache->Get(seqnum);
+    if (!cached_log_entry.has_value()) {
+        return std::nullopt;
+    }
+    // Cache hits
+    VLOG_F(1, "Cache hits for log entry seqnum={:016X}", seqnum);
+    const faas::log::LogEntry& log_entry = cached_log_entry.value();
+    std::optional<std::string> cached_aux_data = log_cache->GetAuxData(seqnum);
+    std::span<const char> aux_data;
+    if (cached_aux_data.has_value()) {
+        size_t full_size = log_entry.data.size()
+                            + log_entry.user_tags.size() * sizeof(uint64_t)
+                            + cached_aux_data->size();
+        if (full_size <= MESSAGE_INLINE_DATA_SIZE) {
+            aux_data = STRING_AS_SPAN(*cached_aux_data);
+        } else {
+            LOG_F(WARNING, "Inline buffer of message not large enough "
+                           "for auxiliary data of log seqnum={:016X}: "
+                           "log_size={}, num_tags={} aux_data_size={}",
+                    seqnum, log_entry.data.size(),
+                    log_entry.user_tags.size(), cached_aux_data->size());
+        }
+    }
+    VLOG_F(1, "Send local read response for log seqnum={:016X}", seqnum);
+    faas::protocol::Message response =
+        faas::protocol::MessageHelper::BuildLocalReadOKResponse(
+            log_entry.metadata.seqnum, VECTOR_AS_SPAN(log_entry.user_tags),
+            STRING_AS_SPAN(log_entry.data));
+    response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
+    faas::protocol::MessageHelper::AppendInlineData(&response, aux_data);
+    response.metalog_progress = metalog_progress;
+    return response;
+}
+
+
+enum APIReturnValue {
+    // enum State { kFound, kEmpty, kContinue, kPending };
+    IndexReadOK = faas::log::IndexQueryResult::kFound,
+    IndexReadEmpty = faas::log::IndexQueryResult::kEmpty,
+    IndexReadContinue = faas::log::IndexQueryResult::kContinue,
+    IndexReadPending = faas::log::IndexQueryResult::kPending,
+
+    IndexReadInitFutureViewBail = -1,
+    IndexReadInitCurrentViewPending = -2,
+    IndexReadContinueOK = -3,
+
+    LogReadCacheMiss = -4,
+};
 
 typedef faas::LockablePtr<faas::log::IndexDataManager> shared_index_t;
 #define SHARED_INDEX_CAST(index_data_ptr) \
@@ -52,12 +123,14 @@ void DestructIndexData(void* index_data) {
     delete SHARED_INDEX_CAST(index_data);
 }
 
-int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
-                        uint64_t localid, /*Out*/ uint64_t* seqnum) {
+int IndexReadLocalId(void* index_data, /*InOut*/ uint64_t* metalog_progress,
+                     uint32_t user_logspace, uint64_t localid,
+                     /*Out*/ uint64_t* seqnum) {
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadLocalId,
         .initial = true,
+        .user_logspace = user_logspace,
         .query_seqnum = localid,
         .metalog_progress = *metalog_progress,
     };
@@ -65,9 +138,9 @@ int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         locked_index_data->CheckConsistency(query);
     switch (consistency_type) {
         case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
-            return -1;
+            return APIReturnValue::IndexReadInitFutureViewBail;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewPending:
-            return -2;
+            return APIReturnValue::IndexReadInitCurrentViewPending;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
         case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
             faas::log::IndexQueryResult result =
@@ -80,13 +153,13 @@ int ProcessLocalIdQuery(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         }
         case faas::log::IndexDataManager::QueryConsistencyType::kContOK:
         default:
-            return -3;
+            return APIReturnValue::IndexReadContinueOK;
     }
 }
 
-int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
-                    uint32_t user_logspace, uint64_t query_seqnum,
-                    uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
+int IndexReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
+                  uint32_t user_logspace, uint64_t query_seqnum,
+                  uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadNext,
@@ -100,9 +173,9 @@ int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         locked_index_data->CheckConsistency(query);
     switch (consistency_type) {
         case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
-            return -1;
+            return APIReturnValue::IndexReadInitFutureViewBail;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewPending:
-            return -2;
+            return APIReturnValue::IndexReadInitCurrentViewPending;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
         case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
             faas::log::IndexQueryResult result = locked_index_data->ProcessReadNext(query);
@@ -114,13 +187,13 @@ int ProcessReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         }
         case faas::log::IndexDataManager::QueryConsistencyType::kContOK:
         default:
-            return -3;
+            return APIReturnValue::IndexReadContinueOK;
     }
 }
 
-int ProcessReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
-                    uint32_t user_logspace, uint64_t query_seqnum,
-                    uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
+int IndexReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
+                  uint32_t user_logspace, uint64_t query_seqnum,
+                  uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadPrev,
@@ -134,9 +207,9 @@ int ProcessReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         locked_index_data->CheckConsistency(query);
     switch (consistency_type) {
         case faas::log::IndexDataManager::QueryConsistencyType::kInitFutureViewBail:
-            return -1;
+            return APIReturnValue::IndexReadInitFutureViewBail;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewPending:
-            return -2;
+            return APIReturnValue::IndexReadInitCurrentViewPending;
         case faas::log::IndexDataManager::QueryConsistencyType::kInitCurrentViewOK:
         case faas::log::IndexDataManager::QueryConsistencyType::kInitPastViewOK: {
             faas::log::IndexQueryResult result = locked_index_data->ProcessReadPrev(query);
@@ -148,6 +221,86 @@ int ProcessReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
         }
         case faas::log::IndexDataManager::QueryConsistencyType::kContOK:
         default:
-            return -3;
+            return APIReturnValue::IndexReadContinueOK;
+    }
+}
+#undef SHARED_INDEX_CAST
+
+
+int LogReadLocalId(void* index_data, uint64_t metalog_progress,
+                   uint32_t user_logspace, uint64_t localid,
+                   /*Out*/ void* response) {
+    uint64_t _InOut_metalog_progress = metalog_progress;
+    uint64_t _Out_seqnum = 0u;
+    int ret = IndexReadLocalId(index_data, &_InOut_metalog_progress,
+                               user_logspace, localid, &_Out_seqnum);
+    if (ret != APIReturnValue::IndexReadOK) {
+        return ret;
+    }
+    std::optional<faas::protocol::Message> message =
+        TryGetCache(user_logspace, _InOut_metalog_progress, _Out_seqnum);
+    if (message.has_value()) {
+        memcpy(response, static_cast<void*>(&message.value()),
+            sizeof(faas::protocol::Message));
+        return sizeof(faas::protocol::Message);
+    } else {
+        faas::protocol::Message response_without_data =
+            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
+        response_without_data.metalog_progress = _InOut_metalog_progress;
+        memcpy(response, static_cast<void*>(&response_without_data),
+               sizeof(faas::protocol::Message));
+        return APIReturnValue::LogReadCacheMiss;
+    }
+}
+
+int LogReadNext(void* index_data, uint64_t metalog_progress,
+                uint32_t user_logspace, uint64_t query_seqnum,
+                uint64_t query_tag, /*Out*/ void* response) {
+    uint64_t _InOut_metalog_progress = metalog_progress;
+    uint64_t _Out_seqnum = 0u;
+    int ret = IndexReadNext(index_data, &_InOut_metalog_progress, user_logspace,
+                            query_seqnum, query_tag, &_Out_seqnum);
+    if (ret != APIReturnValue::IndexReadOK) {
+        return ret;
+    }
+    std::optional<faas::protocol::Message> message =
+        TryGetCache(user_logspace, _InOut_metalog_progress, _Out_seqnum);
+    if (message.has_value()) {
+        memcpy(response, static_cast<void*>(&message.value()),
+               sizeof(faas::protocol::Message));
+        return sizeof(faas::protocol::Message);
+    } else {
+        faas::protocol::Message response_without_data =
+            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
+        response_without_data.metalog_progress = _InOut_metalog_progress;
+        memcpy(response, static_cast<void*>(&response_without_data),
+               sizeof(faas::protocol::Message));
+        return APIReturnValue::LogReadCacheMiss;
+    }
+}
+
+int LogReadPrev(void* index_data, uint64_t metalog_progress,
+                uint32_t user_logspace, uint64_t query_seqnum,
+                uint64_t query_tag, /*Out*/ void* response) {
+    uint64_t _InOut_metalog_progress = metalog_progress;
+    uint64_t _Out_seqnum = 0u;
+    int ret = IndexReadPrev(index_data, &_InOut_metalog_progress, user_logspace,
+                            query_seqnum, query_tag, &_Out_seqnum);
+    if (ret != APIReturnValue::IndexReadOK) {
+        return ret;
+    }
+    std::optional<faas::protocol::Message> message =
+        TryGetCache(user_logspace, _InOut_metalog_progress, _Out_seqnum);
+    if (message.has_value()) {
+        memcpy(response, static_cast<void*>(&message.value()),
+               sizeof(faas::protocol::Message));
+        return sizeof(faas::protocol::Message);
+    } else {
+        faas::protocol::Message response_without_data =
+            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
+        response_without_data.metalog_progress = _InOut_metalog_progress;
+        memcpy(response, static_cast<void*>(&response_without_data),
+               sizeof(faas::protocol::Message));
+        return APIReturnValue::LogReadCacheMiss;
     }
 }

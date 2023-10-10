@@ -1,6 +1,8 @@
 #pragma once
 
 #include "log/common.h"
+#include "utils/fs.h"
+#include "ipc/base.h"
 
 __BEGIN_THIRD_PARTY_HEADERS
 #include <tkrzw_dbm_cache.h>
@@ -13,6 +15,11 @@ namespace tkrzw { class CacheDBM; }
 
 namespace faas {
 namespace log {
+
+inline std::string GetCacheShmFile(uint32_t user_logspace) {
+    return fs_utils::JoinPath(ipc::GetOrCreateCacheShmPath(),
+                              fmt::format("user_{}", user_logspace));
+}
 
 class LRUCache {
 public:
@@ -47,8 +54,9 @@ public:
       enable_cache_(enable),
       cap_per_user_(capacity) {}
 
-    void Put(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
-                     std::span<const char> log_data);
+    void Put(const LogMetaData& log_metadata,
+             std::span<const uint64_t> user_tags,
+             std::span<const char> log_data);
     std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum);
     void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data);
     std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum);
@@ -58,6 +66,8 @@ private:
     bool enable_cache_;
     int cap_per_user_;
     absl::flat_hash_map<uint32_t /*user_logspace*/, LRUCache> log_caches_;
+
+    void CreateCache(uint32_t user_logspace);
 };
 
 }  // namespace log

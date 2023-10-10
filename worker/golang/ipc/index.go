@@ -73,8 +73,9 @@ func strerr(resultState int) string {
 func (idx *IndexData) ProcessLocalIdQuery(metalogProgress uint64, localId uint64) (uint64, uint64, error) {
 	_InOut_MetalogProgress := metalogProgress
 	_Out_SeqNum := uint64(0)
-	resultState := int(C.int(C.ProcessLocalIdQuery(idx.instance,
+	resultState := int(C.int(C.IndexReadLocalId(idx.instance,
 		(*C.ulong)(unsafe.Pointer(&_InOut_MetalogProgress)),
+		C.uint(idx.userLogSpace),
 		C.ulong(localId),
 		(*C.ulong)(unsafe.Pointer(&_Out_SeqNum)))))
 	if resultState < 0 {
@@ -95,7 +96,7 @@ func (idx *IndexData) ProcessLocalIdQuery(metalogProgress uint64, localId uint64
 func (idx *IndexData) ProcessReadNext(metalogProgress uint64, querySeqNum uint64, queryTag uint64) (uint64, uint64, error) {
 	_InOut_MetalogProgress := metalogProgress
 	_Out_SeqNum := uint64(0)
-	resultState := int(C.int(C.ProcessReadNext(idx.instance,
+	resultState := int(C.int(C.IndexReadNext(idx.instance,
 		(*C.ulong)(unsafe.Pointer(&_InOut_MetalogProgress)),
 		C.uint(idx.userLogSpace),
 		C.ulong(querySeqNum),
@@ -119,7 +120,7 @@ func (idx *IndexData) ProcessReadNext(metalogProgress uint64, querySeqNum uint64
 func (idx *IndexData) ProcessReadPrev(metalogProgress uint64, querySeqNum uint64, queryTag uint64) (uint64, uint64, error) {
 	_InOut_MetalogProgress := metalogProgress
 	_Out_SeqNum := uint64(0)
-	resultState := int(C.int(C.ProcessReadPrev(idx.instance,
+	resultState := int(C.int(C.IndexReadPrev(idx.instance,
 		(*C.ulong)(unsafe.Pointer(&_InOut_MetalogProgress)),
 		C.uint(idx.userLogSpace),
 		C.ulong(querySeqNum),
