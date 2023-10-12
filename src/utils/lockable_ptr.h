@@ -15,6 +15,8 @@ public:
             absl_mu_.reset(new absl::Mutex());
         } else {
             use_boost_mu = true;
+            // DEBUG
+            LOG_F(INFO, "named_sharable_mutex={}", mu_name);
             boost_mu_.reset(new boost::interprocess::named_sharable_mutex(
                 boost::interprocess::open_or_create, mu_name));
         }

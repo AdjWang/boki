@@ -29,7 +29,7 @@ private:
     LogSpaceCollection<Index>
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
-    CacheManager log_cache_;
+    CacheManager<SharedLRUCache> log_cache_;
 
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_local_reads_;
