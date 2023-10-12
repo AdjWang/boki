@@ -15,11 +15,16 @@ import (
 
 func main() {
 	log.Println("main enter")
-	InitLibrary("/tmp/boki/ipc")
+	vlogLevel := 1
+	InitLibrary("/tmp/boki/ipc", vlogLevel)
 	log.Println("test binding")
 	TestBinding()
+
+	logSpaceId := uint32(C.GetLogSpaceIdentifier(C.uint(0)))
+	log.Printf("GetLogSpaceIdentifier of userLogSpace 0, got=%08X", logSpaceId)
+
 	log.Println("test allocation")
-	indexData, err := InstallIndexData(1)
+	indexData, err := ConstructIndexData(0, 1)
 	if err != nil {
 		panic(err)
 	}
@@ -33,11 +38,12 @@ func main() {
 
 	log.Println("test query")
 	seqNum := uint64(0x000000010000000F)
-	metaLogProgress, resultSeqNum, err := indexData.ProcessReadPrev(0 /*metaLogProgress*/, seqNum, uint64(2) /*tag*/)
+	metaLogProgress, resultSeqNum, err := indexData.IndexReadPrev(0 /*metaLogProgress*/, seqNum, uint64(2) /*tag*/)
 	if err != nil {
-		panic(err)
+		log.Printf("IndexReadPrev error=%v", err)
+	} else {
+		log.Printf("IndexReadPrev metaLogProgress=%016X, resultSeqNum=%016X", metaLogProgress, resultSeqNum)
 	}
-	log.Printf("ProcessReadPrev metaLogProgress=%016X, resultSeqNum=%016X", metaLogProgress, resultSeqNum)
 }
 
 // DEBUG
@@ -65,40 +71,69 @@ func (idx *IndexData) Inspect() {
 	C.Inspect(idx.instance)
 }
 
-func InitLibrary(ipcRootPath string) {
+func InitLibrary(ipcRootPath string, vlogLevel int) {
 	cIpcRootPath := C.CString(ipcRootPath)
 	defer C.free(unsafe.Pointer(cIpcRootPath))
-	C.Init(cIpcRootPath)
+	C.Init(cIpcRootPath, C.int(vlogLevel))
 }
 
-func InstallIndexData(logSpaceId uint32) (*IndexData, error) {
+func ConstructIndexData(metalogProgress uint64, logSpaceId uint32) (*IndexData, error) {
 	// TODO: this function should do only once
 	// TODO: call SharedLogInstallView(viewId) here to install view shm data
-	viewInst := unsafe.Pointer(C.ConstructIndexData(C.uint(logSpaceId), C.uint(0)))
-	return &IndexData{
-		instance:     viewInst,
-		userLogSpace: uint32(0), // TODO: return by SharedLogInstallView(viewId)
-	}, nil
+	viewInst := unsafe.Pointer(C.ConstructIndexData(C.ulong(metalogProgress), C.uint(logSpaceId), C.uint(0)))
+	if viewInst != nil {
+		return &IndexData{
+			instance:     viewInst,
+			userLogSpace: uint32(0), // TODO: return by SharedLogInstallView(viewId)
+		}, nil
+	} else {
+		return nil, fmt.Errorf("InstallIndexData failed: metalogProgress=%016X logSpaceId=%08X userLogSpace=%d",
+			metalogProgress, logSpaceId, 0)
+	}
 }
 
 func (idx *IndexData) Uninstall() {
 	C.DestructIndexData(idx.instance)
 }
 
+// enum APIReturnValue {
+//     ReadOK = faas::log::IndexQueryResult::kFound,
+//
+//     // enum State { kFound, kEmpty, kContinue, kPending };
+//     IndexReadEmpty = faas::log::IndexQueryResult::kEmpty,
+//     IndexReadContinue = faas::log::IndexQueryResult::kContinue,
+//     IndexReadPending = faas::log::IndexQueryResult::kPending,
+
+//     IndexReadInitFutureViewBail = -1,
+//     IndexReadInitCurrentViewPending = -2,
+//     IndexReadContinueOK = -3,
+
+//	    LogReadCacheMiss = -4,
+//	};
 func strerr(resultState int) string {
 	switch resultState {
+	case 0:
+		panic("unreachable")
+	case 1:
+		return "kEmpty"
+	case 2:
+		return "kContinue"
+	case 3:
+		return "kPending"
 	case -1:
 		return "kInitFutureViewBail"
 	case -2:
 		return "kInitCurrentViewPending"
 	case -3:
 		return "kContOK"
+	case -4:
+		return "LogReadCacheMiss"
 	default:
 		return "unknown"
 	}
 }
 
-func (idx *IndexData) ProcessLocalIdQuery(metalogProgress uint64, localId uint64) (uint64, uint64, error) {
+func (idx *IndexData) IndexReadLocalId(metalogProgress uint64, localId uint64) (uint64, uint64, error) {
 	_InOut_MetalogProgress := metalogProgress
 	_Out_SeqNum := uint64(0)
 	resultState := int(C.int(C.IndexReadLocalId(idx.instance,
@@ -107,7 +142,7 @@ func (idx *IndexData) ProcessLocalIdQuery(metalogProgress uint64, localId uint64
 		C.ulong(localId),
 		(*C.ulong)(unsafe.Pointer(&_Out_SeqNum)))))
 	if resultState < 0 {
-		return 0, 0, fmt.Errorf("ProcessLocalIdQuery error=%s", strerr(resultState))
+		return 0, 0, fmt.Errorf("IndexReadLocalId error=%s", strerr(resultState))
 	} else if resultState == 0 {
 		return _InOut_MetalogProgress, _Out_SeqNum, nil
 	} else if resultState == 1 {
@@ -121,7 +156,7 @@ func (idx *IndexData) ProcessLocalIdQuery(metalogProgress uint64, localId uint64
 	}
 }
 
-func (idx *IndexData) ProcessReadNext(metalogProgress uint64, querySeqNum uint64, queryTag uint64) (uint64, uint64, error) {
+func (idx *IndexData) IndexReadNext(metalogProgress uint64, querySeqNum uint64, queryTag uint64) (uint64, uint64, error) {
 	_InOut_MetalogProgress := metalogProgress
 	_Out_SeqNum := uint64(0)
 	resultState := int(C.int(C.IndexReadNext(idx.instance,
@@ -131,7 +166,7 @@ func (idx *IndexData) ProcessReadNext(metalogProgress uint64, querySeqNum uint64
 		C.ulong(queryTag),
 		(*C.ulong)(unsafe.Pointer(&_Out_SeqNum)))))
 	if resultState < 0 {
-		return 0, 0, fmt.Errorf("ProcessReadNext error=%s", strerr(resultState))
+		return 0, 0, fmt.Errorf("IndexReadNext error=%s", strerr(resultState))
 	} else if resultState == 0 {
 		return _InOut_MetalogProgress, _Out_SeqNum, nil
 	} else if resultState == 1 {
@@ -145,7 +180,7 @@ func (idx *IndexData) ProcessReadNext(metalogProgress uint64, querySeqNum uint64
 	}
 }
 
-func (idx *IndexData) ProcessReadPrev(metalogProgress uint64, querySeqNum uint64, queryTag uint64) (uint64, uint64, error) {
+func (idx *IndexData) IndexReadPrev(metalogProgress uint64, querySeqNum uint64, queryTag uint64) (uint64, uint64, error) {
 	_InOut_MetalogProgress := metalogProgress
 	_Out_SeqNum := uint64(0)
 	resultState := int(C.int(C.IndexReadPrev(idx.instance,
@@ -155,7 +190,7 @@ func (idx *IndexData) ProcessReadPrev(metalogProgress uint64, querySeqNum uint64
 		C.ulong(queryTag),
 		(*C.ulong)(unsafe.Pointer(&_Out_SeqNum)))))
 	if resultState < 0 {
-		return 0, 0, fmt.Errorf("ProcessReadPrev error=%s", strerr(resultState))
+		return 0, 0, fmt.Errorf("IndexReadPrev error=%s", strerr(resultState))
 	} else if resultState == 0 {
 		return _InOut_MetalogProgress, _Out_SeqNum, nil
 	} else if resultState == 1 {
@@ -166,5 +201,51 @@ func (idx *IndexData) ProcessReadPrev(metalogProgress uint64, querySeqNum uint64
 		return 0, 0, Err_Pending
 	} else {
 		panic("unreachable")
+	}
+}
+
+const MessageFullByteSize = 2816
+
+func (idx *IndexData) LogReadLocalId(metalogProgress uint64, localId uint64) ([]byte, error) {
+	message := make([]byte, MessageFullByteSize)
+	resultState := int(C.LogReadLocalId(idx.instance,
+		C.ulong(metalogProgress),
+		C.uint(idx.userLogSpace),
+		C.ulong(localId),
+		unsafe.Pointer(&message[0])))
+	if resultState == 0 {
+		return message, nil
+	} else {
+		return nil, fmt.Errorf("LogReadLocalId error=%s", strerr(resultState))
+	}
+}
+
+func (idx *IndexData) LogReadNext(metalogProgress uint64, querySeqNum uint64, queryTag uint64) ([]byte, error) {
+	message := make([]byte, MessageFullByteSize)
+	resultState := int(C.LogReadNext(idx.instance,
+		C.ulong(metalogProgress),
+		C.uint(idx.userLogSpace),
+		C.ulong(querySeqNum),
+		C.ulong(queryTag),
+		unsafe.Pointer(&message[0])))
+	if resultState == 0 {
+		return message, nil
+	} else {
+		return nil, fmt.Errorf("LogReadNext error=%s", strerr(resultState))
+	}
+}
+
+func (idx *IndexData) LogReadPrev(metalogProgress uint64, querySeqNum uint64, queryTag uint64) ([]byte, error) {
+	message := make([]byte, MessageFullByteSize)
+	resultState := int(C.LogReadPrev(idx.instance,
+		C.ulong(metalogProgress),
+		C.uint(idx.userLogSpace),
+		C.ulong(querySeqNum),
+		C.ulong(queryTag),
+		unsafe.Pointer(&message[0])))
+	if resultState == 0 {
+		return message, nil
+	} else {
+		return nil, fmt.Errorf("LogReadPrev error=%s", strerr(resultState))
 	}
 }

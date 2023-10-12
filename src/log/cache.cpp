@@ -3,23 +3,13 @@
 namespace faas {
 namespace log {
 
-LRUCache::LRUCache(int mem_cap_mb) {
+LRUCache::LRUCache(uint32_t user_logspace, int mem_cap_mb)
+    : log_header_(fmt::format("LRUCache[{}]: ", user_logspace)) {
     int64_t cap_mem_size = -1;
     if (mem_cap_mb > 0) {
         cap_mem_size = int64_t{mem_cap_mb} << 20;
     }
     dbm_.reset(new tkrzw::CacheDBM(/* cap_rec_num= */ -1, cap_mem_size));
-}
-
-LRUCache::LRUCache(int mem_cap_mb, const char* shared_path, int32_t options) {
-    int64_t cap_mem_size = -1;
-    if (mem_cap_mb > 0) {
-        cap_mem_size = int64_t{mem_cap_mb} << 20;
-    }
-    dbm_.reset(
-        new tkrzw::CacheDBM(std::make_unique<tkrzw::MemoryMapParallelFile>(),
-                            /* cap_rec_num= */ -1, cap_mem_size));
-    dbm_->Open(shared_path, true, options);
 }
 
 LRUCache::~LRUCache() {}
@@ -108,6 +98,68 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
     }
 }
 
+SharedLRUCache::SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
+                               const char* path)
+    : log_header_(fmt::format("SharedLRUCache[{}]: ", user_logspace)) {
+    int64_t cap_mem_size = -1;
+    if (mem_cap_mb > 0) {
+        cap_mem_size = int64_t{mem_cap_mb} << 20;
+    }
+    // TODO: existing size is the number of records, add mem size support
+    dbm_.reset(new boost::interprocess::LRUCache(size_t(cap_mem_size), path));
+}
+
+void SharedLRUCache::Put(const LogMetaData& log_metadata,
+                         std::span<const uint64_t> user_tags,
+                         std::span<const char> log_data) {
+    std::string key_str = fmt::format("0_{:016x}", log_metadata.seqnum);
+    std::string data = EncodeLogEntry(log_metadata, user_tags, log_data);
+    // DEBUG
+    HVLOG_F(1, "Put seqnum={:016X} data size={}", log_metadata.seqnum, data.size());
+
+    dbm_->insert(key_str, data);
+}
+
+std::optional<LogEntry> SharedLRUCache::Get(uint64_t seqnum) {
+    std::string key_str = fmt::format("0_{:016x}", seqnum);
+    auto data = dbm_->get(key_str);
+    if (data.has_value()) {
+        // DEBUG
+        HVLOG_F(1, "Get seqnum={:016X} data size={}", seqnum, data.value().size());
+
+        LogEntry log_entry;
+        DecodeLogEntry(std::move(data.value()), &log_entry);
+        DCHECK_EQ(seqnum, log_entry.metadata.seqnum);
+        return log_entry;
+    } else {
+        // DEBUG
+        HVLOG_F(1, "Get seqnum={:016X} data size=0", seqnum);
+        return std::nullopt;
+    }
+}
+
+void SharedLRUCache::PutAuxData(uint64_t seqnum, std::span<const char> data) {
+    // DEBUG
+    HVLOG_F(1, "PutAuxData seqnum={:016X} data size={}", seqnum, data.size());
+    std::string key_str = fmt::format("1_{:016x}", seqnum);
+    dbm_->insert(key_str, std::string(data.data(), data.size()));
+}
+
+std::optional<std::string> SharedLRUCache::GetAuxData(uint64_t seqnum) {
+    std::string key_str = fmt::format("1_{:016x}", seqnum);
+    auto data = dbm_->get(key_str);
+    if (data.has_value()) {
+        // DEBUG
+        HVLOG_F(1, "GetAuxData seqnum={:016X} data size={}", seqnum, data.value().size());
+        return data.value();
+    } else {
+        // DEBUG
+        HVLOG_F(1, "GetAuxData seqnum={:016X} data size=0", seqnum);
+        return std::nullopt;
+    }
+}
+
+
 void CacheManager::Put(const LogMetaData& log_metadata,
                        std::span<const uint64_t> user_tags,
                        std::span<const char> log_data) {
@@ -150,7 +202,8 @@ void CacheManager::CreateCache(uint32_t user_logspace) {
     // TODO: isolate by users
     log_caches_.emplace(
         std::piecewise_construct, std::forward_as_tuple(user_logspace),
-        std::forward_as_tuple(cap_per_user_, GetCacheShmFile(user_logspace).c_str()));
+        std::forward_as_tuple(user_logspace, cap_per_user_,
+                              ipc::GetCacheShmFile(user_logspace).c_str()));
 }
 
 }  // namespace log

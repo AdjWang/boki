@@ -5,6 +5,7 @@
 #include "utils/lockable_ptr.h"
 #include "utils/object_pool.h"
 #include "utils/bits.h"
+#include "ipc/base.h"
 
 namespace faas {
 namespace log {
@@ -143,7 +144,9 @@ void LogSpaceCollection<T>::InstallSharedLogSpace(std::unique_ptr<T> log_space) 
     uint32_t identifier = log_space->identifier();
     DCHECK(active_log_spaces_.count(identifier) == 0);
     active_log_spaces_.insert(identifier);
-    log_spaces_[identifier] = LockablePtr<T>(std::move(log_space), identifier);
+    std::string mu_name = ipc::GetIndexMutexName(identifier);
+    log_spaces_[identifier] =
+        LockablePtr<T>(std::move(log_space), mu_name.c_str());
 }
 
 template<class T>

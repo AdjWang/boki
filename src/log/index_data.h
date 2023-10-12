@@ -128,6 +128,10 @@ public:
     uint32_t indexed_metalog_position() const {
         return indexed_metalog_position_.get();
     }
+    uint64_t index_metalog_progress() const {
+        return bits::JoinTwo32(logspace_id_, indexed_metalog_position());
+    }
+
 #if !defined(__COMPILE_AS_SHARED)
     void set_indexed_seqnum_position(uint32_t indexed_seqnum_position) {
         indexed_seqnum_position_.set(indexed_seqnum_position);
@@ -174,10 +178,6 @@ private:
                         std::unique_ptr<PerSpaceIndex>> index_;
     ShmSharedInteger<uint32_t> indexed_seqnum_position_;
     ShmSharedInteger<uint32_t> indexed_metalog_position_;
-
-    uint64_t index_metalog_progress() const {
-        return bits::JoinTwo32(logspace_id_, indexed_metalog_position());
-    }
 
     bool IndexFindNext(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);
     bool IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* engine_id);

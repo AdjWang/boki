@@ -121,6 +121,7 @@ __END_THIRD_PARTY_HEADERS
 #include <boost/interprocess/sync/named_sharable_mutex.hpp>
 #include <boost/interprocess/managed_mapped_file.hpp>
 #include <boost/interprocess/allocators/allocator.hpp>
+#include <boost/interprocess/containers/list.hpp>
 #include <boost/interprocess/containers/map.hpp>
 #include <boost/interprocess/containers/flat_map.hpp>
 #include <boost/interprocess/containers/vector.hpp>

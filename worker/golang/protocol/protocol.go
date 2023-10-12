@@ -35,6 +35,10 @@ func FuncCallFromFullCallId(fullCallId uint64) FuncCall {
 	}
 }
 
+func GetLogSpaceId(seqNum uint64) uint32 {
+	return uint32(seqNum >> 32)
+}
+
 // MessageType enum
 const (
 	MessageType_INVALID               uint16 = 0

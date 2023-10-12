@@ -1,27 +1,32 @@
 #include <index_data_c.h>
+#include "base/init.h"
 #include "log/index_data.h"
 #include "log/cache.h"
 #include "utils/lockable_ptr.h"
-#include "base/init.h"
+#include "utils/hash.h"
 
-static faas::log::LRUCache* g_cache = NULL;
+static std::atomic<faas::log::SharedLRUCache*> g_cache = NULL;
 
-static faas::log::LRUCache* GetOrCreateCache(uint32_t user_logspace) {
-    if (g_cache != NULL) {
-        return g_cache;
+static faas::log::SharedLRUCache* GetOrCreateCache(uint32_t user_logspace) {
+    if (g_cache.load() != NULL) {
+        return g_cache.load();
     }
-    std::string shared_cache_path = faas::log::GetCacheShmFile(user_logspace);
+    std::string shared_cache_path = faas::ipc::GetCacheShmFile(user_logspace);
     if (!faas::fs_utils::Exists(shared_cache_path)) {
         return NULL;
     }
-    g_cache = new faas::log::LRUCache(-1, shared_cache_path.c_str(), tkrzw::File::OPEN_NO_LOCK);
-    return g_cache;
+    faas::log::SharedLRUCache* old = g_cache.exchange(new faas::log::SharedLRUCache(
+        user_logspace, /*mem_cap_mb*/ -1, shared_cache_path.c_str()));
+    if (old != NULL) {
+        delete old;
+    }
+    return g_cache.load();
 }
 
 static std::optional<faas::protocol::Message> TryGetCache(uint32_t user_logspace,
                                                           uint64_t metalog_progress,
                                                           uint64_t seqnum) {
-    faas::log::LRUCache* log_cache = GetOrCreateCache(user_logspace);
+    faas::log::SharedLRUCache* log_cache = GetOrCreateCache(user_logspace);
     if (log_cache == NULL) {
         return std::nullopt;
     }
@@ -48,7 +53,8 @@ static std::optional<faas::protocol::Message> TryGetCache(uint32_t user_logspace
                     log_entry.user_tags.size(), cached_aux_data->size());
         }
     }
-    VLOG_F(1, "Send local read response for log seqnum={:016X}", seqnum);
+    // DEBUG
+    VLOG_F(1, "aux data size={}", aux_data.size());
     faas::protocol::Message response =
         faas::protocol::MessageHelper::BuildLocalReadOKResponse(
             log_entry.metadata.seqnum, VECTOR_AS_SPAN(log_entry.user_tags),
@@ -61,8 +67,9 @@ static std::optional<faas::protocol::Message> TryGetCache(uint32_t user_logspace
 
 
 enum APIReturnValue {
+    ReadOK = faas::log::IndexQueryResult::kFound,   // always be 0
+
     // enum State { kFound, kEmpty, kContinue, kPending };
-    IndexReadOK = faas::log::IndexQueryResult::kFound,
     IndexReadEmpty = faas::log::IndexQueryResult::kEmpty,
     IndexReadContinue = faas::log::IndexQueryResult::kContinue,
     IndexReadPending = faas::log::IndexQueryResult::kPending,
@@ -94,10 +101,51 @@ void Inspect(void* index_data) {
     locked_index_data->Inspect();
 }
 
+uint32_t GetLogSpaceIdentifier(uint32_t user_logspace) {
+    // get the last view
+    constexpr const char* view_dir_prefix = "view_";
+    constexpr const size_t prefix_size = 5u;
+    int max_view_id = 0;
+
+    struct dirent* dp;
+    std::string root_path_for_shm(faas::ipc::GetRootPathForShm());
+    DIR* dir = opendir(root_path_for_shm.c_str());
+    while ((dp = readdir(dir)) != NULL) {
+        if (strncmp(view_dir_prefix, dp->d_name, prefix_size) == 0) {
+            int view_id = atoi(&dp->d_name[prefix_size]);
+            max_view_id = std::max(max_view_id, view_id);
+        }
+    }
+    closedir(dir);
+    // deserialize log space hash meta
+    // metadata serialization see Engine::SetupViewIPCMeta()
+    const std::string viewshm_path(faas::ipc::GetViewShmPath(max_view_id));
+    const std::string viewmeta_path(faas::ipc::GetLogSpaceHashMetaPath(viewshm_path));
+    std::string log_space_hash_meta_data;
+    bool success = faas::fs_utils::ReadContents(viewmeta_path, &log_space_hash_meta_data);
+    DCHECK(success) << viewmeta_path;
+    DCHECK_GE(log_space_hash_meta_data.size(),
+              sizeof(uint64_t) + sizeof(uint16_t));
+    uint64_t log_space_hash_seed =
+        *(reinterpret_cast<uint64_t*>(log_space_hash_meta_data.data()));
+    size_t n_hash_tokens =
+        (log_space_hash_meta_data.size() - sizeof(uint64_t)) / sizeof(uint16_t);
+    absl::FixedArray<uint16_t> log_space_hash_tokens(n_hash_tokens);
+    memcpy(log_space_hash_tokens.data(),
+           log_space_hash_meta_data.data() + sizeof(uint64_t),
+           n_hash_tokens * sizeof(uint16_t));
+    // get logspace_id by user_logspace hash
+    // the same calculation as View::LogSpaceIdentifier()
+    uint64_t h = faas::hash::xxHash64(user_logspace, /* seed= */ log_space_hash_seed);
+    uint16_t node_id = log_space_hash_tokens[h % log_space_hash_tokens.size()];
+    return faas::bits::JoinTwo16(max_view_id, node_id);
+}
+
 // Initialize explicitly to avoid manually setting priority for all global variables,
 // required by __attribute__ ((constructor)). Details see:
 // https://stackoverflow.com/questions/43941159/global-static-variables-initialization-issue-with-attribute-constructor-i
-void Init(const char* ipc_root_path) {
+void Init(const char* ipc_root_path, int vlog_level) {
+    faas::logging::Init(vlog_level);
     faas::base::SetupSignalHandler();
     LOG_F(INFO, "Init set ipc_root_path={}", ipc_root_path);
     faas::ipc::SetRootPathForIpc(ipc_root_path, /* create= */ false);
@@ -110,12 +158,23 @@ void Init(const char* ipc_root_path) {
 #endif
 }
 
-void* ConstructIndexData(uint32_t logspace_id, uint32_t user_logspace) {
+void* ConstructIndexData(uint64_t metalog_progress, uint32_t logspace_id,
+                         uint32_t user_logspace) {
     auto index_data = std::unique_ptr<faas::log::IndexDataManager>(
         new faas::log::IndexDataManager(logspace_id));
+    // DEBUG
+    VLOG_F(1, "ConstructIndexData logspace_id={} user_logspace={}", logspace_id, user_logspace);
+    uint64_t index_metalog_progress = index_data->index_metalog_progress();
+    if (metalog_progress > index_metalog_progress) {
+        VLOG_F(1, "ConstructIndexData metalog_progress={:016X} not satisify future "
+                  "index metalog_progress={:016X}",
+                  index_metalog_progress, metalog_progress);
+        return NULL;
+    }
     index_data->LoadIndexData(user_logspace);
+    std::string mu_name = faas::ipc::GetIndexMutexName(logspace_id);
     shared_index_t* lockable_index_data =
-        new faas::LockablePtr(std::move(index_data), logspace_id);
+        new faas::LockablePtr(std::move(index_data), mu_name.c_str());
     return lockable_index_data;
 }
 
@@ -234,7 +293,7 @@ int LogReadLocalId(void* index_data, uint64_t metalog_progress,
     uint64_t _Out_seqnum = 0u;
     int ret = IndexReadLocalId(index_data, &_InOut_metalog_progress,
                                user_logspace, localid, &_Out_seqnum);
-    if (ret != APIReturnValue::IndexReadOK) {
+    if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
     std::optional<faas::protocol::Message> message =
@@ -242,7 +301,7 @@ int LogReadLocalId(void* index_data, uint64_t metalog_progress,
     if (message.has_value()) {
         memcpy(response, static_cast<void*>(&message.value()),
             sizeof(faas::protocol::Message));
-        return sizeof(faas::protocol::Message);
+        return APIReturnValue::ReadOK;
     } else {
         faas::protocol::Message response_without_data =
             faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
@@ -260,7 +319,7 @@ int LogReadNext(void* index_data, uint64_t metalog_progress,
     uint64_t _Out_seqnum = 0u;
     int ret = IndexReadNext(index_data, &_InOut_metalog_progress, user_logspace,
                             query_seqnum, query_tag, &_Out_seqnum);
-    if (ret != APIReturnValue::IndexReadOK) {
+    if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
     std::optional<faas::protocol::Message> message =
@@ -268,7 +327,7 @@ int LogReadNext(void* index_data, uint64_t metalog_progress,
     if (message.has_value()) {
         memcpy(response, static_cast<void*>(&message.value()),
                sizeof(faas::protocol::Message));
-        return sizeof(faas::protocol::Message);
+        return APIReturnValue::ReadOK;
     } else {
         faas::protocol::Message response_without_data =
             faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
@@ -286,7 +345,7 @@ int LogReadPrev(void* index_data, uint64_t metalog_progress,
     uint64_t _Out_seqnum = 0u;
     int ret = IndexReadPrev(index_data, &_InOut_metalog_progress, user_logspace,
                             query_seqnum, query_tag, &_Out_seqnum);
-    if (ret != APIReturnValue::IndexReadOK) {
+    if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
     std::optional<faas::protocol::Message> message =
@@ -294,7 +353,7 @@ int LogReadPrev(void* index_data, uint64_t metalog_progress,
     if (message.has_value()) {
         memcpy(response, static_cast<void*>(&message.value()),
                sizeof(faas::protocol::Message));
-        return sizeof(faas::protocol::Message);
+        return APIReturnValue::ReadOK;
     } else {
         faas::protocol::Message response_without_data =
             faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);

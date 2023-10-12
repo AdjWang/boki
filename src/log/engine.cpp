@@ -41,7 +41,7 @@ void Engine::SetupViewIPCMeta(const View* view) {
             close(*fd);
         }
     });
-    std::string viewmeta_path(fs_utils::JoinPath(viewshm_path, "log_space_hash_meta"));
+    std::string viewmeta_path(ipc::GetLogSpaceHashMetaPath(viewshm_path));
     fd = fs_utils::Create(viewmeta_path);
     if (!fd.has_value()) {
         LOG(FATAL) << "Failed to create file for async call results";

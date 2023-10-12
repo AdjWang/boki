@@ -7,19 +7,16 @@
 
 namespace faas {
 
-#define IPC_MU_NAME(id)  fmt::format("named_mu_{}", (id)).c_str()
-
 class Mutex {
 public:
-    Mutex(uint32_t mu_id) {
-        if (mu_id == std::numeric_limits<uint32_t>::max()) {
+    Mutex(const char* mu_name) {
+        if (mu_name == nullptr) {
             use_boost_mu = false;
             absl_mu_.reset(new absl::Mutex());
         } else {
             use_boost_mu = true;
             boost_mu_.reset(new boost::interprocess::named_sharable_mutex(
-                boost::interprocess::open_or_create,
-                IPC_MU_NAME(mu_id)));
+                boost::interprocess::open_or_create, mu_name));
         }
     }
 
@@ -142,10 +139,10 @@ public:
 
     // LockablePtr takes ownership of target
     explicit LockablePtr(std::unique_ptr<T> target,
-                         uint32_t mu_id = std::numeric_limits<uint32_t>::max())
+                         const char* mu_name = nullptr)
         : inner_(nullptr) {
         if (target != nullptr) {
-            inner_.reset(new Inner(mu_id));
+            inner_.reset(new Inner(mu_name));
             inner_->target = std::move(target);
         }
     }
@@ -352,8 +349,8 @@ private:
     struct Inner {
         Mutex              mu;
         std::unique_ptr<T> target;
-        Inner(uint32_t mu_id)
-            : mu(mu_id) {}
+        Inner(const char* mu_name)
+            : mu(mu_name) {}
     };
     std::shared_ptr<Inner> inner_;
 };

@@ -20,7 +20,20 @@ std::string GetFuncCallOutputShmName(uint64_t full_call_id);
 std::string GetFuncCallOutputFifoName(uint64_t full_call_id);
 
 std::string GetViewShmPath(uint16_t view_id);
+std::string GetLogSpaceHashMetaPath(std::string_view view_shm_path);
 std::string GetOrCreateCacheShmPath();
+bool CheckIndexMetaPath(uint32_t logspace_id);
+std::string GetOrCreateIndexMetaPath(uint32_t logspace_id);
+
+std::string GetIndexSegmentPath(std::string_view obj_name,
+                                uint32_t user_logspace, uint32_t logspace_id);
+std::string GetIndexSegmentObjectName(std::string_view obj_name,
+                                      uint32_t user_logspace,
+                                      uint32_t logspace_id);
+
+std::string GetCacheShmFile(uint32_t user_logspace);
+
+std::string GetIndexMutexName(uint32_t logspace_id);
 
 }  // namespace ipc
 }  // namespace faas

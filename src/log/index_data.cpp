@@ -5,60 +5,41 @@
 namespace faas {
 namespace log {
 
-static std::string GetOrCreateIndexMetaPath(uint32_t logspace_id) {
-    uint16_t view_id = bits::HighHalf32(logspace_id);
-    std::string viewshm_path(ipc::GetViewShmPath(view_id));
-    // should have been created when installing the view by engine
-    DCHECK(fs_utils::Exists(viewshm_path)) << viewshm_path;
-    std::string indexshm_path(fs_utils::JoinPath(viewshm_path, fmt::format("index_{}", logspace_id)));
-#if defined(__COMPILE_AS_SHARED)
-    DCHECK(fs_utils::Exists(indexshm_path)) << indexshm_path;
-#else
-    if (!fs_utils::Exists(indexshm_path)) {
-        PCHECK(fs_utils::MakeDirectory(indexshm_path));
-    }
-#endif
-    return indexshm_path;
-}
-
-#define SHM_SEG_PATH(name)                                         \
-    fs_utils::JoinPath(                                            \
-        GetOrCreateIndexMetaPath(logspace_id_),                    \
-        fmt::format(#name "_{}_{}", user_logspace_, logspace_id_)) \
-        .c_str()
+#define SHM_SEG_PATH(name) \
+    ipc::GetIndexSegmentPath(name, user_logspace_, logspace_id_).c_str()
 
 #define SHM_OBJECT_NAME(name) \
-    fmt::format(#name "_{}_{}", user_logspace_, logspace_id_).c_str()
+    ipc::GetIndexSegmentObjectName(name, user_logspace_, logspace_id_).c_str()
 
 // TODO: set index size in args
 #define ENGINE_SHM_INDEX_INITIALIZER_LIST                                       \
-    segment_(create_only, SHM_SEG_PATH(IndexShm), 100 * 1024 * 1024),           \
+    segment_(create_only, SHM_SEG_PATH("IndexShm"), 100 * 1024 * 1024),         \
     alloc_inst_(segment_.get_segment_manager()),                                \
     engine_ids_(segment_.construct<log_engine_id_map_t>                         \
-        (SHM_OBJECT_NAME(EngineIdMap))(0u, boost::hash<uint32_t>(),             \
+        (SHM_OBJECT_NAME("EngineIdMap"))(0u, boost::hash<uint32_t>(),           \
                                        std::equal_to<uint32_t>(),               \
                                        alloc_inst_)),                           \
     seqnums_(segment_.construct<log_stream_vec_t>                               \
-        (SHM_OBJECT_NAME(StreamVec))(alloc_inst_)),                             \
+        (SHM_OBJECT_NAME("StreamVec"))(alloc_inst_)),                           \
     seqnums_by_tag_(segment_.construct<log_stream_map_t>                        \
-        (SHM_OBJECT_NAME(StreamMap))(0u, boost::hash<uint64_t>(),               \
+        (SHM_OBJECT_NAME("StreamMap"))(0u, boost::hash<uint64_t>(),             \
                                      std::equal_to<uint64_t>(),                 \
                                      alloc_inst_)),                             \
     seqnum_by_localid_(segment_.construct<log_async_index_map_t>                \
-        (SHM_OBJECT_NAME(AsyncIndexMap))(0u, boost::hash<uint64_t>(),           \
+        (SHM_OBJECT_NAME("AsyncIndexMap"))(0u, boost::hash<uint64_t>(),         \
                                          std::equal_to<uint64_t>(),             \
                                          alloc_inst_))
 
 #define FAASFUNC_SHM_INDEX_INITIALIZER_LIST                                     \
-    segment_(open_only, SHM_SEG_PATH(IndexShm)),                                \
+    segment_(open_only, SHM_SEG_PATH("IndexShm")),                              \
     engine_ids_(segment_.find<log_engine_id_map_t>                              \
-        (SHM_OBJECT_NAME(EngineIdMap)).first),                                  \
+        (SHM_OBJECT_NAME("EngineIdMap")).first),                                \
     seqnums_(segment_.find<log_stream_vec_t>                                    \
-        (SHM_OBJECT_NAME(StreamVec)).first),                                    \
+        (SHM_OBJECT_NAME("StreamVec")).first),                                  \
     seqnums_by_tag_(segment_.find<log_stream_map_t>                             \
-        (SHM_OBJECT_NAME(StreamMap)).first),                                    \
+        (SHM_OBJECT_NAME("StreamMap")).first),                                  \
     seqnum_by_localid_(segment_.find<log_async_index_map_t>                     \
-        (SHM_OBJECT_NAME(AsyncIndexMap)).first)
+        (SHM_OBJECT_NAME("AsyncIndexMap")).first)
 
 PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     : logspace_id_(logspace_id),
@@ -71,7 +52,7 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     {}
 
 PerSpaceIndex::~PerSpaceIndex() {
-    file_mapping::remove(SHM_SEG_PATH(IndexShm));
+    file_mapping::remove(SHM_SEG_PATH("IndexShm"));
 }
 
 #undef FAASFUNC_SHM_INDEX_INITALIZER_LIST
@@ -229,9 +210,9 @@ IndexDataManager::IndexDataManager(uint32_t logspace_id)
     : log_header_(fmt::format("IndexDataManager[{}]: ", logspace_id)),
       logspace_id_(logspace_id),
       indexed_seqnum_position_(fs_utils::JoinPath(
-          GetOrCreateIndexMetaPath(logspace_id), "indexed_seqnum_position")),
+          ipc::GetOrCreateIndexMetaPath(logspace_id), "indexed_seqnum_position")),
       indexed_metalog_position_(fs_utils::JoinPath(
-          GetOrCreateIndexMetaPath(logspace_id), "indexed_metalog_position")) {
+          ipc::GetOrCreateIndexMetaPath(logspace_id), "indexed_metalog_position")) {
     // DEBUG
     indexed_seqnum_position_.Check();
     indexed_metalog_position_.Check();
@@ -302,8 +283,8 @@ IndexQueryResult IndexDataManager::ProcessLocalIdQuery(const IndexQuery& query) 
 
 IndexQueryResult IndexDataManager::ProcessReadNext(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadNext);
-    HVLOG_F(1, "ProcessReadNext: seqnum={}, logspace={}, tag={}",
-            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
+    HVLOG_F(1, "ProcessReadNext: metalog_progress={:016X} seqnum={:016X} user_logspace={} tag={}",
+            query.metalog_progress, query.query_seqnum, query.user_logspace, query.user_tag);
     uint16_t query_view_id = GetViewId(query.query_seqnum);
     if (query_view_id > view_id()) {
         HVLOG(1) << "ProcessReadNext: NotFoundResult";
@@ -314,12 +295,12 @@ IndexQueryResult IndexDataManager::ProcessReadNext(const IndexQuery& query) {
     bool found = IndexFindNext(query, &seqnum, &engine_id);
     if (query_view_id == view_id()) {
         if (found) {
-            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum={}", seqnum);
+            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum={:016X}", seqnum);
             return BuildFoundResult(query, view_id(), seqnum, engine_id);
         } else {
             if (query.prev_found_result.seqnum != kInvalidLogSeqNum) {
                 const IndexFoundResult& found_result = query.prev_found_result;
-                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum={}",
+                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum={:016X}",
                         found_result.seqnum);
                 return BuildFoundResult(query, found_result.view_id,
                                         found_result.seqnum, found_result.engine_id);
@@ -336,8 +317,8 @@ IndexQueryResult IndexDataManager::ProcessReadNext(const IndexQuery& query) {
 
 IndexQueryResult IndexDataManager::ProcessReadPrev(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadPrev);
-    HVLOG_F(1, "ProcessReadPrev: seqnum={}, logspace={}, tag={}",
-            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
+    HVLOG_F(1, "ProcessReadPrev: metalog_progress={:016X} seqnum={:016X} user_logspace={} tag={}",
+            query.metalog_progress, query.query_seqnum, query.user_logspace, query.user_tag);
     uint16_t query_view_id = GetViewId(query.query_seqnum);
     if (query_view_id < view_id()) {
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
@@ -347,7 +328,7 @@ IndexQueryResult IndexDataManager::ProcessReadPrev(const IndexQuery& query) {
     uint16_t engine_id;
     bool found = IndexFindPrev(query, &seqnum, &engine_id);
     if (found) {
-        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={}", seqnum);
+        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={:016X}", seqnum);
         return BuildFoundResult(query, view_id(), seqnum, engine_id);
     } else if (view_id() > 0) {
         HVLOG(1) << "ProcessReadPrev: ContinueResult";
@@ -412,7 +393,12 @@ PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
         return index_.at(user_logspace).get();
     }
-    HVLOG_F(1, "Create index of user logspace {}", user_logspace);
+    HVLOG_F(1, "Create index of user_logspace={}", user_logspace);
+#if defined(__COMPILE_AS_SHARED)
+    // TODO: install view dynamically
+    std::string index_path = ipc::GetIndexSegmentPath("IndexShm", user_logspace, logspace_id_);
+    DCHECK(fs_utils::Exists(index_path)) << index_path;
+#endif
     PerSpaceIndex* index = new PerSpaceIndex(logspace_id_, user_logspace);
     index_[user_logspace].reset(index);
     return index;
@@ -499,6 +485,7 @@ IndexQueryResult IndexDataManager::BuildContinueResult(const IndexQuery& query, 
 
 // DEBUG
 void IndexDataManager::Inspect() const {
+    LOG(INFO) << ">>>>> Inspect index data";
     LOG_F(INFO, "indexed_seqnum_position={:016X}", indexed_seqnum_position());
     LOG_F(INFO, "indexed_metalog_position={:016X}", indexed_metalog_position());
 
@@ -507,6 +494,7 @@ void IndexDataManager::Inspect() const {
         LOG_F(INFO, "user index key={}", key);
         index->Inspect();
     }
+    LOG(INFO) << "<<<<<";
 }
 
 }  // namespace log

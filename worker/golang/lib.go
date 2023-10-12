@@ -15,9 +15,12 @@ import (
 )
 
 func Serve(factory types.FuncHandlerFactory) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	runtime.GOMAXPROCS(1)
 	ipc.SetRootPathForIpc(os.Getenv("FAAS_ROOT_PATH_FOR_IPC"))
-	ipc.InitLibrary(os.Getenv("FAAS_ROOT_PATH_FOR_IPC"))
+	// TODO: proper way to set vlog level
+	ipc.InitLibrary(os.Getenv("FAAS_ROOT_PATH_FOR_IPC"), 1 /*vlogLevel*/)
 	funcId, err := strconv.Atoi(os.Getenv("FAAS_FUNC_ID"))
 	if err != nil {
 		log.Fatal("[FATAL] Failed to parse FAAS_FUNC_ID")
