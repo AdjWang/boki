@@ -145,7 +145,16 @@ std::string GetCacheShmFile(uint32_t user_logspace) {
 }
 
 std::string GetIndexMutexName(uint32_t logspace_id) {
-    return fmt::format("index_mu_{}", logspace_id);
+    return fs_utils::JoinPath(GetOrCreateIndexMetaPath(logspace_id),
+                              fmt::format("index_mu_{}", logspace_id));
+    // return fmt::format("index_mu_{}", logspace_id);
+}
+
+std::string GetCacheMutexName(uint32_t user_logspace) {
+    return fs_utils::JoinPath(
+        GetOrCreateCacheShmPath(),
+        fmt::format("SharedLRUCache_mu_{}", user_logspace));
+    // return fmt::format("SharedLRUCache_mu_{}", user_logspace);
 }
 
 }  // namespace ipc

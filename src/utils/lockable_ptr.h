@@ -4,6 +4,10 @@
 #ifdef __FAAS_SRC
 #include "base/thread.h"
 #endif
+#include "ipc/base.h"
+#include "ipc/shm_region.h"
+#include "utils/fs.h"
+#include "utils/debug.h"
 
 namespace faas {
 
@@ -103,6 +107,94 @@ private:
     boost::interprocess::named_sharable_mutex boost_mu_;
 };
 
+// TODO: use timed lock to resist malicious user side long term locking
+class PosixMutex : public MutexBase {
+public:
+    PosixMutex(std::string_view mu_name)
+     : mu_name_(mu_name),
+#ifdef __COMPILE_AS_SHARED
+       posix_mu_region_(
+           ipc::ShmOpenByPath(std::string(mu_name), /*readonly*/ false)),
+#else
+       posix_mu_region_(
+           ipc::ShmCreateByPath(std::string(mu_name), sizeof(pthread_rwlock_t))),
+#endif
+       posix_mu_(reinterpret_cast<pthread_rwlock_t*>(posix_mu_region_->base()))
+    {
+#ifdef __COMPILE_AS_SHARED
+        posix_mu_region_->DisableRemoveOnDestruction();
+#else
+        posix_mu_region_->EnableRemoveOnDestruction();
+
+        if ((errno = pthread_rwlockattr_init(&posix_mu_attr_)) != 0) {
+            PLOG_F(FATAL, "failed to init pthread mutex attr {}", mu_name_);
+        }
+        if ((errno = pthread_rwlockattr_setpshared(&posix_mu_attr_, PTHREAD_PROCESS_SHARED)) != 0) {
+            PLOG_F(FATAL, "failed to init pthread mutex attr shared {}", mu_name_);
+        }
+        if ((errno = pthread_rwlock_init(posix_mu_, &posix_mu_attr_)) != 0) {
+            PLOG_F(FATAL, "failed to init pthread mutex {}", mu_name_);
+        }
+#endif
+    }
+    ~PosixMutex() override {
+        // DEBUG
+        UNREACHABLE();
+
+        DCHECK_EQ(pthread_rwlock_trywrlock(posix_mu_), 0);
+#ifndef __COMPILE_AS_SHARED
+        if ((errno = pthread_rwlockattr_destroy(&posix_mu_attr_)) != 0) {
+            PLOG_F(FATAL, "failed to destroy pthread mutex attr {}", mu_name_);
+        }
+#endif
+        if ((errno = pthread_rwlock_destroy(posix_mu_)) != 0) {
+            PLOG_F(FATAL, "failed to destroy pthread mutex {}", mu_name_);
+        }
+    }
+
+    void Lock() override {
+        if ((errno = pthread_rwlock_wrlock(posix_mu_)) != 0) {
+            PLOG_F(FATAL, "failed to lock pthread mutex {}", mu_name_);
+        }
+    }
+    void Unlock() override {
+        if ((errno = pthread_rwlock_unlock(posix_mu_)) != 0) {
+            PLOG_F(FATAL, "failed to unlock pthread mutex {}", mu_name_);
+        }
+    }
+    void AssertHeld() override {
+        if ((errno = pthread_rwlock_trywrlock(posix_mu_)) != EBUSY) {
+            PLOG_F(FATAL, "AssertHeld of {} failed", mu_name_);
+        }
+    }
+    void AssertNotHeld() override {}
+
+    void ReaderLock() override {
+        if ((errno = pthread_rwlock_rdlock(posix_mu_)) != 0) {
+            PLOG_F(FATAL, "failed to read lock pthread mutex {}", mu_name_);
+        }
+    }
+    void ReaderUnlock() override {
+        if ((errno = pthread_rwlock_unlock(posix_mu_)) != 0) {
+            PLOG_F(FATAL, "failed to read unlock pthread mutex {}", mu_name_);
+        }
+    }
+    void AssertReaderHeld() override {
+        if ((errno = pthread_rwlock_tryrdlock(posix_mu_)) != EBUSY) {
+            PLOG_F(FATAL, "AssertReaderHeld of {} failed", mu_name_);
+        }
+    }
+
+private:
+    std::string mu_name_;
+    std::unique_ptr<ipc::ShmRegion> posix_mu_region_;
+
+#ifndef __COMPILE_AS_SHARED
+    pthread_rwlockattr_t posix_mu_attr_;
+#endif
+    pthread_rwlock_t* posix_mu_;
+};
+
 class Mutex : public MutexBase {
 public:
     Mutex(std::string_view mu_name) {
@@ -116,7 +208,9 @@ public:
 #else
             LOG_F(INFO, "create named_sharable_mutex={}", mu_name);
 #endif
-            mu_impl_.reset(new BoostMutex(mu_name));
+            // DEBUG
+            // mu_impl_.reset(new BoostMutex(mu_name));
+            mu_impl_.reset(new PosixMutex(mu_name));
         }
     }
 

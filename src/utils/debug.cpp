@@ -14,7 +14,7 @@ static std::string DumpPCAndSymbol(void *pc) {
 }
 
 std::string DumpStackTrace() {
-    constexpr int kSize = 16;
+    constexpr int kSize = 32;
     void *stack[kSize];
     // int frames[kSize];
     int depth = absl::GetStackTrace(stack, kSize, 0);

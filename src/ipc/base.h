@@ -34,6 +34,7 @@ std::string GetIndexSegmentObjectName(std::string_view obj_name,
 std::string GetCacheShmFile(uint32_t user_logspace);
 
 std::string GetIndexMutexName(uint32_t logspace_id);
+std::string GetCacheMutexName(uint32_t user_logspace);
 
 }  // namespace ipc
 }  // namespace faas
