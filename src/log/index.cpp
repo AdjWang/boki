@@ -180,7 +180,7 @@ void Index::AdvanceIndexProgress() {
         if (data_received_seqnum_position_ < end_seqnum) {
             break;
         }
-        HVLOG_F(1, "Apply RecvIndexData until seqnum {}", bits::HexStr0x(end_seqnum));
+        HVLOG_F(1, "Apply RecvIndexData until seqnum={:08X}", end_seqnum);
         auto iter = received_data_.begin();
         while (iter != received_data_.end()) {
             uint32_t seqnum = iter->first;

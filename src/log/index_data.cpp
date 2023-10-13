@@ -52,7 +52,9 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
     {}
 
 PerSpaceIndex::~PerSpaceIndex() {
+#if !defined(__COMPILE_AS_SHARED)
     file_mapping::remove(SHM_SEG_PATH("IndexShm"));
+#endif
 }
 
 #undef FAASFUNC_SHM_INDEX_INITALIZER_LIST
@@ -72,6 +74,10 @@ void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engi
 
     DCHECK(seqnums_->empty() || seqnum_lowhalf > seqnums_->back());
     seqnums_->push_back(seqnum_lowhalf);
+
+    // DEBUG
+    DCHECK_EQ(engine_ids_->size(), seqnums_->size()) << Inspect();
+
     for (uint64_t user_tag : user_tags) {
         DCHECK_NE(user_tag, kEmptyLogTag);
         if (seqnums_by_tag_->contains(user_tag)) {
@@ -100,9 +106,11 @@ bool PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
             return false;
         }
     }
-    DCHECK(engine_ids_->contains(seqnum_lowhalf));
+    DCHECK(engine_ids_->contains(seqnum_lowhalf))
+        << fmt::format("seqnum_lowhalf={:08X}", seqnum_lowhalf)
+        << Inspect();
     *seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
-    DCHECK_LE(*seqnum, query_seqnum);
+    DCHECK_LE(*seqnum, query_seqnum) << Inspect();
     *engine_id = engine_ids_->at(seqnum_lowhalf);
     return true;
 }
@@ -122,9 +130,11 @@ bool PerSpaceIndex::FindNext(uint64_t query_seqnum, uint64_t user_tag,
             return false;
         }
     }
-    DCHECK(engine_ids_->contains(seqnum_lowhalf));
+    DCHECK(engine_ids_->contains(seqnum_lowhalf))
+        << fmt::format("seqnum_lowhalf={:08X}", seqnum_lowhalf)
+        << Inspect();
     *seqnum = bits::JoinTwo32(logspace_id_, seqnum_lowhalf);
-    DCHECK_GE(*seqnum, query_seqnum);
+    DCHECK_GE(*seqnum, query_seqnum) << Inspect();
     *engine_id = engine_ids_->at(seqnum_lowhalf);
     return true;
 }
@@ -191,17 +201,33 @@ template<class T>
 static std::string VecToString(T vec) {
     std::string result("[");
     for (auto item : vec) {
-        result.append(fmt::format("{}, ", item));
+        result.append(fmt::format("{:08X}, ", item));
     }
     result.append("]");
     return result;
 }
 
-void PerSpaceIndex::Inspect() {
-    LOG_F(INFO, "PerSpaceIndex_{}: seqnums={}", user_logspace_, VecToString(*seqnums_));
-    for (auto& [tag, seqnums] : *seqnums_by_tag_) {
-        LOG_F(INFO, "PerSpaceIndex_{}: tag={} seqnums={}", user_logspace_, tag, VecToString(seqnums));
+std::string PerSpaceIndex::Inspect() const {
+    if (engine_ids_->empty()) {
+        LOG_F(INFO, "PerSpaceIndex_{} engine_ids_ is empty", user_logspace_);
+    } else {
+        LOG_F(INFO, "PerSpaceIndex_{} engine_ids_.size()={}", user_logspace_, engine_ids_->size());
+        for (auto& [seqnum, engine_id] : *engine_ids_) {
+            LOG_F(INFO, "PerSpaceIndex_{}: seqnum={:08X} engine_id={:04X}", user_logspace_, seqnum, engine_id);
+        }
     }
+
+    if (seqnums_->empty()) {
+        LOG_F(INFO, "PerSpaceIndex_{} seqnums_ is empty", user_logspace_);
+        DCHECK(seqnums_by_tag_->empty());
+    } else {
+        LOG_F(INFO, "PerSpaceIndex_{}: seqnums_.size()={} seqnums={}",
+                    user_logspace_, seqnums_->size(), VecToString(*seqnums_));
+        for (auto& [tag, seqnums] : *seqnums_by_tag_) {
+            LOG_F(INFO, "PerSpaceIndex_{}: tag={} seqnums={}", user_logspace_, tag, VecToString(seqnums));
+        }
+    }
+    return "";
 }
 
 // ----------------------------------------------------------------------------
@@ -226,6 +252,9 @@ void IndexDataManager::LoadIndexData(uint32_t user_logspace) {
 void IndexDataManager::AddIndexData(uint32_t user_logspace, uint64_t localid,
                                     uint32_t seqnum_lowhalf, uint16_t engine_id,
                                     const UserTagVec& user_tags) {
+    // DEBUG
+    HVLOG_F(1, "AddIndexData user_logspace={} localid={:016X} seqnum_lowhalf={:08X} engine_id={:04X}",
+               user_logspace, localid, seqnum_lowhalf, engine_id);
     GetOrCreateIndex(user_logspace)->Add(localid, seqnum_lowhalf, engine_id, user_tags);
 }
 #endif
@@ -393,11 +422,13 @@ PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
         return index_.at(user_logspace).get();
     }
-    HVLOG_F(1, "Create index of user_logspace={}", user_logspace);
 #if defined(__COMPILE_AS_SHARED)
     // TODO: install view dynamically
     std::string index_path = ipc::GetIndexSegmentPath("IndexShm", user_logspace, logspace_id_);
     DCHECK(fs_utils::Exists(index_path)) << index_path;
+    HVLOG_F(1, "Open index of user_logspace={}", user_logspace);
+#else
+    HVLOG_F(1, "Create index of user_logspace={}", user_logspace);
 #endif
     PerSpaceIndex* index = new PerSpaceIndex(logspace_id_, user_logspace);
     index_[user_logspace].reset(index);

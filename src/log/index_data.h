@@ -52,7 +52,7 @@ public:
     bool FindLocalId(uint64_t localid, uint64_t* seqnum, uint16_t* engine_id) const;
 
     // DEBUG
-    void Inspect();
+    std::string Inspect() const;
 
 private:
     uint32_t logspace_id_;

@@ -56,7 +56,7 @@ static void RaiseToDefaultHandler(int signo) {
 }
 
 static void PrintStackTrace(ucontext_t* uc) {
-    constexpr int kSize = 16;
+    constexpr int kSize = 32;
     void *trace[kSize];
     int trace_size = backtrace(trace, kSize);
     /* overwrite sigaction with caller's address */

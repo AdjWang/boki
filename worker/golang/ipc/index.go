@@ -12,7 +12,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"cs.utexas.edu/zjia/faas/protocol"
 	"github.com/pkg/errors"
 )
 
@@ -54,13 +53,8 @@ func FilePathWalkDir(root string) ([]string, error) {
 }
 
 func (im *IndexDataManager) LoadIndexData(metalogProgress uint64, seqNum uint64) (*IndexData, error) {
-	var logSpaceId uint32
-	if seqNum == 0 || seqNum == protocol.MaxLogSeqnum {
-		// TODO: how to get user_logspace?
-		logSpaceId = uint32(C.GetLogSpaceIdentifier(C.uint(0)))
-	} else {
-		logSpaceId = protocol.GetLogSpaceId(seqNum)
-	}
+	// TODO: how to get user_logspace?
+	logSpaceId := uint32(C.GetLogSpaceIdentifier(C.uint(0)))
 
 	im.mu.Lock()
 	defer im.mu.Unlock()
@@ -69,11 +63,14 @@ func (im *IndexDataManager) LoadIndexData(metalogProgress uint64, seqNum uint64)
 	}
 	// DEBUG
 	log.Printf("[DEBUG] seqnum=%016X log_spaceid=%08X", seqNum, logSpaceId)
-	files, err := FilePathWalkDir("/tmp/boki/ipc/shm")
-	log.Println(files, err)
 
 	indexData, err := ConstructIndexData(metalogProgress, logSpaceId)
 	if err != nil {
+		{
+			// DEBUG
+			files, _ := FilePathWalkDir("/tmp/boki/ipc/shm")
+			log.Println(files)
+		}
 		return nil, err
 	}
 	im.indexPool[logSpaceId] = indexData

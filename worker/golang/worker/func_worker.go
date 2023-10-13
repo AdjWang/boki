@@ -1090,9 +1090,6 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 	// local read
 	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
 	if err == nil {
-		// DEBUG
-		indexData.Inspect()
-
 		response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
 		if err == nil {
 			if response == nil { // EMPTY
@@ -1133,9 +1130,6 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	// local read
 	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
 	if err == nil {
-		// DEBUG
-		indexData.Inspect()
-
 		response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
 		if err == nil {
 			if response == nil { // EMPTY

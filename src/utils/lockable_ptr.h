@@ -7,131 +7,144 @@
 
 namespace faas {
 
-class Mutex {
+class MutexBase {
 public:
-    Mutex(const char* mu_name) {
-        if (mu_name == nullptr) {
-            use_boost_mu = false;
-            absl_mu_.reset(new absl::Mutex());
-        } else {
-            use_boost_mu = true;
-            // DEBUG
-            LOG_F(INFO, "named_sharable_mutex={}", mu_name);
-            boost_mu_.reset(new boost::interprocess::named_sharable_mutex(
-                boost::interprocess::open_or_create, mu_name));
-        }
+    virtual ~MutexBase() {}
+
+    virtual void Lock() = 0;
+    virtual void Unlock() = 0;
+    virtual void AssertHeld() = 0;
+    virtual void AssertNotHeld() = 0;
+
+    virtual void ReaderLock() = 0;
+    virtual void ReaderUnlock() = 0;
+    virtual void AssertReaderHeld() = 0;
+};
+
+class AbslMutex : public MutexBase {
+public:
+    void Lock() override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_.Lock();
+    }
+    void Unlock() override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_.Unlock();
+    }
+    void AssertHeld() override {
+        absl_mu_.AssertHeld();
+    }
+    void AssertNotHeld() override {
+        absl_mu_.AssertNotHeld();
     }
 
-    void Lock() {
-        if (use_boost_mu) {
-            BoostLock();
-        } else {
-            AbslLock();
-        }
+    void ReaderLock() override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_.ReaderLock();
     }
-    void Unlock() {
-        if (use_boost_mu) {
-            BoostUnlock();
-        } else {
-            AbslUnlock();
-        }
+    void ReaderUnlock() override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+        absl_mu_.ReaderUnlock();
     }
-#if DCHECK_IS_ON()
-    void AssertHeld() {
-        if (use_boost_mu) {
-            BoostAssertHeld();
-        } else {
-            AbslAssertHeld();
-        }
+    void AssertReaderHeld() override {
+        absl_mu_.AssertReaderHeld();
     }
-    void AssertNotHeld() {
-        if (use_boost_mu) {
-            BoostAssertNotHeld();
-        } else {
-            AbslAssertNotHeld();
-        }
-    }
-#endif
-
-    void ReaderLock() {
-        if (use_boost_mu) {
-            BoostReaderLock();
-        } else {
-            AbslReaderLock();
-        }
-    }
-    void ReaderUnlock() {
-        if (use_boost_mu) {
-            BoostReaderUnlock();
-        } else {
-            AbslReaderUnlock();
-        }
-    }
-#if DCHECK_IS_ON()
-    void AssertReaderHeld() {
-        if (use_boost_mu) {
-            BoostAssertReaderHeld();
-        } else {
-            AbslAssertReaderHeld();
-        }
-    }
-#endif
 
 private:
-    bool use_boost_mu;
-    std::unique_ptr<absl::Mutex> absl_mu_;
+    absl::Mutex absl_mu_;
+};
+
+class BoostMutex : public MutexBase {
+public:
+    BoostMutex(std::string_view mu_name)
+    : mu_name_(mu_name),
+#ifdef __COMPILE_AS_SHARED
+      boost_mu_(boost::interprocess::open_only, mu_name_.c_str())
+#else
+      boost_mu_(boost::interprocess::create_only, mu_name_.c_str())
+#endif
+    { }
+
+    ~BoostMutex() override {
+        // DEBUG
+        UNREACHABLE();
+
+#ifndef __COMPILE_AS_SHARED
+        bool success =
+            boost::interprocess::named_sharable_mutex::remove(mu_name_.c_str());
+        if (!success) {
+            LOG_F(FATAL, "failed to remove mu name={}", mu_name_);
+        }
+        // DEBUG
+        else {
+            LOG_F(INFO, "remove mu name={}", mu_name_);
+        }
+#endif
+    }
+
+    void Lock() override {
+        boost_mu_.lock();
+    }
+    void Unlock() override {
+        boost_mu_.unlock();
+    }
+    void AssertHeld() override {}
+    void AssertNotHeld() override {}
+
+    void ReaderLock() override {
+        boost_mu_.lock_sharable();
+    }
+    void ReaderUnlock() override {
+        boost_mu_.unlock_sharable();
+    }
+    void AssertReaderHeld() override {}
+
+private:
+    std::string mu_name_;
     // Shared between processes. Each mutex must have an unique name.
     // TODO: isolation between users
     // TODO: use timed lock to resist malicious user side long term locking
-    std::unique_ptr<boost::interprocess::named_sharable_mutex> boost_mu_;
+    boost::interprocess::named_sharable_mutex boost_mu_;
+};
 
-    void AbslLock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-        absl_mu_->Lock();
-    }
-    void AbslUnlock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-        absl_mu_->Unlock();
-    }
-#if DCHECK_IS_ON()
-    void AbslAssertHeld() {
-        absl_mu_->AssertHeld();
-    }
-    void AbslAssertNotHeld() {
-        absl_mu_->AssertNotHeld();
-    }
+class Mutex : public MutexBase {
+public:
+    Mutex(std::string_view mu_name) {
+        if (mu_name == "") {
+            mu_impl_.reset(new AbslMutex());
+        } else {
+            DCHECK_GT(mu_name.size(), 0u);
+            // DEBUG
+#ifdef __COMPILE_AS_SHARED
+            LOG_F(INFO, "open named_sharable_mutex={}", mu_name);
+#else
+            LOG_F(INFO, "create named_sharable_mutex={}", mu_name);
 #endif
+            mu_impl_.reset(new BoostMutex(mu_name));
+        }
+    }
 
-    void AbslReaderLock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-        absl_mu_->ReaderLock();
+    void Lock() override {
+        mu_impl_->Lock();
     }
-    void AbslReaderUnlock() ABSL_NO_THREAD_SAFETY_ANALYSIS {
-        absl_mu_->ReaderUnlock();
+    void Unlock() override {
+        mu_impl_->Unlock();
     }
-#if DCHECK_IS_ON()
-    void AbslAssertReaderHeld() {
-        absl_mu_->AssertReaderHeld();
+    void AssertHeld() override {
+        mu_impl_->AssertHeld();
     }
-#endif
+    void AssertNotHeld() override {
+        mu_impl_->AssertNotHeld();
+    }
 
-    void BoostLock() {
-        boost_mu_->lock();
+    void ReaderLock() override {
+        mu_impl_->ReaderLock();
     }
-    void BoostUnlock() {
-        boost_mu_->unlock();
+    void ReaderUnlock() override {
+        mu_impl_->ReaderUnlock();
     }
-#if DCHECK_IS_ON()
-    void BoostAssertHeld() {}
-    void BoostAssertNotHeld() {}
-#endif
+    void AssertReaderHeld() override {
+        mu_impl_->AssertReaderHeld();
+    }
 
-    void BoostReaderLock() {
-        boost_mu_->lock_sharable();
-    }
-    void BoostReaderUnlock() {
-        boost_mu_->unlock_sharable();
-    }
-#if DCHECK_IS_ON()
-    void BoostAssertReaderHeld() {}
-#endif
+private:
+    std::unique_ptr<MutexBase> mu_impl_;
 };
 
 template<class T>
@@ -141,7 +154,7 @@ public:
 
     // LockablePtr takes ownership of target
     explicit LockablePtr(std::unique_ptr<T> target,
-                         const char* mu_name = nullptr)
+                         std::string_view mu_name = "")
         : inner_(nullptr) {
         if (target != nullptr) {
             inner_.reset(new Inner(mu_name));
@@ -351,7 +364,7 @@ private:
     struct Inner {
         Mutex              mu;
         std::unique_ptr<T> target;
-        Inner(const char* mu_name)
+        Inner(std::string_view mu_name)
             : mu(mu_name) {}
     };
     std::shared_ptr<Inner> inner_;

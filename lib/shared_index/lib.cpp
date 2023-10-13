@@ -160,10 +160,14 @@ void Init(const char* ipc_root_path, int vlog_level) {
 
 void* ConstructIndexData(uint64_t metalog_progress, uint32_t logspace_id,
                          uint32_t user_logspace) {
+    if (!faas::ipc::CheckIndexMetaPath(logspace_id)) {
+        VLOG_F(1, "ConstructIndexData IndexMetaPath check failed "
+                  "index logspace_id={:08X}",
+                  logspace_id);
+        return NULL;
+    }
     auto index_data = std::unique_ptr<faas::log::IndexDataManager>(
         new faas::log::IndexDataManager(logspace_id));
-    // DEBUG
-    VLOG_F(1, "ConstructIndexData logspace_id={} user_logspace={}", logspace_id, user_logspace);
     uint64_t index_metalog_progress = index_data->index_metalog_progress();
     if (metalog_progress > index_metalog_progress) {
         VLOG_F(1, "ConstructIndexData metalog_progress={:016X} not satisify future "
