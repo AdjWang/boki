@@ -98,6 +98,7 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
     }
 }
 
+
 SharedLRUCache::SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
                                const char* path)
     : log_header_(fmt::format("SharedLRUCache[{}]: ", user_logspace)) {
@@ -105,9 +106,11 @@ SharedLRUCache::SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
     if (mem_cap_mb > 0) {
         cap_mem_size = int64_t{mem_cap_mb} << 20;
     }
-    // TODO: existing size is the number of records, add mem size support
+    HVLOG_F(1, "Construct user_logspace={} cap_size={} path={}",
+               user_logspace, cap_mem_size, path);
     auto lru_cache = std::unique_ptr<boost::interprocess::LRUCache>(
         new boost::interprocess::LRUCache(size_t(cap_mem_size), path));
+    DCHECK(lru_cache != nullptr);
     lockable_dbm_ = LockablePtr<boost::interprocess::LRUCache>(
         std::move(lru_cache),
         fmt::format("SharedLRUCache_lk_{}", user_logspace).c_str());

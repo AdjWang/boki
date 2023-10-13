@@ -1087,30 +1087,27 @@ func (w *FuncWorker) GenerateUniqueID() uint64 {
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
-	// local read
-	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-	if err == nil {
-		// DEBUG
-		indexData.Inspect()
-
-		response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
-		if err == nil {
-			if response == nil { // EMPTY
-				return nil, nil
-			} else {
-				result := protocol.GetSharedLogResultTypeFromMessage(response)
-				if result == protocol.SharedLogResultType_READ_OK {
-					return buildLogEntryFromReadResponse(response), nil
-				} else {
-					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
-				}
-			}
-		} else {
-			log.Printf("[WARN] Local LogReadNext failed: %v", err)
-		}
-	} else {
-		log.Printf("[WARN] LoadIndexData failed: %v", err)
-	}
+	// // local read
+	// indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+	// if err == nil {
+	// 	response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
+	// 	if err == nil {
+	// 		if response == nil { // EMPTY
+	// 			return nil, nil
+	// 		} else {
+	// 			result := protocol.GetSharedLogResultTypeFromMessage(response)
+	// 			if result == protocol.SharedLogResultType_READ_OK {
+	// 				return buildLogEntryFromReadResponse(response), nil
+	// 			} else {
+	// 				return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+	// 			}
+	// 		}
+	// 	} else {
+	// 		log.Printf("[WARN] Local LogReadNext failed: %v", err)
+	// 	}
+	// } else {
+	// 	log.Printf("[WARN] LoadIndexData failed: %v", err)
+	// }
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
@@ -1130,30 +1127,27 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
-	// local read
-	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-	if err == nil {
-		// DEBUG
-		indexData.Inspect()
-
-		response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
-		if err == nil {
-			if response == nil { // EMPTY
-				return nil, nil
-			} else {
-				result := protocol.GetSharedLogResultTypeFromMessage(response)
-				if result == protocol.SharedLogResultType_READ_OK {
-					return buildLogEntryFromReadResponse(response), nil
-				} else {
-					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
-				}
-			}
-		} else {
-			log.Printf("[WARN] Local LogReadNext failed: %v", err)
-		}
-	} else {
-		log.Printf("[WARN] LoadIndexData failed: %v", err)
-	}
+	// // local read
+	// indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+	// if err == nil {
+	// 	response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+	// 	if err == nil {
+	// 		if response == nil { // EMPTY
+	// 			return nil, nil
+	// 		} else {
+	// 			result := protocol.GetSharedLogResultTypeFromMessage(response)
+	// 			if result == protocol.SharedLogResultType_READ_OK {
+	// 				return buildLogEntryFromReadResponse(response), nil
+	// 			} else {
+	// 				return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+	// 			}
+	// 		}
+	// 	} else {
+	// 		log.Printf("[WARN] Local LogReadNext failed: %v", err)
+	// 	}
+	// } else {
+	// 	log.Printf("[WARN] LoadIndexData failed: %v", err)
+	// }
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)

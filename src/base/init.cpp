@@ -56,7 +56,7 @@ static void RaiseToDefaultHandler(int signo) {
 }
 
 static void PrintStackTrace(ucontext_t* uc) {
-    constexpr int kSize = 16;
+    constexpr int kSize = 32;
     void *trace[kSize];
     int trace_size = backtrace(trace, kSize);
     /* overwrite sigaction with caller's address */
@@ -93,6 +93,8 @@ static void BTSignalHandler(int signo, siginfo_t *info, void *secret) {
             fprintf(stderr,
                 "SIGSEGV, faulty address is %p, from %p\n",
                 info->si_addr, (void*)uc->uc_mcontext.gregs[REG_RIP]);
+            signal(signo, SIG_DFL);
+            kill(getpid(), signo);
         }
         PrintStackTrace(uc);
         RaiseToDefaultHandler(signo);

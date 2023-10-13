@@ -126,6 +126,7 @@ __END_THIRD_PARTY_HEADERS
 #include <boost/interprocess/containers/flat_map.hpp>
 #include <boost/interprocess/containers/vector.hpp>
 #include <boost/interprocess/containers/string.hpp>
+#include <boost/container/list.hpp>
 
 #include "base/macro.h"
 #include "base/logging.h"
