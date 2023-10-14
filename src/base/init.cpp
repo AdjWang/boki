@@ -13,12 +13,10 @@
 #include <ucontext.h>
 
 __BEGIN_THIRD_PARTY_HEADERS
-
 #include <absl/flags/flag.h>
 #include <absl/flags/parse.h>
 #include <absl/debugging/symbolize.h>
 #include <absl/debugging/failure_signal_handler.h>
-
 __END_THIRD_PARTY_HEADERS
 
 ABSL_FLAG(int, v, 0, "Show all VLOG(m) messages for m <= this.");
@@ -50,9 +48,14 @@ static std::string DumpPCAndSymbol(void *pc) {
     return fmt::format("{}  {}\n", pc, symbol);
 }
 
-static void RaiseToDefaultHandler(int signo) {
-    signal(signo, SIG_DFL);
-    raise(signo);
+static absl::flat_hash_map<int, struct sigaction> oldact_table;
+static void RaiseToDefaultHandler(int signo, siginfo_t *info, void *secret) {
+    if (oldact_table.contains(signo)) {
+        oldact_table.at(signo).sa_sigaction(signo, info, secret);
+    } else {
+        signal(signo, SIG_DFL);
+        raise(signo);
+    }
 }
 
 static void PrintStackTrace(ucontext_t* uc) {
@@ -81,12 +84,12 @@ static void BTSignalHandler(int signo, siginfo_t *info, void *secret) {
             cleanup_fns[i]();
         }
         fprintf(stderr, "Exit with failure\n");
-        exit(EXIT_FAILURE);
+        RaiseToDefaultHandler(signo, info, secret);
     } else if (signo == SIGINT) {
         if (sigint_handler) {
             sigint_handler();
         } else {
-            RaiseToDefaultHandler(SIGINT);
+            RaiseToDefaultHandler(SIGINT, info, secret);
         }
     } else {
         if (signo == SIGSEGV) {
@@ -95,24 +98,36 @@ static void BTSignalHandler(int signo, siginfo_t *info, void *secret) {
                 info->si_addr, (void*)uc->uc_mcontext.gregs[REG_RIP]);
         }
         PrintStackTrace(uc);
-        RaiseToDefaultHandler(signo);
+        RaiseToDefaultHandler(signo, info, secret);
     }
 }
 }  // namespace
 
 void SetupSignalHandler() {
-    struct sigaction act;
+    struct sigaction act, oldact;
     memset(&act, 0, sizeof(struct sigaction));
     act.sa_sigaction = BTSignalHandler;
-    act.sa_flags |= SA_SIGINFO | SA_RESTART;
-    RAW_CHECK(sigaction(SIGABRT, &act, nullptr) == 0,
+    act.sa_flags |= SA_SIGINFO | SA_RESTART | SA_ONSTACK;
+    RAW_CHECK(sigaction(SIGABRT, &act, &oldact) == 0,
               "Failed to set SIGABRT handler");
-    RAW_CHECK(sigaction(SIGTERM, &act, nullptr) == 0,
+#ifndef __FAAS_SRC
+    oldact_table.emplace(SIGABRT, oldact);
+#endif
+    RAW_CHECK(sigaction(SIGTERM, &act, &oldact) == 0,
               "Failed to set SIGTERM handler");
-    RAW_CHECK(sigaction(SIGINT, &act, nullptr) == 0,
+#ifndef __FAAS_SRC
+    oldact_table.emplace(SIGTERM, oldact);
+#endif
+    RAW_CHECK(sigaction(SIGINT, &act, &oldact) == 0,
               "Failed to set SIGINT handler");
-    RAW_CHECK(sigaction(SIGSEGV, &act, nullptr) == 0,
+#ifndef __FAAS_SRC
+    oldact_table.emplace(SIGINT, oldact);
+#endif
+    RAW_CHECK(sigaction(SIGSEGV, &act, &oldact) == 0,
               "Failed to set SIGSEGV handler");
+#ifndef __FAAS_SRC
+    oldact_table.emplace(SIGSEGV, oldact);
+#endif
 
     absl::FailureSignalHandlerOptions options;
     options.call_previous_handler = true;

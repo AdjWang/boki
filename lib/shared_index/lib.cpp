@@ -5,22 +5,25 @@
 #include "utils/lockable_ptr.h"
 #include "utils/hash.h"
 
+static absl::Mutex g_cache_mu;
 static std::atomic<faas::log::SharedLRUCache*> g_cache = NULL;
 
 static faas::log::SharedLRUCache* GetOrCreateCache(uint32_t user_logspace) {
     if (g_cache.load() != NULL) {
         return g_cache.load();
+    } else {
+        absl::MutexLock lk(&g_cache_mu);
+        if (g_cache.load() != NULL) {
+            return g_cache.load();
+        }
+        std::string shared_cache_path = faas::ipc::GetCacheShmFile(user_logspace);
+        if (!faas::fs_utils::Exists(shared_cache_path)) {
+            return NULL;
+        }
+        g_cache.store(new faas::log::SharedLRUCache(
+            user_logspace, /*mem_cap_mb*/ -1, shared_cache_path.c_str()));
+        return g_cache.load();
     }
-    std::string shared_cache_path = faas::ipc::GetCacheShmFile(user_logspace);
-    if (!faas::fs_utils::Exists(shared_cache_path)) {
-        return NULL;
-    }
-    faas::log::SharedLRUCache* old = g_cache.exchange(new faas::log::SharedLRUCache(
-        user_logspace, /*mem_cap_mb*/ -1, shared_cache_path.c_str()));
-    if (old != NULL) {
-        delete old;
-    }
-    return g_cache.load();
 }
 
 static std::optional<faas::protocol::Message> TryGetCache(uint32_t user_logspace,
