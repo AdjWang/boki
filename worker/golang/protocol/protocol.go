@@ -54,13 +54,14 @@ const (
 
 // SharedLogOpType enum
 const (
-	SharedLogOpType_INVALID     uint16 = 0x00
-	SharedLogOpType_APPEND      uint16 = 0x01
-	SharedLogOpType_READ_NEXT   uint16 = 0x02
-	SharedLogOpType_READ_PREV   uint16 = 0x03
-	SharedLogOpType_TRIM        uint16 = 0x04
-	SharedLogOpType_SET_AUXDATA uint16 = 0x05
-	SharedLogOpType_READ_NEXT_B uint16 = 0x06
+	SharedLogOpType_INVALID      uint16 = 0x00
+	SharedLogOpType_APPEND       uint16 = 0x01
+	SharedLogOpType_READ_NEXT    uint16 = 0x02
+	SharedLogOpType_READ_PREV    uint16 = 0x03
+	SharedLogOpType_TRIM         uint16 = 0x04
+	SharedLogOpType_SET_AUXDATA  uint16 = 0x05
+	SharedLogOpType_READ_NEXT_B  uint16 = 0x06
+	SharedLogOpType_READ_STORAGE uint16 = 0x07
 
 	SharedLogOpType_ASYNC_APPEND       uint16 = 0x20
 	SharedLogOpType_ASYNC_READ_NEXT    uint16 = 0x21
@@ -141,6 +142,10 @@ func GetLogSeqNumFromMessage(buffer []byte) uint64 {
 
 func GetLogNumTagsFromMessage(buffer []byte) int {
 	return int(binary.LittleEndian.Uint16(buffer[36:38]))
+}
+
+func GetIndexEngineIdFromMessage(buffer []byte) uint16 {
+	return binary.LittleEndian.Uint16(buffer[36:38])
 }
 
 func GetLogTagFromMessage(buffer []byte, tagIndex int) uint64 {
@@ -260,7 +265,7 @@ func NewAsyncSharedLogAppendMessage(currentCallId uint64, metalogProgress uint64
 	return buffer
 }
 
-func NewSharedLogReadMessage(currentCallId uint64, metalogProgress uint64, myClientId uint16, tag uint64, seqNum uint64, direction int, block bool, clientData uint64) []byte {
+func NewSharedLogReadMessage(currentCallId uint64, metalogProgress uint64, myClientId uint16, tag uint64, seqNum uint64, engineId uint16, direction int, block bool, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -270,10 +275,13 @@ func NewSharedLogReadMessage(currentCallId uint64, metalogProgress uint64, myCli
 		} else {
 			binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_READ_NEXT)
 		}
-	} else {
+	} else if direction < 0 {
 		binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_READ_PREV)
+	} else {
+		binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_READ_STORAGE)
 	}
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
+	binary.LittleEndian.PutUint16(buffer[36:38], engineId)
 	binary.LittleEndian.PutUint64(buffer[40:48], tag)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)

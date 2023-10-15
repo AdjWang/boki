@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -1092,6 +1093,9 @@ func (w *FuncWorker) GenerateUniqueID() uint64 {
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	direction := 1
+	engineId := uint16(0)
+	querySeqnum := seqNum
 	// local read
 	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
 	if err == nil {
@@ -1107,6 +1111,10 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
 				}
 			}
+		} else if errors.Is(err, ipc.Err_CacheMiss) {
+			engineId = protocol.GetIndexEngineIdFromMessage(response)
+			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+			direction = 0
 		} else {
 			log.Printf("[WARN] Local LogReadNext failed: %v", err)
 		}
@@ -1117,7 +1125,7 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
-	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
+	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, querySeqnum, engineId, direction, false /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
@@ -1126,12 +1134,15 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
-	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
+	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, 0 /*engineId(unused here)*/, 1 /* direction */, true /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	direction := -1
+	engineId := uint16(0)
+	querySeqnum := seqNum
 	// local read
 	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
 	if err == nil {
@@ -1147,6 +1158,10 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
 				}
 			}
+		} else if errors.Is(err, ipc.Err_CacheMiss) {
+			engineId = protocol.GetIndexEngineIdFromMessage(response)
+			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+			direction = 0
 		} else {
 			log.Printf("[WARN] Local LogReadNext failed: %v", err)
 		}
@@ -1157,7 +1172,7 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
-	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
+	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, querySeqnum, engineId, direction, false /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 

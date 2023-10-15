@@ -191,7 +191,7 @@ void DestructIndexData(void* index_data) {
 
 int IndexReadLocalId(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                      uint32_t user_logspace, uint64_t localid,
-                     /*Out*/ uint64_t* seqnum) {
+                     /*Out*/ uint64_t* seqnum, /*Out*/ uint16_t* engine_id) {
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadLocalId,
@@ -214,6 +214,7 @@ int IndexReadLocalId(void* index_data, /*InOut*/ uint64_t* metalog_progress,
             if (result.state == faas::log::IndexQueryResult::kFound) {
                 *metalog_progress = result.metalog_progress;
                 *seqnum = result.found_result.seqnum;
+                *engine_id = result.found_result.engine_id;
             }
             return static_cast<int>(result.state);
         }
@@ -225,7 +226,7 @@ int IndexReadLocalId(void* index_data, /*InOut*/ uint64_t* metalog_progress,
 
 int IndexReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                   uint32_t user_logspace, uint64_t query_seqnum,
-                  uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
+                  uint64_t query_tag, /*Out*/ uint64_t* seqnum, /*Out*/ uint16_t* engine_id) {
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadNext,
@@ -248,6 +249,7 @@ int IndexReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
             if (result.state == faas::log::IndexQueryResult::kFound) {
                 *metalog_progress = result.metalog_progress;
                 *seqnum = result.found_result.seqnum;
+                *engine_id = result.found_result.engine_id;
             }
             return static_cast<int>(result.state);
         }
@@ -259,7 +261,7 @@ int IndexReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
 
 int IndexReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                   uint32_t user_logspace, uint64_t query_seqnum,
-                  uint64_t query_tag, /*Out*/ uint64_t* seqnum) {
+                  uint64_t query_tag, /*Out*/ uint64_t* seqnum, /*Out*/ uint16_t* engine_id) {
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadPrev,
@@ -282,6 +284,7 @@ int IndexReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
             if (result.state == faas::log::IndexQueryResult::kFound) {
                 *metalog_progress = result.metalog_progress;
                 *seqnum = result.found_result.seqnum;
+                *engine_id = result.found_result.engine_id;
             }
             return static_cast<int>(result.state);
         }
@@ -298,8 +301,9 @@ int LogReadLocalId(void* index_data, uint64_t metalog_progress,
                    /*Out*/ void* response) {
     uint64_t _InOut_metalog_progress = metalog_progress;
     uint64_t _Out_seqnum = 0u;
+    uint16_t _Out_engine_id = 0u;
     int ret = IndexReadLocalId(index_data, &_InOut_metalog_progress,
-                               user_logspace, localid, &_Out_seqnum);
+                               user_logspace, localid, &_Out_seqnum, &_Out_engine_id);
     if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
@@ -311,7 +315,7 @@ int LogReadLocalId(void* index_data, uint64_t metalog_progress,
         return APIReturnValue::ReadOK;
     } else {
         faas::protocol::Message response_without_data =
-            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
+            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum, _Out_engine_id);
         response_without_data.metalog_progress = _InOut_metalog_progress;
         memcpy(response, static_cast<void*>(&response_without_data),
                sizeof(faas::protocol::Message));
@@ -324,8 +328,9 @@ int LogReadNext(void* index_data, uint64_t metalog_progress,
                 uint64_t query_tag, /*Out*/ void* response) {
     uint64_t _InOut_metalog_progress = metalog_progress;
     uint64_t _Out_seqnum = 0u;
+    uint16_t _Out_engine_id = 0u;
     int ret = IndexReadNext(index_data, &_InOut_metalog_progress, user_logspace,
-                            query_seqnum, query_tag, &_Out_seqnum);
+                            query_seqnum, query_tag, &_Out_seqnum, &_Out_engine_id);
     if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
@@ -337,7 +342,7 @@ int LogReadNext(void* index_data, uint64_t metalog_progress,
         return APIReturnValue::ReadOK;
     } else {
         faas::protocol::Message response_without_data =
-            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
+            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum, _Out_engine_id);
         response_without_data.metalog_progress = _InOut_metalog_progress;
         memcpy(response, static_cast<void*>(&response_without_data),
                sizeof(faas::protocol::Message));
@@ -350,8 +355,9 @@ int LogReadPrev(void* index_data, uint64_t metalog_progress,
                 uint64_t query_tag, /*Out*/ void* response) {
     uint64_t _InOut_metalog_progress = metalog_progress;
     uint64_t _Out_seqnum = 0u;
+    uint16_t _Out_engine_id = 0u;
     int ret = IndexReadPrev(index_data, &_InOut_metalog_progress, user_logspace,
-                            query_seqnum, query_tag, &_Out_seqnum);
+                            query_seqnum, query_tag, &_Out_seqnum, &_Out_engine_id);
     if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
@@ -363,7 +369,7 @@ int LogReadPrev(void* index_data, uint64_t metalog_progress,
         return APIReturnValue::ReadOK;
     } else {
         faas::protocol::Message response_without_data =
-            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum);
+            faas::protocol::MessageHelper::BuildIndexReadOKResponse(_Out_seqnum, _Out_engine_id);
         response_without_data.metalog_progress = _InOut_metalog_progress;
         memcpy(response, static_cast<void*>(&response_without_data),
                sizeof(faas::protocol::Message));

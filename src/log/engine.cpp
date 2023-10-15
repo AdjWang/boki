@@ -221,49 +221,69 @@ void Engine::HandleLocalTrim(LocalOp* op) {
 
 void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
-    HVLOG_F(1, "Handle local read: op_type=0x{:02X}, op_id={}, logspace={}, tag={}, seqnum={}",
-            uint16_t(op->type), op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
+    HVLOG_F(1, "Handle local read: op_type=0x{:02X}, op_id={}, logspace={}, tag={}, seqnum={:016X}",
+            uint16_t(op->type), op->id, op->user_logspace, op->query_tag, op->seqnum);
     onging_local_reads_.PutChecked(op->id, op);
-    const View::Sequencer* sequencer_node = nullptr;
-    LockablePtr<Index> index_ptr;
-    {
-        absl::ReaderMutexLock view_lk(&view_mu_);
-        ONHOLD_IF_SEEN_FUTURE_VIEW(op);
-        uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
-        sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
-        if (sequencer_node->IsIndexEngineNode(my_node_id())) {
-            index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+
+    if (op->type == SharedLogOpType::READ_STORAGE) {
+        const View::Engine* engine_node = nullptr;
+        {
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            uint16_t view_id = GetViewId(op->seqnum);
+            if (view_id < views_.size()) {
+                const View* view = views_.at(view_id);
+                engine_node = view->GetEngineNode(op->index_engine_id);
+            } else {
+                HLOG_F(FATAL, "Cannot find view {}", view_id);
+            }
         }
-    }
-    bool use_local_index = true;
-    if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
-        use_local_index = false;
-    }
-    if (absl::GetFlag(FLAGS_slog_engine_prob_remote_index) > 0.0f) {
-        float coin = utils::GetRandomFloat(0.0f, 1.0f);
-        if (coin < absl::GetFlag(FLAGS_slog_engine_prob_remote_index)) {
+        bool success = SendStorageReadRequest(op, engine_node);
+        if (!success) {
+            HLOG_F(WARNING, "Failed to send read storage request for seqnum={:016X} ", op->seqnum);
+            FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+        }
+    } else {
+        const View::Sequencer* sequencer_node = nullptr;
+        LockablePtr<Index> index_ptr;
+        {
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            ONHOLD_IF_SEEN_FUTURE_VIEW(op);
+            uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
+            sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
+            if (sequencer_node->IsIndexEngineNode(my_node_id())) {
+                index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+            }
+        }
+        bool use_local_index = true;
+        if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
             use_local_index = false;
         }
-    }
-    if (index_ptr != nullptr && use_local_index) {
-        // Use local index
-        IndexQuery query = BuildIndexQuery(op);
-        Index::QueryResultVec query_results;
-        {
-            auto locked_index = index_ptr.Lock();
-            locked_index->MakeQuery(query);
-            locked_index->PollQueryResults(&query_results);
+        if (absl::GetFlag(FLAGS_slog_engine_prob_remote_index) > 0.0f) {
+            float coin = utils::GetRandomFloat(0.0f, 1.0f);
+            if (coin < absl::GetFlag(FLAGS_slog_engine_prob_remote_index)) {
+                use_local_index = false;
+            }
         }
-        ProcessIndexQueryResults(query_results);
-    } else {
-        HVLOG_F(1, "There is no local index for sequencer {}, "
-                   "will send request to remote engine node",
-                DCHECK_NOTNULL(sequencer_node)->node_id());
-        SharedLogMessage request = BuildReadRequestMessage(op);
-        bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
-        if (!send_success) {
-            onging_local_reads_.RemoveChecked(op->id);
-            FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+        if (index_ptr != nullptr && use_local_index) {
+            // Use local index
+            IndexQuery query = BuildIndexQuery(op);
+            Index::QueryResultVec query_results;
+            {
+                auto locked_index = index_ptr.Lock();
+                locked_index->MakeQuery(query);
+                locked_index->PollQueryResults(&query_results);
+            }
+            ProcessIndexQueryResults(query_results);
+        } else {
+            HVLOG_F(1, "There is no local index for sequencer {}, "
+                    "will send request to remote engine node",
+                    DCHECK_NOTNULL(sequencer_node)->node_id());
+            SharedLogMessage request = BuildReadRequestMessage(op);
+            bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
+            if (!send_success) {
+                onging_local_reads_.RemoveChecked(op->id);
+                FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+            }
         }
     }
 }
@@ -641,7 +661,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
         bool success = SendStorageReadRequest(query_result, engine_node);
         if (!success) {
-            HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
+            HLOG_F(WARNING, "Failed to send read request for seqnum={:016X} ", seqnum);
             if (local_request) {
                 LocalOp* op = onging_local_reads_.PollChecked(query.client_data);
                 FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);

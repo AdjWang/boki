@@ -94,6 +94,7 @@ enum class SharedLogOpType : uint16_t {
     TRIM               = 0x04,  // FuncWorker to Engine, Engine to Sequencer
     SET_AUXDATA        = 0x05,  // FuncWorker to Engine, Engine to Storage
     READ_NEXT_B        = 0x06,  // FuncWorker to Engine, Engine to Index
+    READ_STORAGE       = 0x07,  // FuncWorker to Engine, Engine to Storage
 
     READ_AT            = 0x11,  // Index to Storage
     REPLICATE          = 0x12,  // Engine to Storage
@@ -128,6 +129,7 @@ public:
         return op_type == SharedLogOpType::READ_NEXT
             || op_type == SharedLogOpType::READ_PREV
             || op_type == SharedLogOpType::READ_NEXT_B
+            || op_type == SharedLogOpType::READ_STORAGE
             || op_type == SharedLogOpType::ASYNC_READ_NEXT
             || op_type == SharedLogOpType::ASYNC_READ_NEXT_B
             || op_type == SharedLogOpType::ASYNC_READ_PREV
@@ -201,7 +203,10 @@ struct Message {
         };
     } __attribute__ ((packed));
 
-    uint16_t log_num_tags;        // [36:38]
+    union {
+        uint16_t log_num_tags;        // [36:38]
+        uint16_t log_index_engine_id; // Used only when cache miss
+    };
     uint16_t log_aux_data_size;   // [38:40]
 
     union {
@@ -537,8 +542,10 @@ public:
 
 #undef NEW_EMPTY_MESSAGE
 
-    static Message BuildIndexReadOKResponse(uint64_t seqnum) {
-        return NewSharedLogOpSucceeded(SharedLogResultType::READ_OK, seqnum);
+    static Message BuildIndexReadOKResponse(uint64_t seqnum, uint16_t engine_id) {
+        Message response = NewSharedLogOpSucceeded(SharedLogResultType::READ_OK, seqnum);
+        response.log_index_engine_id = engine_id;
+        return response;
     }
 
     static Message BuildLocalReadOKResponse(uint64_t seqnum,

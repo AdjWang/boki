@@ -57,6 +57,7 @@ protected:
     struct LocalOp {
         protocol::SharedLogOpType type;
         uint16_t client_id;
+        uint16_t index_engine_id;  // Used by READ_STORAGE
         uint32_t user_logspace;
         uint64_t id;
         uint64_t client_data;
@@ -93,6 +94,8 @@ protected:
 
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);
+    bool SendStorageReadRequest(const LocalOp* op,
+                                const View::Engine* engine_node);
     bool SendStorageReadRequest(const IndexQueryResult& result,
                                 const View::Engine* engine_node);
     void SendReadResponse(const IndexQuery& query,

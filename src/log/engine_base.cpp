@@ -144,6 +144,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::READ_STORAGE:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
@@ -256,11 +257,13 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::READ_STORAGE:
     case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_PREV:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
         op->query_tag = message.log_tag;
         op->seqnum = message.log_seqnum;
+        op->index_engine_id = message.log_index_engine_id;
         break;
     case SharedLogOpType::ASYNC_READ_LOCALID:
         op->seqnum = message.log_seqnum;
@@ -372,6 +375,29 @@ bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,
         }
         bool success = engine_->SendSharedLogMessage(
             protocol::ConnType::SLOG_ENGINE_TO_ENGINE, engine_id, *request);
+        if (success) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool EngineBase::SendStorageReadRequest(const LocalOp* op,
+                                        const View::Engine* engine_node) {
+    static constexpr int kMaxRetries = 3;
+    DCHECK(op->type == SharedLogOpType::READ_STORAGE);
+
+    uint64_t seqnum = op->seqnum;
+    SharedLogMessage request = SharedLogMessageHelper::NewReadAtMessage(
+        bits::HighHalf64(seqnum), bits::LowHalf64(seqnum));
+    request.user_metalog_progress = op->metalog_progress;
+    request.origin_node_id = my_node_id();
+    request.hop_times = 0u;
+    request.client_data = op->id;
+    for (int i = 0; i < kMaxRetries; i++) {
+        uint16_t storage_id = engine_node->PickStorageNode();
+        bool success = engine_->SendSharedLogMessage(
+            protocol::ConnType::ENGINE_TO_STORAGE, storage_id, request);
         if (success) {
             return true;
         }
