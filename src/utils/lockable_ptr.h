@@ -54,147 +54,8 @@ private:
     absl::Mutex absl_mu_;
 };
 
-class BoostMutex : public MutexBase {
-public:
-    BoostMutex(std::string_view mu_name)
-    : mu_name_(mu_name),
-#ifdef __COMPILE_AS_SHARED
-      boost_mu_(boost::interprocess::open_only, mu_name_.c_str())
-#else
-      boost_mu_(boost::interprocess::create_only, mu_name_.c_str())
-#endif
-    { }
-
-    ~BoostMutex() override {
-        // DEBUG
-        UNREACHABLE();
-
-#ifndef __COMPILE_AS_SHARED
-        bool success =
-            boost::interprocess::named_sharable_mutex::remove(mu_name_.c_str());
-        if (!success) {
-            LOG_F(FATAL, "failed to remove mu name={}", mu_name_);
-        }
-        // DEBUG
-        else {
-            LOG_F(INFO, "remove mu name={}", mu_name_);
-        }
-#endif
-    }
-
-    void Lock() override {
-        boost_mu_.lock();
-    }
-    void Unlock() override {
-        boost_mu_.unlock();
-    }
-    void AssertHeld() override {}
-    void AssertNotHeld() override {}
-
-    void ReaderLock() override {
-        boost_mu_.lock_sharable();
-    }
-    void ReaderUnlock() override {
-        boost_mu_.unlock_sharable();
-    }
-    void AssertReaderHeld() override {}
-
-private:
-    std::string mu_name_;
-    // Shared between processes. Each mutex must have an unique name.
-    // TODO: isolation between users
-    // TODO: use timed lock to resist malicious user side long term locking
-    boost::interprocess::named_sharable_mutex boost_mu_;
-};
-
+// TODO: isolation between users
 // TODO: use timed lock to resist malicious user side long term locking
-// class PosixMutex : public MutexBase {
-// public:
-//     PosixMutex(std::string_view mu_name)
-//      : mu_name_(mu_name),
-// #ifdef __COMPILE_AS_SHARED
-//        posix_mu_region_(
-//            ipc::ShmOpenByPath(std::string(mu_name), /*readonly*/ false)),
-// #else
-//        posix_mu_region_(
-//            ipc::ShmCreateByPath(std::string(mu_name), sizeof(pthread_rwlock_t))),
-// #endif
-//        posix_mu_(reinterpret_cast<pthread_rwlock_t*>(posix_mu_region_->base()))
-//     {
-// #ifdef __COMPILE_AS_SHARED
-//         posix_mu_region_->DisableRemoveOnDestruction();
-// #else
-//         posix_mu_region_->EnableRemoveOnDestruction();
-
-//         if ((errno = pthread_rwlockattr_init(&posix_mu_attr_)) != 0) {
-//             PLOG_F(FATAL, "failed to init pthread mutex attr {}", mu_name_);
-//         }
-//         if ((errno = pthread_rwlockattr_setpshared(&posix_mu_attr_, PTHREAD_PROCESS_SHARED)) != 0) {
-//             PLOG_F(FATAL, "failed to init pthread mutex attr shared {}", mu_name_);
-//         }
-//         if ((errno = pthread_rwlock_init(posix_mu_, &posix_mu_attr_)) != 0) {
-//             PLOG_F(FATAL, "failed to init pthread mutex {}", mu_name_);
-//         }
-// #endif
-//     }
-//     ~PosixMutex() override {
-//         // DEBUG
-//         UNREACHABLE();
-
-//         DCHECK_EQ(pthread_rwlock_trywrlock(posix_mu_), 0);
-// #ifndef __COMPILE_AS_SHARED
-//         if ((errno = pthread_rwlockattr_destroy(&posix_mu_attr_)) != 0) {
-//             PLOG_F(FATAL, "failed to destroy pthread mutex attr {}", mu_name_);
-//         }
-// #endif
-//         if ((errno = pthread_rwlock_destroy(posix_mu_)) != 0) {
-//             PLOG_F(FATAL, "failed to destroy pthread mutex {}", mu_name_);
-//         }
-//     }
-
-//     void Lock() override {
-//         if ((errno = pthread_rwlock_wrlock(posix_mu_)) != 0) {
-//             PLOG_F(FATAL, "failed to lock pthread mutex {}", mu_name_);
-//         }
-//     }
-//     void Unlock() override {
-//         if ((errno = pthread_rwlock_unlock(posix_mu_)) != 0) {
-//             PLOG_F(FATAL, "failed to unlock pthread mutex {}", mu_name_);
-//         }
-//     }
-//     void AssertHeld() override {
-//         if ((errno = pthread_rwlock_trywrlock(posix_mu_)) != EBUSY) {
-//             PLOG_F(FATAL, "AssertHeld of {} failed", mu_name_);
-//         }
-//     }
-//     void AssertNotHeld() override {}
-
-//     void ReaderLock() override {
-//         if ((errno = pthread_rwlock_rdlock(posix_mu_)) != 0) {
-//             PLOG_F(FATAL, "failed to read lock pthread mutex {}", mu_name_);
-//         }
-//     }
-//     void ReaderUnlock() override {
-//         if ((errno = pthread_rwlock_unlock(posix_mu_)) != 0) {
-//             PLOG_F(FATAL, "failed to read unlock pthread mutex {}", mu_name_);
-//         }
-//     }
-//     void AssertReaderHeld() override {
-//         if ((errno = pthread_rwlock_tryrdlock(posix_mu_)) != EBUSY) {
-//             PLOG_F(FATAL, "AssertReaderHeld of {} failed", mu_name_);
-//         }
-//     }
-
-// private:
-//     std::string mu_name_;
-//     std::unique_ptr<ipc::ShmRegion> posix_mu_region_;
-
-// #ifndef __COMPILE_AS_SHARED
-//     pthread_rwlockattr_t posix_mu_attr_;
-// #endif
-//     pthread_rwlock_t* posix_mu_;
-// };
-
 class PosixMutex : public MutexBase {
 public:
     PosixMutex(std::string_view mu_name)
@@ -237,34 +98,34 @@ public:
     }
 
     void Lock() override {
-        if ((errno = pthread_mutex_lock(posix_mu_)) != 0) {
+        if (__FAAS_PREDICT_FALSE((errno = pthread_mutex_lock(posix_mu_)) != 0)) {
             PLOG_F(FATAL, "failed to lock pthread mutex {}", mu_name_);
         }
     }
     void Unlock() override {
-        if ((errno = pthread_mutex_unlock(posix_mu_)) != 0) {
+        if (__FAAS_PREDICT_FALSE((errno = pthread_mutex_unlock(posix_mu_)) != 0)) {
             PLOG_F(FATAL, "failed to unlock pthread mutex {}", mu_name_);
         }
     }
     void AssertHeld() override {
-        if ((errno = pthread_mutex_trylock(posix_mu_)) != EBUSY) {
+        if (__FAAS_PREDICT_FALSE((errno = pthread_mutex_trylock(posix_mu_)) != EBUSY)) {
             PLOG_F(FATAL, "AssertHeld of {} failed", mu_name_);
         }
     }
     void AssertNotHeld() override {}
 
     void ReaderLock() override {
-        if ((errno = pthread_mutex_lock(posix_mu_)) != 0) {
+        if (__FAAS_PREDICT_FALSE((errno = pthread_mutex_lock(posix_mu_)) != 0)) {
             PLOG_F(FATAL, "failed to read lock pthread mutex {}", mu_name_);
         }
     }
     void ReaderUnlock() override {
-        if ((errno = pthread_mutex_unlock(posix_mu_)) != 0) {
+        if (__FAAS_PREDICT_FALSE((errno = pthread_mutex_unlock(posix_mu_)) != 0)) {
             PLOG_F(FATAL, "failed to read unlock pthread mutex {}", mu_name_);
         }
     }
     void AssertReaderHeld() override {
-        if ((errno = pthread_mutex_trylock(posix_mu_)) != EBUSY) {
+        if (__FAAS_PREDICT_FALSE((errno = pthread_mutex_trylock(posix_mu_)) != EBUSY)) {
             PLOG_F(FATAL, "AssertReaderHeld of {} failed", mu_name_);
         }
     }
@@ -286,14 +147,11 @@ public:
             mu_impl_.reset(new AbslMutex());
         } else {
             DCHECK_GT(mu_name.size(), 0u);
-            // DEBUG
 #ifdef __COMPILE_AS_SHARED
-            LOG_F(INFO, "open named_sharable_mutex={}", mu_name);
+            VLOG_F(1, "open named_sharable_mutex={}", mu_name);
 #else
-            LOG_F(INFO, "create named_sharable_mutex={}", mu_name);
+            VLOG_F(1, "create named_sharable_mutex={}", mu_name);
 #endif
-            // DEBUG
-            // mu_impl_.reset(new BoostMutex(mu_name));
             mu_impl_.reset(new PosixMutex(mu_name));
         }
     }

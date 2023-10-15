@@ -13,7 +13,7 @@ namespace log {
 
 // TODO: set index size in args
 #define ENGINE_SHM_INDEX_INITIALIZER_LIST                                       \
-    segment_(create_only, SHM_SEG_PATH("IndexShm"), 100 * 1024 * 1024),         \
+    segment_(create_only, SHM_SEG_PATH("IndexShm"), 1000 * 1024 * 1024),         \
     alloc_inst_(segment_.get_segment_manager()),                                \
     engine_ids_(segment_.construct<log_engine_id_map_t>                         \
         (SHM_OBJECT_NAME("EngineIdMap"))(0u, boost::hash<uint32_t>(),           \

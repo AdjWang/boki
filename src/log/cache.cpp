@@ -122,9 +122,6 @@ void SharedLRUCache::Put(const LogMetaData& log_metadata,
     auto dbm = lockable_dbm_.Lock();
     std::string key_str = fmt::format("0_{:016x}", log_metadata.seqnum);
     std::string data = EncodeLogEntry(log_metadata, user_tags, log_data);
-    // DEBUG
-    // HVLOG_F(1, "Put seqnum={:016X} data size={}", log_metadata.seqnum, data.size());
-
     dbm->insert(key_str, data);
 }
 
@@ -133,23 +130,16 @@ std::optional<LogEntry> SharedLRUCache::Get(uint64_t seqnum) {
     std::string key_str = fmt::format("0_{:016x}", seqnum);
     auto data = dbm->get(key_str);
     if (data.has_value()) {
-        // DEBUG
-        // HVLOG_F(1, "Get seqnum={:016X} data size={}", seqnum, data.value().size());
-
         LogEntry log_entry;
         DecodeLogEntry(std::move(data.value()), &log_entry);
         DCHECK_EQ(seqnum, log_entry.metadata.seqnum);
         return log_entry;
     } else {
-        // DEBUG
-        // HVLOG_F(1, "Get seqnum={:016X} data size=0", seqnum);
         return std::nullopt;
     }
 }
 
 void SharedLRUCache::PutAuxData(uint64_t seqnum, std::span<const char> data) {
-    // DEBUG
-    // HVLOG_F(1, "PutAuxData seqnum={:016X} data size={}", seqnum, data.size());
     auto dbm = lockable_dbm_.Lock();
     std::string key_str = fmt::format("1_{:016x}", seqnum);
     dbm->insert(key_str, std::string(data.data(), data.size()));
@@ -160,12 +150,8 @@ std::optional<std::string> SharedLRUCache::GetAuxData(uint64_t seqnum) {
     std::string key_str = fmt::format("1_{:016x}", seqnum);
     auto data = dbm->get(key_str);
     if (data.has_value()) {
-        // DEBUG
-        // HVLOG_F(1, "GetAuxData seqnum={:016X} data size={}", seqnum, data.value().size());
         return data.value();
     } else {
-        // DEBUG
-        // HVLOG_F(1, "GetAuxData seqnum={:016X} data size=0", seqnum);
         return std::nullopt;
     }
 }

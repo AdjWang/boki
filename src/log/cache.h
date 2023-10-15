@@ -32,21 +32,24 @@ typedef map<shm_string_t, mapped_t, std::less<shm_string_t>, map_allocator_t> ma
 // Raw map is just a hash map, without lru control.
 typedef std::pair<const shm_string_t, shm_string_t> raw_value_t;
 typedef allocator<raw_value_t, managed_mapped_file::segment_manager> raw_map_allocator_t;
-typedef map<shm_string_t, shm_string_t, std::less<shm_string_t>, raw_map_allocator_t> raw_map_t;
+// typedef map<shm_string_t, shm_string_t, std::less<shm_string_t>, raw_map_allocator_t> raw_map_t;
+typedef unordered_map<shm_string_t, shm_string_t, boost::hash<shm_string_t>,
+                      std::equal_to<shm_string_t>, raw_map_allocator_t>
+    raw_map_t;
 
 // class LRUCache {
 // public:
-//     LRUCache(size_t mem_capacity, const char* path)
+//     LRUCache(size_t mem_capacity, std::string_view path)
 //         : mem_capacity_(mem_capacity),
 //           path_(path),
 // #ifdef __COMPILE_AS_SHARED
-//           segment_(open_only, path),
+//           segment_(open_only, path_.c_str()),
 //         //   ca_(segment_.get_allocator<char>()),
 //           alloc_inst_(segment_.get_segment_manager()),
 //           lru_list_(segment_.find<list_t>("lru_list").first),
 //           lru_map_(segment_.find<map_t>("lru_map").first),
 // #else
-//           segment_(create_only, path, mem_capacity),
+//           segment_(create_only, path_.c_str(), mem_capacity),
 //         //   ca_(segment_.get_allocator<char>()),
 //           alloc_inst_(segment_.get_segment_manager()),
 //           lru_list_(segment_.construct<list_t>("lru_list")(alloc_inst_)),
@@ -59,7 +62,7 @@ typedef map<shm_string_t, shm_string_t, std::less<shm_string_t>, raw_map_allocat
 
 //     ~LRUCache() {
 // #ifndef __COMPILE_AS_SHARED
-//         file_mapping::remove(path_);
+//         file_mapping::remove(path_.c_str());
 // #endif
 //     }
 
@@ -85,14 +88,13 @@ typedef map<shm_string_t, shm_string_t, std::less<shm_string_t>, raw_map_allocat
 //             lru_map_->emplace(std::piecewise_construct,
 //                 std::forward_as_tuple(shm_key),
 //                 std::forward_as_tuple(shm_value, lru_list_->begin()));
+//         } else {
+//             // update existing item
+//             const auto& original_value = lru_map_->at(shm_key);
+//             mem_size_ += shm_value.size();
+//             mem_size_ -= original_value.first.size();
+//             lru_map_->at(shm_key).first = std::move(shm_value);
 //         }
-//         // else {
-//         //     // update existing item
-//         //     const auto& original_value = lru_map_->at(shm_key);
-//         //     mem_size_ += shm_value.size();
-//         //     mem_size_ -= original_value.first.size();
-//         //     lru_map_->at(shm_key).first = std::move(shm_value);
-//         // }
 //         try_evict();
 //     }
 
@@ -157,7 +159,7 @@ typedef map<shm_string_t, shm_string_t, std::less<shm_string_t>, raw_map_allocat
 
 // private:
 //     const size_t mem_capacity_;
-//     const char* path_;
+//     std::string path_;
 
 //     managed_mapped_file segment_;
 //     void_allocator_t alloc_inst_;
@@ -181,115 +183,6 @@ typedef map<shm_string_t, shm_string_t, std::less<shm_string_t>, raw_map_allocat
 //     }
 // };
 
-// class LRUCache
-// {
-// public:
-//     typedef std::string key_type;
-//     typedef std::string value_type;
-//     typedef std::list<key_type> list_type;
-//     typedef std::map<
-//                 key_type,
-//                 std::pair<value_type, typename list_type::iterator>
-//             > map_type;
-
-//     LRUCache(size_t mem_capacity, const char* path)
-//         : m_capacity(mem_capacity)
-//     {
-//     }
-
-//     ~LRUCache()
-//     {
-//     }
-
-//     size_t size() const
-//     {
-//         return m_map.size();
-//     }
-
-//     size_t capacity() const
-//     {
-//         return m_capacity;
-//     }
-
-//     bool empty() const
-//     {
-//         return m_map.empty();
-//     }
-
-//     bool contains(const key_type &key)
-//     {
-//         return m_map.find(key) != m_map.end();
-//     }
-
-//     void insert(const key_type &key, const value_type &value)
-//     {
-//         typename map_type::iterator i = m_map.find(key);
-//         if(i == m_map.end()){
-//             // insert item into the cache, but first check if it is full
-//             if(size() >= m_capacity){
-//                 // cache is full, evict the least recently used item
-//                 evict();
-//             }
-
-//             // insert the new item
-//             m_list.push_front(key);
-//             m_map.emplace(key, std::make_pair(value, m_list.begin()));
-//         }
-//     }
-
-//     boost::optional<value_type> get(const key_type &key)
-//     {
-//         // lookup value in the cache
-//         typename map_type::iterator i = m_map.find(key);
-//         if(i == m_map.end()){
-//             // value not in cache
-//             return boost::none;
-//         }
-
-//         // return the value, but first update its place in the most
-//         // recently used list
-//         typename list_type::iterator j = i->second.second;
-//         if(j != m_list.begin()){
-//             // move item to the front of the most recently used list
-//             m_list.erase(j);
-//             m_list.push_front(key);
-
-//             // update iterator in map
-//             j = m_list.begin();
-//             const value_type &value = i->second.first;
-//             m_map.emplace(key, std::make_pair(value, j));
-
-//             // return the value
-//             return value;
-//         }
-//         else {
-//             // the item is already at the front of the most recently
-//             // used list so just return it
-//             return i->second.first;
-//         }
-//     }
-
-//     void clear()
-//     {
-//         m_map.clear();
-//         m_list.clear();
-//     }
-
-// private:
-//     void evict()
-//     {
-//         // evict item from the end of most recently used list
-//         typename list_type::iterator i = --m_list.end();
-//         m_map.erase(*i);
-//         m_list.erase(i);
-//     }
-
-// private:
-//     map_type m_map;
-//     list_type m_list;
-//     size_t m_capacity;
-// };
-
 
 // DEBUG: A hash map implements the lru cache interface.
 class LRUCache {
@@ -304,7 +197,10 @@ public:
 #else
           segment_(create_only, path_.c_str(), mem_capacity),
           alloc_inst_(segment_.get_segment_manager()),
-          raw_map_(segment_.construct<raw_map_t>("raw_map")(std::less<shm_string_t>(),
+        //   raw_map_(segment_.construct<raw_map_t>("raw_map")(std::less<shm_string_t>(),
+        //                                                     alloc_inst_))
+          raw_map_(segment_.construct<raw_map_t>("raw_map")(0u, boost::hash<shm_string_t>(),
+                                                            std::equal_to<shm_string_t>(),
                                                             alloc_inst_))
 #endif
         {}
@@ -427,98 +323,13 @@ private:
 };
 
 
-// template<class TCache>
-// class CacheManager {
-// public:
-//     CacheManager(bool enable, int capacity)
-//     : log_header_("CacheManager"),
-//       enable_cache_(enable),
-//       cap_per_user_(capacity) {}
-
-//     void Put(const LogMetaData& log_metadata,
-//              std::span<const uint64_t> user_tags,
-//              std::span<const char> log_data) {
-//         if (!enable_cache_) {
-//             return;
-//         }
-//         HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
-//         uint32_t user_logspace = log_metadata.user_logspace;
-//         auto& cache = GetOrCreateCache(user_logspace);
-//         cache.Put(log_metadata, user_tags, log_data);
-//     }
-
-//     std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum) {
-//         if (!enable_cache_) {
-//             return std::nullopt;
-//         }
-//         const auto& cache = GetCache(user_logspace);
-//         if (cache.has_value()) {
-//             return cache.value().get().Get(seqnum);
-//         } else {
-//             return std::nullopt;
-//         }
-//     }
-//     void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data) {
-//         if (!enable_cache_) {
-//             return;
-//         }
-//         auto& cache = GetOrCreateCache(user_logspace);
-//         cache.PutAuxData(seqnum, data);
-//     }
-
-//     std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum) {
-//         if (!enable_cache_) {
-//             return std::nullopt;
-//         }
-//         const auto& cache = GetCache(user_logspace);
-//         if (cache.has_value()) {
-//             return cache.value().get().GetAuxData(seqnum);
-//         } else {
-//             return std::nullopt;
-//         }
-//     }
-
-// private:
-//     std::string log_header_;
-//     bool enable_cache_;
-//     int cap_per_user_;
-
-//     absl::Mutex cache_map_mu_;
-//     absl::flat_hash_map<uint32_t /*user_logspace*/, TCache> log_caches_
-//         ABSL_GUARDED_BY(cache_map_mu_);
-
-//     std::optional<std::reference_wrapper<TCache>> GetCache(uint32_t user_logspace) {
-//         absl::ReaderMutexLock rlk(&cache_map_mu_);
-//         if (!log_caches_.contains(user_logspace)) {
-//             return std::nullopt;
-//         }
-//         return std::optional<std::reference_wrapper<TCache>>(log_caches_.at(user_logspace));
-//     }
-
-//     TCache& GetOrCreateCache(uint32_t user_logspace) {
-//         absl::MutexLock lk(&cache_map_mu_);
-//         // TODO: isolate by users
-//         if (log_caches_.contains(user_logspace)) {
-//             return log_caches_.at(user_logspace);
-//         } else {
-//             log_caches_.emplace(
-//                 std::piecewise_construct, std::forward_as_tuple(user_logspace),
-//                 std::forward_as_tuple(user_logspace, cap_per_user_,
-//                                       ipc::GetCacheShmFile(user_logspace).c_str()));
-//             return log_caches_.at(user_logspace);
-//         }
-//     }
-// };
-
-template<class SharedLRUCache>
+template<class TCache>
 class CacheManager {
 public:
     CacheManager(bool enable, int capacity)
     : log_header_("CacheManager"),
       enable_cache_(enable),
-      cap_per_user_(capacity),
-      cache_(/*user_logspace*/0u, cap_per_user_,
-             ipc::GetCacheShmFile(/*user_logspace*/0u).c_str()) {}
+      cap_per_user_(capacity) {}
 
     void Put(const LogMetaData& log_metadata,
              std::span<const uint64_t> user_tags,
@@ -528,31 +339,39 @@ public:
         }
         HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
         uint32_t user_logspace = log_metadata.user_logspace;
-        DCHECK_EQ(user_logspace, 0u);
-        cache_.Put(log_metadata, user_tags, log_data);
+        auto& cache = GetOrCreateCache(user_logspace);
+        cache.Put(log_metadata, user_tags, log_data);
     }
 
     std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum) {
         if (!enable_cache_) {
             return std::nullopt;
         }
-        DCHECK_EQ(user_logspace, 0u);
-        return cache_.Get(seqnum);
+        const auto& cache = GetCache(user_logspace);
+        if (cache.has_value()) {
+            return cache.value().get().Get(seqnum);
+        } else {
+            return std::nullopt;
+        }
     }
     void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data) {
         if (!enable_cache_) {
             return;
         }
-        DCHECK_EQ(user_logspace, 0u);
-        cache_.PutAuxData(seqnum, data);
+        auto& cache = GetOrCreateCache(user_logspace);
+        cache.PutAuxData(seqnum, data);
     }
 
     std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum) {
         if (!enable_cache_) {
             return std::nullopt;
         }
-        DCHECK_EQ(user_logspace, 0u);
-        return cache_.GetAuxData(seqnum);
+        const auto& cache = GetCache(user_logspace);
+        if (cache.has_value()) {
+            return cache.value().get().GetAuxData(seqnum);
+        } else {
+            return std::nullopt;
+        }
     }
 
 private:
@@ -560,8 +379,85 @@ private:
     bool enable_cache_;
     int cap_per_user_;
 
-    SharedLRUCache cache_;
+    absl::Mutex cache_map_mu_;
+    absl::flat_hash_map<uint32_t /*user_logspace*/, TCache> log_caches_
+        ABSL_GUARDED_BY(cache_map_mu_);
+
+    std::optional<std::reference_wrapper<TCache>> GetCache(uint32_t user_logspace) {
+        absl::ReaderMutexLock rlk(&cache_map_mu_);
+        if (!log_caches_.contains(user_logspace)) {
+            return std::nullopt;
+        }
+        return std::optional<std::reference_wrapper<TCache>>(log_caches_.at(user_logspace));
+    }
+
+    TCache& GetOrCreateCache(uint32_t user_logspace) {
+        absl::MutexLock lk(&cache_map_mu_);
+        // TODO: isolate by users
+        if (log_caches_.contains(user_logspace)) {
+            return log_caches_.at(user_logspace);
+        } else {
+            log_caches_.emplace(
+                std::piecewise_construct, std::forward_as_tuple(user_logspace),
+                std::forward_as_tuple(user_logspace, cap_per_user_,
+                                      ipc::GetCacheShmFile(user_logspace).c_str()));
+            return log_caches_.at(user_logspace);
+        }
+    }
 };
+
+// template<class SharedLRUCache>
+// class CacheManager {
+// public:
+//     CacheManager(bool enable, int capacity)
+//     : log_header_("CacheManager"),
+//       enable_cache_(enable),
+//       cap_per_user_(capacity),
+//       cache_(/*user_logspace*/0u, cap_per_user_,
+//              ipc::GetCacheShmFile(/*user_logspace*/0u).c_str()) {}
+
+//     void Put(const LogMetaData& log_metadata,
+//              std::span<const uint64_t> user_tags,
+//              std::span<const char> log_data) {
+//         if (!enable_cache_) {
+//             return;
+//         }
+//         HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
+//         uint32_t user_logspace = log_metadata.user_logspace;
+//         DCHECK_EQ(user_logspace, 0u);
+//         cache_.Put(log_metadata, user_tags, log_data);
+//     }
+
+//     std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum) {
+//         if (!enable_cache_) {
+//             return std::nullopt;
+//         }
+//         DCHECK_EQ(user_logspace, 0u);
+//         return cache_.Get(seqnum);
+//     }
+//     void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data) {
+//         if (!enable_cache_) {
+//             return;
+//         }
+//         DCHECK_EQ(user_logspace, 0u);
+//         cache_.PutAuxData(seqnum, data);
+//     }
+
+//     std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum) {
+//         if (!enable_cache_) {
+//             return std::nullopt;
+//         }
+//         DCHECK_EQ(user_logspace, 0u);
+//         return cache_.GetAuxData(seqnum);
+//     }
+
+// private:
+//     std::string log_header_;
+//     bool enable_cache_;
+//     int cap_per_user_;
+
+//     SharedLRUCache cache_;
+// };
 
 }  // namespace log
 }  // namespace faas
