@@ -112,6 +112,12 @@ type FuncWorker struct {
 	// STAT
 	statMu      sync.Mutex
 	processStat map[uint64][]statEntry
+	// STAT
+	logReadStatMu        sync.Mutex
+	logLoadIndexStat     *utils.StatisticsCollector
+	logReadCacheHitStat  *utils.StatisticsCollector
+	logReadCacheMissStat *utils.StatisticsCollector
+	logReadEagainStat    *utils.StatisticsCollector
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -140,6 +146,12 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		// STAT
 		statMu:      sync.Mutex{},
 		processStat: make(map[uint64][]statEntry),
+		// STAT
+		logReadStatMu:        sync.Mutex{},
+		logLoadIndexStat:     utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogLoadIndex delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
+		logReadCacheHitStat:  utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadCacheHit delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
+		logReadCacheMissStat: utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadCacheMiss delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
+		logReadEagainStat:    utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadEagain delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
 	}
 	indexDataManagerInitializer.Do(func() {
 		indexDataManager = ipc.NewIndexDataManager()
@@ -166,42 +178,45 @@ func (w *FuncWorker) updateMetalogProgress(metalogProgress uint64) {
 }
 
 func (w *FuncWorker) statInit(fullCallId uint64) {
-	w.statMu.Lock()
-	defer w.statMu.Unlock()
-
-	if _, ok := w.processStat[fullCallId]; ok {
-		log.Panicf("unknown existing stat info before invoke func. fullCallId=%d", fullCallId)
-	}
-	w.processStat[fullCallId] = make([]statEntry, 0, 30)
 }
 func (w *FuncWorker) statTrim(fullCallId uint64) {
-	statList := w.processStat[fullCallId]
-	log.Printf("[STAT] fullCallId=%d stat=%v", fullCallId, statList)
-
-	delete(w.processStat, fullCallId)
 }
 func (w *FuncWorker) statAppend(fullCallId uint64, opType uint8, opDelay int64) {
-	w.statMu.Lock()
-	defer w.statMu.Unlock()
-
-	if _, ok := w.processStat[fullCallId]; !ok {
-		log.Panicf("stat info after invoke func not found. fullCallId=%d, opType=%d", fullCallId, opType)
-	}
-	w.processStat[fullCallId] = append(w.processStat[fullCallId], statEntry{
-		opType:  opType,
-		opDelay: opDelay,
-	})
-
-	if opType == LogOpType_Total {
-		w.statTrim(fullCallId)
-	}
 }
 
-func (w *FuncWorker) Run() {
-	// DEBUG
-	// runtime.LockOSThread()
-	// defer runtime.UnlockOSThread()
+// func (w *FuncWorker) statInit(fullCallId uint64) {
+// 	w.statMu.Lock()
+// 	defer w.statMu.Unlock()
 
+// 	if _, ok := w.processStat[fullCallId]; ok {
+// 		log.Panicf("unknown existing stat info before invoke func. fullCallId=%d", fullCallId)
+// 	}
+// 	w.processStat[fullCallId] = make([]statEntry, 0, 30)
+// }
+// func (w *FuncWorker) statTrim(fullCallId uint64) {
+// 	statList := w.processStat[fullCallId]
+// 	log.Printf("[STAT] fullCallId=%d stat=%v", fullCallId, statList)
+
+// 	delete(w.processStat, fullCallId)
+// }
+// func (w *FuncWorker) statAppend(fullCallId uint64, opType uint8, opDelay int64) {
+// 	w.statMu.Lock()
+// 	defer w.statMu.Unlock()
+
+// 	if _, ok := w.processStat[fullCallId]; !ok {
+// 		log.Panicf("stat info after invoke func not found. fullCallId=%d, opType=%d", fullCallId, opType)
+// 	}
+// 	w.processStat[fullCallId] = append(w.processStat[fullCallId], statEntry{
+// 		opType:  opType,
+// 		opDelay: opDelay,
+// 	})
+
+// 	if opType == LogOpType_Total {
+// 		w.statTrim(fullCallId)
+// 	}
+// }
+
+func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Start new FuncWorker with client id %d", w.clientId)
 	err := w.doHandshake()
 	if err != nil {
@@ -1096,11 +1111,24 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 	direction := 1
 	engineId := uint16(0)
 	querySeqnum := seqNum
+	// STAT
+	ts := common.GetMonotonicMicroTimestamp()
 	// local read
 	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+	// STAT
+	w.logReadStatMu.Lock()
+	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	w.logReadStatMu.Unlock()
+
 	if err == nil {
 		response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
 		if err == nil {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
 			if response == nil { // EMPTY
 				return nil, nil
 			} else {
@@ -1112,10 +1140,23 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 				}
 			}
 		} else if errors.Is(err, ipc.Err_CacheMiss) {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
 			engineId = protocol.GetIndexEngineIdFromMessage(response)
 			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
 			direction = 0
 		} else {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
+
 			log.Printf("[WARN] Local LogReadNext failed: %v", err)
 		}
 	} else {
@@ -1143,11 +1184,23 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	direction := -1
 	engineId := uint16(0)
 	querySeqnum := seqNum
+	// STAT
+	ts := common.GetMonotonicMicroTimestamp()
 	// local read
 	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+	// STAT
+	w.logReadStatMu.Lock()
+	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	w.logReadStatMu.Unlock()
 	if err == nil {
 		response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
 		if err == nil {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
 			if response == nil { // EMPTY
 				return nil, nil
 			} else {
@@ -1159,10 +1212,23 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 				}
 			}
 		} else if errors.Is(err, ipc.Err_CacheMiss) {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
 			engineId = protocol.GetIndexEngineIdFromMessage(response)
 			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
 			direction = 0
 		} else {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
+
 			log.Printf("[WARN] Local LogReadNext failed: %v", err)
 		}
 	} else {

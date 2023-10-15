@@ -7,18 +7,11 @@ import "C"
 import (
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"unsafe"
 
 	"github.com/pkg/errors"
 )
-
-// DEBUG
-// func GetViewShmPath(viewId uint16) string {
-// 	return fmt.Sprintf("%s/shm/view_%d", rootPathForIpc, viewId)
-// }
 
 // DEBUG
 func TestBinding() {
@@ -41,17 +34,6 @@ func NewIndexDataManager() *IndexDataManager {
 	}
 }
 
-func FilePathWalkDir(root string) ([]string, error) {
-	var files []string
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if !info.IsDir() {
-			files = append(files, path)
-		}
-		return nil
-	})
-	return files, err
-}
-
 func (im *IndexDataManager) LoadIndexData(metalogProgress uint64, seqNum uint64) (*IndexData, error) {
 	// TODO: how to get user_logspace?
 	logSpaceId := uint32(C.GetLogSpaceIdentifier(C.uint(0)))
@@ -61,16 +43,8 @@ func (im *IndexDataManager) LoadIndexData(metalogProgress uint64, seqNum uint64)
 	if indexData, ok := im.indexPool[logSpaceId]; ok {
 		return indexData, nil
 	}
-	// DEBUG
-	log.Printf("[DEBUG] seqnum=%016X log_spaceid=%08X", seqNum, logSpaceId)
-
 	indexData, err := ConstructIndexData(metalogProgress, logSpaceId)
 	if err != nil {
-		{
-			// DEBUG
-			files, _ := FilePathWalkDir("/tmp/boki/ipc/shm")
-			log.Println(files)
-		}
 		return nil, err
 	}
 	im.indexPool[logSpaceId] = indexData

@@ -4,9 +4,26 @@
 #include "log/cache.h"
 #include "utils/lockable_ptr.h"
 #include "utils/hash.h"
+#include "common/stat.h"
 
 static absl::Mutex g_cache_mu;
 static std::atomic<faas::log::SharedLRUCache*> g_cache = NULL;
+
+static absl::Mutex g_hash_meta_cache_mu;
+static absl::flat_hash_map<
+    uint16_t /*view_id*/,
+    std::pair<uint64_t /*log_space_hash_seed*/,
+              absl::FixedArray<uint16_t> /*log_space_hash_tokens*/>>
+    g_hash_meta_cache;
+
+// STAT
+static absl::Mutex stat_mu_;
+static faas::stat::StatisticsCollector<int32_t> index_read_delay_stat_(
+        faas::stat::StatisticsCollector<int32_t>::StandardReportCallback(
+            "index_read_delay"));
+static faas::stat::StatisticsCollector<int32_t> cache_read_delay_stat_(
+        faas::stat::StatisticsCollector<int32_t>::StandardReportCallback(
+            "cache_read_delay"));
 
 static faas::log::SharedLRUCache* GetOrCreateCache(uint32_t user_logspace) {
     if (g_cache.load() != NULL) {
@@ -108,20 +125,32 @@ uint32_t GetLogSpaceIdentifier(uint32_t user_logspace) {
     // get the last view
     constexpr const char* view_dir_prefix = "view_";
     constexpr const size_t prefix_size = 5u;
-    int max_view_id = 0;
+    uint16_t max_view_id = 0;
 
     struct dirent* dp;
     std::string root_path_for_shm(faas::ipc::GetRootPathForShm());
     DIR* dir = opendir(root_path_for_shm.c_str());
     while ((dp = readdir(dir)) != NULL) {
         if (strncmp(view_dir_prefix, dp->d_name, prefix_size) == 0) {
-            int view_id = atoi(&dp->d_name[prefix_size]);
+            uint16_t view_id = static_cast<uint16_t>(atoi(&dp->d_name[prefix_size]));
             max_view_id = std::max(max_view_id, view_id);
         }
     }
     closedir(dir);
     // deserialize log space hash meta
     // metadata serialization see Engine::SetupViewIPCMeta()
+    {
+        absl::ReaderMutexLock rlk(&g_hash_meta_cache_mu);
+        if (g_hash_meta_cache.contains(max_view_id)) {
+            const auto& [log_space_hash_seed, log_space_hash_tokens] =
+                g_hash_meta_cache.at(max_view_id);
+            // get logspace_id by user_logspace hash
+            // the same calculation as View::LogSpaceIdentifier()
+            uint64_t h = faas::hash::xxHash64(user_logspace, /* seed= */ log_space_hash_seed);
+            uint16_t node_id = log_space_hash_tokens[h % log_space_hash_tokens.size()];
+            return faas::bits::JoinTwo16(max_view_id, node_id);
+        }
+    }
     const std::string viewshm_path(faas::ipc::GetViewShmPath(max_view_id));
     const std::string viewmeta_path(faas::ipc::GetLogSpaceHashMetaPath(viewshm_path));
     std::string log_space_hash_meta_data;
@@ -137,6 +166,12 @@ uint32_t GetLogSpaceIdentifier(uint32_t user_logspace) {
     memcpy(log_space_hash_tokens.data(),
            log_space_hash_meta_data.data() + sizeof(uint64_t),
            n_hash_tokens * sizeof(uint16_t));
+    {
+        absl::MutexLock lk(&g_hash_meta_cache_mu);
+        g_hash_meta_cache.emplace(
+            max_view_id,
+            std::make_pair(log_space_hash_seed, log_space_hash_tokens));
+    }
     // get logspace_id by user_logspace hash
     // the same calculation as View::LogSpaceIdentifier()
     uint64_t h = faas::hash::xxHash64(user_logspace, /* seed= */ log_space_hash_seed);
@@ -329,13 +364,25 @@ int LogReadNext(void* index_data, uint64_t metalog_progress,
     uint64_t _InOut_metalog_progress = metalog_progress;
     uint64_t _Out_seqnum = 0u;
     uint16_t _Out_engine_id = 0u;
+    // STAT
+    uint64_t ts = faas::GetMonotonicMicroTimestamp();
     int ret = IndexReadNext(index_data, &_InOut_metalog_progress, user_logspace,
                             query_seqnum, query_tag, &_Out_seqnum, &_Out_engine_id);
+    {
+        absl::MutexLock lk(&stat_mu_);
+        index_read_delay_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+    }
     if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
+    // STAT
+    ts = faas::GetMonotonicMicroTimestamp();
     std::optional<faas::protocol::Message> message =
         TryGetCache(user_logspace, _InOut_metalog_progress, _Out_seqnum);
+    {
+        absl::MutexLock lk(&stat_mu_);
+        cache_read_delay_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+    }
     if (message.has_value()) {
         memcpy(response, static_cast<void*>(&message.value()),
                sizeof(faas::protocol::Message));
@@ -356,13 +403,25 @@ int LogReadPrev(void* index_data, uint64_t metalog_progress,
     uint64_t _InOut_metalog_progress = metalog_progress;
     uint64_t _Out_seqnum = 0u;
     uint16_t _Out_engine_id = 0u;
+    // STAT
+    uint64_t ts = faas::GetMonotonicMicroTimestamp();
     int ret = IndexReadPrev(index_data, &_InOut_metalog_progress, user_logspace,
                             query_seqnum, query_tag, &_Out_seqnum, &_Out_engine_id);
+    {
+        absl::MutexLock lk(&stat_mu_);
+        index_read_delay_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+    }
     if (ret != APIReturnValue::ReadOK) {
         return ret;
     }
+    // STAT
+    ts = faas::GetMonotonicMicroTimestamp();
     std::optional<faas::protocol::Message> message =
         TryGetCache(user_logspace, _InOut_metalog_progress, _Out_seqnum);
+    {
+        absl::MutexLock lk(&stat_mu_);
+        cache_read_delay_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+    }
     if (message.has_value()) {
         memcpy(response, static_cast<void*>(&message.value()),
                sizeof(faas::protocol::Message));

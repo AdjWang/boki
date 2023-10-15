@@ -39,10 +39,10 @@ DLINK_FLAGS =
 #### END PROJECT SETTINGS ####
 
 # These options can be overridden in config.mk
-DISABLE_STAT = 1
+DISABLE_STAT = 0
 DEBUG_BUILD = 0
 BUILD_BENCH = 0
-FORCE_DCHECK = 1
+FORCE_DCHECK = 0
 
 ifneq ("$(wildcard config.mk)","")
 include config.mk
@@ -100,6 +100,7 @@ SROUCES = lib.cpp \
 	$(SRC_PATH)/base/logging.cpp \
 	$(SRC_PATH)/utils/debug.cpp \
 	$(SRC_PATH)/utils/fs.cpp \
+	$(SRC_PATH)/utils/random.cpp \
 	$(SRC_PATH)/ipc/base.cpp \
 	$(SRC_PATH)/ipc/shm_region.cpp
 

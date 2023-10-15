@@ -117,6 +117,7 @@ void EngineBase::RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay)
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+    case SharedLogOpType::READ_STORAGE:
         read_delay_stat_.AddSample(delay);
         break;
     case SharedLogOpType::ASYNC_READ_PREV:
