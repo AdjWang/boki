@@ -291,8 +291,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
     uint32_t user_logspace = op->user_logspace;
     uint64_t seqnum = op->seqnum;
-    log_cache_.PutAuxData(user_logspace, seqnum, op->data.to_span());
     if (op->set_aux_data_notify) {
+        log_cache_.PutAuxData(user_logspace, seqnum, op->data.to_span());
         Message response = MessageHelper::NewSharedLogOpSucceeded(
             SharedLogResultType::AUXDATA_OK, seqnum);
         FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
