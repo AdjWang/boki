@@ -47,7 +47,7 @@ static std::optional<faas::protocol::Message> TryGetCache(uint32_t user_logspace
                                                           uint64_t metalog_progress,
                                                           uint64_t seqnum) {
     faas::log::SharedLRUCache* log_cache = GetOrCreateCache(user_logspace);
-    if (log_cache == NULL) {
+    if (__FAAS_PREDICT_FALSE(log_cache == NULL)) {
         return std::nullopt;
     }
     auto cached_log_entry = log_cache->Get(seqnum);
@@ -99,6 +99,12 @@ enum APIReturnValue {
     IndexReadContinueOK = -3,
 
     LogReadCacheMiss = -4,
+    
+    AuxDataSetOK = 0,
+    // The specified user not existing.
+    // User function does not have the user table, so the first setting
+    // must through engine.
+    AuxDataInvalidUser = -5,
 };
 
 typedef faas::LockablePtr<faas::log::IndexDataManager> shared_index_t;
@@ -433,5 +439,19 @@ int LogReadPrev(void* index_data, uint64_t metalog_progress,
         memcpy(response, static_cast<void*>(&response_without_data),
                sizeof(faas::protocol::Message));
         return APIReturnValue::LogReadCacheMiss;
+    }
+}
+
+int SetAuxData(uint32_t user_logspace, uint64_t seqnum, void* data, size_t len) {
+    DCHECK(data != nullptr);
+    DCHECK_GT(len, 0u);
+    faas::log::SharedLRUCache* log_cache = GetOrCreateCache(user_logspace);
+    if (log_cache != NULL) {
+        log_cache->PutAuxData(
+            seqnum,
+            std::span<const char>(reinterpret_cast<const char*>(data), len));
+        return APIReturnValue::AuxDataSetOK;
+    } else {
+        return APIReturnValue::AuxDataInvalidUser;
     }
 }

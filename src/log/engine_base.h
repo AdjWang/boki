@@ -69,6 +69,7 @@ protected:
         UserTagVec user_tags;
         utils::AppendableBuffer data;
         int32_t log_dispatch_delay;
+        bool set_aux_data_notify;   // Used by SET_AUXDATA
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;

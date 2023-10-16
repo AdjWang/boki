@@ -117,10 +117,18 @@ const (
 
 	FLAG_kLogReadBenchCacheHitFlag   uint32 = (1 << 4) // Local cache hit or do remote read
 	FLAG_kLogReadBenchMetaInsideFlag uint32 = (1 << 5) // Index view satisified or pending the target metalog_position
+
+	FLAG_kLogSetAuxDataNotifyFlag uint32 = (1 << 6) // If notify func with return
 )
 
 func GetFlagsFromMessage(buffer []byte) uint32 {
 	return binary.LittleEndian.Uint32(buffer[28:32])
+}
+
+func SetFlagsToMessage(buffer []byte, flags uint32) {
+	existingFlags := binary.LittleEndian.Uint32(buffer[28:32])
+	existingFlags |= flags
+	binary.LittleEndian.PutUint32(buffer[28:32], existingFlags)
 }
 
 func GetFuncCallFromMessage(buffer []byte) FuncCall {
@@ -325,7 +333,7 @@ func NewAsyncSharedLogReadIndexMessage(currentCallId uint64, metalogProgress uin
 	return buffer
 }
 
-func NewSharedLogSetAuxDataMessage(currentCallId uint64, myClientId uint16, seqNum uint64, clientData uint64) []byte {
+func NewSharedLogSetAuxDataMessage(currentCallId uint64, myClientId uint16, seqNum uint64, notify bool, clientData uint64) []byte {
 	buffer := NewEmptyMessage()
 	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
 	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
@@ -333,6 +341,9 @@ func NewSharedLogSetAuxDataMessage(currentCallId uint64, myClientId uint16, seqN
 	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
 	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
 	binary.LittleEndian.PutUint64(buffer[8:16], seqNum)
+	if notify {
+		SetFlagsToMessage(buffer, FLAG_kLogSetAuxDataNotifyFlag)
+	}
 	return buffer
 }
 

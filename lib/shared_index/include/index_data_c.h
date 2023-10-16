@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -42,6 +43,8 @@ EXPORT extern int LogReadNext(void* index_data, uint64_t metalog_progress,
 EXPORT extern int LogReadPrev(void* index_data, uint64_t metalog_progress,
                               uint32_t user_logspace, uint64_t query_seqnum,
                               uint64_t query_tag, /*Out*/ void* response);
+
+EXPORT extern int SetAuxData(uint32_t user_logspace, uint64_t seqnum, void* data, size_t len);
 
 #ifdef __cplusplus
 }

@@ -1337,28 +1337,44 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	if len(auxData) > protocol.MessageInlineDataSize {
 		return fmt.Errorf("Auxiliary data too larger (size=%d), expect no more than %d bytes", len(auxData), protocol.MessageInlineDataSize)
 	}
+	// if localSetErr is nil, perform a blind set
+	// if localSetErr is not nil(Invalid User), perform a reliable set
+	localSetErr := ipc.LogSetAuxData(seqNum, auxData)
+	notify := false
+	if localSetErr != nil && localSetErr == ipc.Err_AuxDataInvalidUser {
+		notify = true
+		log.Printf("[WARN] Local SetAuxData failed seqNum=%016X", seqNum)
+	} else {
+		return localSetErr
+	}
 
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewSharedLogSetAuxDataMessage(currentCallId, w.clientId, seqNum, id)
+	message := protocol.NewSharedLogSetAuxDataMessage(currentCallId, w.clientId, seqNum, notify, id)
 	protocol.FillInlineDataInMessage(message, auxData)
 
 	w.mux.Lock()
 	outputChan := make(chan []byte, 1)
-	w.outgoingLogOps[id] = outputChan
+	if notify {
+		w.outgoingLogOps[id] = outputChan
+	}
+
 	_, err := w.outputPipe.Write(message)
 	w.mux.Unlock()
 	if err != nil {
 		return err
 	}
 
-	response := <-outputChan
-	result := protocol.GetSharedLogResultTypeFromMessage(response)
-	if result == protocol.SharedLogResultType_AUXDATA_OK {
-		return nil
-	} else {
-		return fmt.Errorf("Failed to set auxiliary data for log (seqnum %#016x)", seqNum)
+	if notify {
+		response := <-outputChan
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_AUXDATA_OK {
+			return nil
+		} else {
+			return fmt.Errorf("Failed to set auxiliary data for log (seqnum %#016x)", seqNum)
+		}
 	}
+	return nil
 }
 
 func (w *FuncWorker) SharedLogIPCBench(ctx context.Context, batchSize uint64) error {

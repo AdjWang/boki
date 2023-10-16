@@ -172,6 +172,8 @@ constexpr uint32_t kLogDataCachedFlag             = (1 << 3);   // Used to check
 constexpr uint32_t kLogReadBenchCacheHitFlag      = (1 << 4);   // Local cache hit or do remote read
 constexpr uint32_t kLogReadBenchMetaInsideFlag    = (1 << 5);   // Index view satisified or pending the target metalog_position
 
+constexpr uint32_t kLogSetAuxDataNotifyFlag       = (1 << 6);   // If notify func with return
+
 struct Message {
     struct {
         uint16_t message_type : 4;

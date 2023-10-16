@@ -52,10 +52,11 @@ func (im *IndexDataManager) LoadIndexData(metalogProgress uint64, seqNum uint64)
 }
 
 var (
-	Err_Empty     = errors.New("EMPTY")
-	Err_CacheMiss = errors.New("CacheMiss")
-	Err_Continue  = errors.New("EAGAIN")
-	Err_Pending   = errors.New("EAGAIN")
+	Err_Empty              = errors.New("EMPTY")
+	Err_CacheMiss          = errors.New("CacheMiss")
+	Err_Continue           = errors.New("EAGAIN")
+	Err_Pending            = errors.New("EAGAIN")
+	Err_AuxDataInvalidUser = errors.New("Invalid User")
 )
 
 type IndexData struct {
@@ -260,5 +261,17 @@ func (idx *IndexData) LogReadPrev(metalogProgress uint64, querySeqNum uint64, qu
 		return message, Err_CacheMiss
 	} else {
 		return nil, fmt.Errorf("LogReadPrev error=%s", strerr(resultState))
+	}
+}
+
+func LogSetAuxData(seqNum uint64, data []byte) error {
+	// TODO: how to get user_logspace?
+	resultState := int(C.SetAuxData(C.uint(0) /*userLogSpace*/, C.ulong(seqNum), unsafe.Pointer(&data[0]), C.ulong(len(data))))
+	if resultState == 0 {
+		return nil
+	} else if resultState == -5 {
+		return Err_AuxDataInvalidUser
+	} else {
+		panic("unreachable")
 	}
 }

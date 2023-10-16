@@ -275,6 +275,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     case SharedLogOpType::SET_AUXDATA:
         op->seqnum = message.log_seqnum;
         op->data.AppendData(MessageHelper::GetInlineData(message));
+        op->set_aux_data_notify = ((message.flags & protocol::kLogSetAuxDataNotifyFlag) != 0);
         break;
     case SharedLogOpType::IPC_BENCH:
         op->seqnum = message.batch_size;

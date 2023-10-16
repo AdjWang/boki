@@ -292,9 +292,11 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
     uint32_t user_logspace = op->user_logspace;
     uint64_t seqnum = op->seqnum;
     log_cache_.PutAuxData(user_logspace, seqnum, op->data.to_span());
-    Message response = MessageHelper::NewSharedLogOpSucceeded(
-        SharedLogResultType::AUXDATA_OK, seqnum);
-    FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
+    if (op->set_aux_data_notify) {
+        Message response = MessageHelper::NewSharedLogOpSucceeded(
+            SharedLogResultType::AUXDATA_OK, seqnum);
+        FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
+    }
     if (!absl::GetFlag(FLAGS_slog_engine_propagate_auxdata)) {
         return;
     }
