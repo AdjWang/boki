@@ -127,7 +127,7 @@ void Inspect(void* index_data) {
     locked_index_data->Inspect();
 }
 
-uint32_t GetLogSpaceIdentifier(uint32_t user_logspace) {
+static uint16_t GetLastViewId() {
     // get the last view
     constexpr const char* view_dir_prefix = "view_";
     constexpr const size_t prefix_size = 5u;
@@ -143,8 +143,13 @@ uint32_t GetLogSpaceIdentifier(uint32_t user_logspace) {
         }
     }
     closedir(dir);
+    return max_view_id;
+}
+
+uint32_t GetLogSpaceIdentifier(uint32_t user_logspace) {
+    uint16_t max_view_id = GetLastViewId();
     // deserialize log space hash meta
-    // metadata serialization see Engine::SetupViewIPCMeta()
+    // metadata serialization see Engine::SetupUserViewIPCMeta()
     {
         absl::ReaderMutexLock rlk(&g_hash_meta_cache_mu);
         if (g_hash_meta_cache.contains(max_view_id)) {
@@ -202,23 +207,21 @@ void Init(const char* ipc_root_path, int vlog_level) {
 #endif
 }
 
+int CheckIndexData(uint32_t logspace_id, uint32_t user_logspace) {
+    if (!faas::ipc::CheckIndexMeta(user_logspace, logspace_id)) {
+        VLOG_F(1, "ConstructIndexData IndexMetaPath check failed "
+                  "index user_logspace={:08X} logspace_id={:08X}",
+                  user_logspace, logspace_id);
+        return -1;
+    }
+    return 0;
+}
+
+// TODO: remove metalog_progress assertion here, since it is checked in Readxxxx
 void* ConstructIndexData(uint64_t metalog_progress, uint32_t logspace_id,
                          uint32_t user_logspace) {
-    if (!faas::ipc::CheckIndexMetaPath(logspace_id)) {
-        VLOG_F(1, "ConstructIndexData IndexMetaPath check failed "
-                  "index logspace_id={:08X}",
-                  logspace_id);
-        return NULL;
-    }
     auto index_data = std::unique_ptr<faas::log::IndexDataManager>(
         new faas::log::IndexDataManager(logspace_id));
-    uint64_t index_metalog_progress = index_data->index_metalog_progress();
-    if (metalog_progress > index_metalog_progress) {
-        VLOG_F(1, "ConstructIndexData metalog_progress={:016X} not satisify future "
-                  "index metalog_progress={:016X}",
-                  index_metalog_progress, metalog_progress);
-        return NULL;
-    }
     index_data->LoadIndexData(user_logspace);
     std::string mu_name = faas::ipc::GetIndexMutexName(logspace_id);
     shared_index_t* lockable_index_data =

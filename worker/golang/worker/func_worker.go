@@ -67,8 +67,8 @@ func hexBytes2String(data []byte) string {
 
 const PIPE_BUF = 4096
 
-var indexDataManagerInitializer sync.Once
-var indexDataManager *ipc.IndexDataManager = nil
+var viewManagerInitializer sync.Once
+var viewManager *ipc.ViewManager = nil
 
 const (
 	LogOpType_Append = iota
@@ -153,8 +153,8 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		logReadCacheMissStat: utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadCacheMiss delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
 		logReadEagainStat:    utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadEagain delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
 	}
-	indexDataManagerInitializer.Do(func() {
-		indexDataManager = ipc.NewIndexDataManager()
+	viewManagerInitializer.Do(func() {
+		viewManager = ipc.NewViewManager()
 	})
 	return w, nil
 }
@@ -165,6 +165,7 @@ func (w *FuncWorker) SharedLogTestBinding() {
 }
 
 // thread safe
+// TODO: move to index data manager
 func (w *FuncWorker) updateMetalogProgress(metalogProgress uint64) {
 	for {
 		oldMetalogProgress := atomic.LoadUint64(&w.metalogProgress)
@@ -305,25 +306,30 @@ func (w *FuncWorker) Run() {
 			metalogProgress := protocol.GetMetalogProgressInMessage(message)
 			w.updateMetalogProgress(metalogProgress)
 			// Dispatch response
-			w.mux.Lock()
-			if protocol.IsSharedLogAsyncResult(message) {
-				if ch, exists := w.asyncOutgoingLogOps[id]; exists {
-					ch <- message
-					delete(w.asyncOutgoingLogOps, id)
-				} else {
-					log.Printf("[WARN] Unexpected log message id for async ops: %d", id)
-				}
+			if resultType == protocol.SharedLogResultType_METALOG_PROGRESS {
+				indexedMetalogProgress := protocol.GetMetalogProgressInMessage(message)
+				viewManager.ProcessPendingQuery(indexedMetalogProgress)
 			} else {
-				if ch, exists := w.outgoingLogOps[id]; exists {
-					ch <- message
-					if !protocol.IsSharedLogIPCBenchResult(message) {
-						delete(w.outgoingLogOps, id)
+				w.mux.Lock()
+				if protocol.IsSharedLogAsyncResult(message) {
+					if ch, exists := w.asyncOutgoingLogOps[id]; exists {
+						ch <- message
+						delete(w.asyncOutgoingLogOps, id)
+					} else {
+						log.Printf("[WARN] Unexpected log message id for async ops: %d", id)
 					}
 				} else {
-					log.Printf("[WARN] Unexpected log message id for sync ops: %d", id)
+					if ch, exists := w.outgoingLogOps[id]; exists {
+						ch <- message
+						if !protocol.IsSharedLogIPCBenchResult(message) {
+							delete(w.outgoingLogOps, id)
+						}
+					} else {
+						log.Printf("[WARN] Unexpected log message id for sync ops: %d", id)
+					}
 				}
+				w.mux.Unlock()
 			}
-			w.mux.Unlock()
 		} else {
 			log.Fatal("[FATAL] Unknown message type")
 		}
@@ -1111,57 +1117,57 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 	direction := 1
 	engineId := uint16(0)
 	querySeqnum := seqNum
-	// STAT
-	ts := common.GetMonotonicMicroTimestamp()
-	// local read
-	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-	// STAT
-	w.logReadStatMu.Lock()
-	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	w.logReadStatMu.Unlock()
+	// // STAT
+	// ts := common.GetMonotonicMicroTimestamp()
+	// // local read
+	// indexData, err := viewManager.LoadIndexData(w.metalogProgress, seqNum)
+	// // STAT
+	// w.logReadStatMu.Lock()
+	// w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	// w.logReadStatMu.Unlock()
 
-	if err == nil {
-		response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
-		if err == nil {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			if response == nil { // EMPTY
-				return nil, nil
-			} else {
-				result := protocol.GetSharedLogResultTypeFromMessage(response)
-				if result == protocol.SharedLogResultType_READ_OK {
-					return buildLogEntryFromReadResponse(response), nil
-				} else {
-					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
-				}
-			}
-		} else if errors.Is(err, ipc.Err_CacheMiss) {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			engineId = protocol.GetIndexEngineIdFromMessage(response)
-			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
-			direction = 0
-		} else {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
+	// if err == nil {
+	// 	response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
+	// 	if err == nil {
+	// 		// STAT
+	// 		defer func() {
+	// 			w.logReadStatMu.Lock()
+	// 			defer w.logReadStatMu.Unlock()
+	// 			w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	// 		}()
+	// 		if response == nil { // EMPTY
+	// 			return nil, nil
+	// 		} else {
+	// 			result := protocol.GetSharedLogResultTypeFromMessage(response)
+	// 			if result == protocol.SharedLogResultType_READ_OK {
+	// 				return buildLogEntryFromReadResponse(response), nil
+	// 			} else {
+	// 				return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+	// 			}
+	// 		}
+	// 	} else if errors.Is(err, ipc.IndexQueryErr_CacheMiss) {
+	// 		// STAT
+	// 		defer func() {
+	// 			w.logReadStatMu.Lock()
+	// 			defer w.logReadStatMu.Unlock()
+	// 			w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	// 		}()
+	// 		engineId = protocol.GetIndexEngineIdFromMessage(response)
+	// 		querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+	// 		direction = 0
+	// 	} else {
+	// 		// STAT
+	// 		defer func() {
+	// 			w.logReadStatMu.Lock()
+	// 			defer w.logReadStatMu.Unlock()
+	// 			w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	// 		}()
 
-			log.Printf("[WARN] Local LogReadNext failed: %v", err)
-		}
-	} else {
-		log.Printf("[WARN] LoadIndexData failed: %v", err)
-	}
+	// 		log.Printf("[WARN] Local LogReadNext failed: %v", err)
+	// 	}
+	// } else {
+	// 	log.Printf("[WARN] LoadIndexData failed: %v", err)
+	// }
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
@@ -1179,6 +1185,21 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 
+func (w *FuncWorker) getOrCreateIndexData(ctx context.Context, seqNum uint64) (*ipc.IndexData, error) {
+	indexData, err := viewManager.LoadIndexData(protocol.GetLogSpaceId(seqNum))
+	if errors.Is(err, ipc.ViewManagerErr_InvalidUser) {
+		// setup view on first read
+		if err := w.SharedLogSetupView(ctx, protocol.GetViewIdFromSeqNum(seqNum)); err != nil {
+			return nil, err
+		}
+		indexData, err = viewManager.LoadIndexData(protocol.GetLogSpaceId(seqNum))
+		if errors.Is(err, ipc.ViewManagerErr_InvalidUser) {
+			panic("unreachable")
+		}
+	}
+	return indexData, err
+}
+
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
 	direction := -1
@@ -1187,13 +1208,15 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	// STAT
 	ts := common.GetMonotonicMicroTimestamp()
 	// local read
-	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+	indexData, err := w.getOrCreateIndexData(ctx, seqNum)
 	// STAT
 	w.logReadStatMu.Lock()
 	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
 	w.logReadStatMu.Unlock()
+
 	if err == nil {
-		response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+		responsePair := <-indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+		response, err := responsePair.Response, responsePair.Err
 		if err == nil {
 			// STAT
 			defer func() {
@@ -1211,7 +1234,7 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
 				}
 			}
-		} else if errors.Is(err, ipc.Err_CacheMiss) {
+		} else if errors.Is(err, ipc.IndexQueryErr_CacheMiss) {
 			// STAT
 			defer func() {
 				w.logReadStatMu.Lock()
@@ -1229,10 +1252,10 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
 			}()
 
-			log.Printf("[WARN] Local LogReadNext failed: %v", err)
+			log.Printf("[WARN] Local LogReadPrev failed: %v", err)
 		}
-	} else {
-		log.Printf("[WARN] LoadIndexData failed: %v", err)
+	} else if !errors.Is(err, ipc.ViewManagerErr_IndexNotExist) {
+		return nil, err
 	}
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
@@ -1341,7 +1364,7 @@ func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, aux
 	// if localSetErr is not nil(Invalid User), perform a reliable set
 	localSetErr := ipc.LogSetAuxData(seqNum, auxData)
 	notify := false
-	if localSetErr != nil && localSetErr == ipc.Err_AuxDataInvalidUser {
+	if localSetErr != nil && localSetErr == ipc.IndexQueryErr_AuxDataInvalidUser {
 		notify = true
 		log.Printf("[WARN] Local SetAuxData failed seqNum=%016X", seqNum)
 	} else {
@@ -1401,5 +1424,30 @@ func (w *FuncWorker) SharedLogIPCBench(ctx context.Context, batchSize uint64) er
 	w.mux.Lock()
 	delete(w.outgoingLogOps, id)
 	w.mux.Unlock()
+	return nil
+}
+
+func (w *FuncWorker) SharedLogSetupView(ctx context.Context, viewId uint16) error {
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	message := protocol.NewSharedLogSetupViewMessage(currentCallId, w.clientId, viewId, id)
+
+	w.mux.Lock()
+	outputChan := make(chan []byte, 1)
+	w.outgoingLogOps[id] = outputChan
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	if err != nil {
+		return err
+	}
+
+	response := <-outputChan
+	result := protocol.GetSharedLogResultTypeFromMessage(response)
+	if result != protocol.SharedLogResultType_SETUP_VIEW_OK {
+		return fmt.Errorf("Failed to get setup view response, got=%d", result)
+	}
+	userLogSpace := protocol.GetUserLogspaceFromMessage(response)
+	atomic.StoreUint32(&viewManager.UserLogSpace, userLogSpace)
+	log.Printf("[DEBUG] SetupView for user %d", userLogSpace)
 	return nil
 }

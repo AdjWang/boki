@@ -97,7 +97,11 @@ std::string GetOrCreateCacheShmPath() {
     return cacheshm_path;
 }
 
-bool CheckIndexMetaPath(uint32_t logspace_id) {
+std::string GetIndexSegmentName(uint32_t user_logspace, uint32_t logspace_id) {
+    return ipc::GetIndexSegmentPath("IndexShm", user_logspace, logspace_id);
+}
+
+bool CheckIndexMeta(uint32_t user_logspace, uint32_t logspace_id) {
     uint16_t view_id = bits::HighHalf32(logspace_id);
     std::string viewshm_path(ipc::GetViewShmPath(view_id));
     // should have been created when installing the view by engine
@@ -105,7 +109,8 @@ bool CheckIndexMetaPath(uint32_t logspace_id) {
         return false;
     }
     std::string indexshm_path(
-        fs_utils::JoinPath(viewshm_path, fmt::format("index_{}", logspace_id)));
+        fs_utils::JoinPath(viewshm_path, fmt::format("index_{}", logspace_id),
+                           GetIndexSegmentName(user_logspace, logspace_id)));
     return fs_utils::Exists(indexshm_path);
 }
 

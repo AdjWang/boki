@@ -21,6 +21,8 @@ public:
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
     void PollQueryResults(QueryResultVec* results);
 
+    bool PollIndexedMetalogProgress(uint64_t* metalog_progress);
+
 private:
     IndexDataManager index_data_;
     static constexpr uint32_t kMaxMetalogPosition = std::numeric_limits<uint32_t>::max();
@@ -41,6 +43,7 @@ private:
     };
     std::map</* seqnum */ uint32_t, RecvIndexData> received_data_;
     uint32_t data_received_seqnum_position_;
+    bool indexed_metalog_progress_dirty_;
 
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
     void OnFinalized(uint32_t metalog_position) override;

@@ -130,6 +130,8 @@ void EngineBase::RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay)
         break;
     case SharedLogOpType::IPC_BENCH:
         break;
+    case SharedLogOpType::SETUP_VIEW:
+        break;
     default:
         UNREACHABLE();
     }
@@ -160,6 +162,9 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
         break;
     case SharedLogOpType::IPC_BENCH:
         HandleLocalIPCBench(op);
+        break;
+    case SharedLogOpType::SETUP_VIEW:
+        HandleLocalSetupView(op);
         break;
     default:
         UNREACHABLE();
@@ -249,6 +254,8 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->data.Reset();
     op->log_dispatch_delay = gsl::narrow_cast<int32_t>(
         GetMonotonicMicroTimestamp() - message.send_timestamp);
+    op->set_aux_data_notify = true;
+    op->view_id = protocol::kInvalidLogViewId;
 
     switch (op->type) {
     case SharedLogOpType::APPEND:
@@ -279,6 +286,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         break;
     case SharedLogOpType::IPC_BENCH:
         op->seqnum = message.batch_size;
+        break;
+    case SharedLogOpType::SETUP_VIEW:
+        op->view_id = message.log_view_id;
         break;
     default:
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
@@ -337,6 +347,13 @@ void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metad
         engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,
                                       storage_id, message, aux_data);
     }
+}
+
+// Used by METALOG_PROGRESS streams.
+bool EngineBase::SendLocalOpResponse(uint16_t client_id, Message* response,
+                                     uint64_t metalog_progress) {
+    response->metalog_progress = metalog_progress;
+    return engine_->SendFuncWorkerMessage(client_id, response);
 }
 
 // Used to send the first response to async operations.

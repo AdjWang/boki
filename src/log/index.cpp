@@ -152,6 +152,16 @@ void Index::PollQueryResults(QueryResultVec* results) {
     pending_query_results_.clear();
 }
 
+bool Index::PollIndexedMetalogProgress(uint64_t* metalog_progress) {
+    if (indexed_metalog_progress_dirty_) {
+        indexed_metalog_progress_dirty_ = false;
+        *metalog_progress = index_data_.index_metalog_progress();
+        return true;
+    } else {
+        return false;
+    }
+}
+
 void Index::OnMetaLogApplied(const MetaLogProto& meta_log_proto) {
     if (meta_log_proto.type() == MetaLogProto::NEW_LOGS) {
         const auto& new_logs_proto = meta_log_proto.new_logs_proto();
@@ -201,6 +211,7 @@ void Index::AdvanceIndexProgress() {
         index_data_.set_indexed_seqnum_position(end_seqnum);
         uint32_t metalog_seqnum = cuts_.front().first;
         index_data_.set_indexed_metalog_position(metalog_seqnum + 1);
+        indexed_metalog_progress_dirty_ = true;
         cuts_.pop_front();
     }
     if (!blocking_reads_.empty()) {

@@ -31,10 +31,18 @@ private:
 
     CacheManager<SharedLRUCache> log_cache_;
 
+    // Propagate metalog_progress stream to subscribers to serve local read.
+    absl::Mutex shared_view_mu_;
+    absl::flat_hash_map<uint32_t /*logspace_id*/, absl::flat_hash_set<uint16_t> /*client_ids*/>
+        log_view_subscribes_ ABSL_GUARDED_BY(shared_view_mu_);
+    absl::Mutex shared_view_record_mu_;
+    absl::flat_hash_map<uint32_t /*user_logspace*/, absl::flat_hash_set<uint16_t> /*view_ids*/>
+        log_view_records_ ABSL_GUARDED_BY(shared_view_record_mu_);
+
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_local_reads_;
 
-    void SetupViewIPCMeta(const View* view);
+    void SetupEngineViewIPCMeta(const View* view);
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
@@ -44,6 +52,8 @@ private:
     void HandleLocalRead(LocalOp* op) override;
     void HandleLocalSetAuxData(LocalOp* op) override;
     void HandleLocalIPCBench(LocalOp* op) override;
+    void SetupUserViewIPCMeta(uint32_t user_logspace, const View* view);
+    void HandleLocalSetupView(LocalOp* op) override;
 
     void HandleRemoteRead(const protocol::SharedLogMessage& request) override;
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
@@ -53,6 +63,7 @@ private:
     void OnRecvResponse(const protocol::SharedLogMessage& message,
                         std::span<const char> payload) override;
 
+    void PropagateIndexedMetalogProgress(uint64_t indexed_metalog_progress);
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);

@@ -17,6 +17,7 @@ EXPORT extern void Inspect(void* index_data);
 
 EXPORT extern uint32_t GetLogSpaceIdentifier(uint32_t user_logspace);
 EXPORT extern void Init(const char* ipc_root_path, int vlog_level);
+EXPORT extern int CheckIndexData(uint32_t logspace_id, uint32_t user_logspace);
 EXPORT extern void* ConstructIndexData(uint64_t metalog_progress,
                                        uint32_t logspace_id,
                                        uint32_t user_logspace);

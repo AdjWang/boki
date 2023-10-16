@@ -39,6 +39,14 @@ func GetLogSpaceId(seqNum uint64) uint32 {
 	return uint32(seqNum >> 32)
 }
 
+func GetViewId(logSpaceId uint32) uint16 {
+	return uint16(logSpaceId >> 16)
+}
+
+func GetViewIdFromSeqNum(seqNum uint64) uint16 {
+	return uint16((GetLogSpaceId(seqNum)) >> 16)
+}
+
 // MessageType enum
 const (
 	MessageType_INVALID               uint16 = 0
@@ -69,7 +77,8 @@ const (
 	SharedLogOpType_ASYNC_READ_PREV    uint16 = 0x23
 	SharedLogOpType_ASYNC_READ_LOCALID uint16 = 0x24
 
-	SharedLogOpType_IPC_BENCH uint16 = 0x31
+	SharedLogOpType_IPC_BENCH  uint16 = 0x31
+	SharedLogOpType_SETUP_VIEW uint16 = 0x32
 )
 
 // SharedLogResultType enum
@@ -94,9 +103,15 @@ const (
 	SharedLogResultType_DATA_LOST    uint16 = 0x43
 	SharedLogResultType_TRIM_FAILED  uint16 = 0x44
 	SharedLogResultType_IPC_BENCH_OK uint16 = 0x45
+
+	SharedLogResultType_SETUP_VIEW_OK    uint16 = 0x46
+	SharedLogResultType_METALOG_PROGRESS uint16 = 0x47
 )
 
 const MaxLogSeqnum = uint64(0xffff000000000000)
+const InvalidLogViewId = uint16(0xffff)
+const InvalidLogSpaceId = uint32(0xffff0000)
+const InvalidUserLogspace = uint32(0xffffffff)
 
 const MessageTypeBits = 4
 
@@ -359,6 +374,18 @@ func NewSharedLogIPCBenchMessage(currentCallId uint64, myClientId uint16, batchS
 	return buffer
 }
 
+func NewSharedLogSetupViewMessage(currentCallId uint64, myClientId uint16, viewId uint16, clientData uint64) []byte {
+	buffer := NewEmptyMessage()
+	tmp := (currentCallId << MessageTypeBits) + uint64(MessageType_SHARED_LOG_OP)
+	binary.LittleEndian.PutUint64(buffer[0:8], tmp)
+	binary.LittleEndian.PutUint16(buffer[32:34], SharedLogOpType_SETUP_VIEW)
+	binary.LittleEndian.PutUint16(buffer[34:36], myClientId)
+	binary.LittleEndian.PutUint64(buffer[48:56], clientData)
+	binary.LittleEndian.PutUint16(buffer[36:38], viewId)
+	binary.LittleEndian.PutUint64(buffer[16:24], uint64(common.GetMonotonicMicroTimestamp()))
+	return buffer
+}
+
 func GetClientIdFromMessage(buffer []byte) uint16 {
 	return GetFuncCallFromMessage(buffer).ClientId
 }
@@ -369,6 +396,10 @@ func GetSendTimestampFromMessage(buffer []byte) int64 {
 
 func SetSendTimestampInMessage(buffer []byte, sendTimestamp int64) {
 	binary.LittleEndian.PutUint64(buffer[16:24], uint64(sendTimestamp))
+}
+
+func GetUserLogspaceFromMessage(buffer []byte) uint32 {
+	return binary.LittleEndian.Uint32(buffer[24:28])
 }
 
 func GetPayloadSizeFromMessage(buffer []byte) int32 {

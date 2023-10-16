@@ -27,7 +27,7 @@ Engine::Engine(engine::Engine* engine)
 
 Engine::~Engine() {}
 
-void Engine::SetupViewIPCMeta(const View* view) {
+void Engine::SetupEngineViewIPCMeta(const View* view) {
     // create view meta dir
     std::string viewshm_path(ipc::GetViewShmPath(view->id()));
     DCHECK(!viewshm_path.empty());
@@ -68,7 +68,7 @@ void Engine::OnViewCreated(const View* view) {
     if (!contains_myself) {
         HLOG_F(WARNING, "View {} does not include myself", view->id());
     }
-    SetupViewIPCMeta(view);
+    SetupEngineViewIPCMeta(view);
     std::vector<SharedLogRequest> ready_requests;
     {
         absl::MutexLock view_lk(&view_mu_);
@@ -291,8 +291,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
 void Engine::HandleLocalSetAuxData(LocalOp* op) {
     uint32_t user_logspace = op->user_logspace;
     uint64_t seqnum = op->seqnum;
-    log_cache_.PutAuxData(user_logspace, seqnum, op->data.to_span());
     if (op->set_aux_data_notify) {
+        log_cache_.PutAuxData(user_logspace, seqnum, op->data.to_span());
         Message response = MessageHelper::NewSharedLogOpSucceeded(
             SharedLogResultType::AUXDATA_OK, seqnum);
         FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
@@ -320,6 +320,68 @@ void Engine::HandleLocalIPCBench(LocalOp* op) {
     for (uint64_t i = 1; i < batch_size; i++) {
         IntermediateLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
     }
+    FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
+}
+
+// TODO: install to UserPath(user_logspace)/view_id/...
+void Engine::SetupUserViewIPCMeta(uint32_t user_logspace, const View* view) {
+    // create view meta dir
+    std::string viewshm_path(ipc::GetViewShmPath(view->id()));
+    DCHECK(!viewshm_path.empty());
+    DCHECK(fs_utils::Exists(viewshm_path))
+        << fmt::format("view path {} should have been created in OnViewCreate", viewshm_path);
+    // std::string viewmeta_path(ipc::GetLogSpaceHashMetaPath(viewshm_path));
+}
+
+void Engine::HandleLocalSetupView(LocalOp* op) {
+    uint16_t view_id = op->view_id;
+    uint32_t user_logspace = op->user_logspace;
+    {
+        absl::MutexLock lk(&shared_view_record_mu_);
+        if (log_view_records_.contains(user_logspace) &&
+            log_view_records_.at(user_logspace).contains(view_id)) {
+            // duplicate setup
+            Message response = MessageHelper::NewSharedLogOpSucceeded(
+                SharedLogResultType::SETUP_VIEW_OK);
+            response.user_logspace = user_logspace;
+            FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
+            return;
+        }
+        log_view_records_[user_logspace].insert(view_id);
+    }
+    // get required view
+    const View* view = nullptr;
+    uint32_t logspace_id = 0u;
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        if (view_id == protocol::kInvalidLogViewId) {
+            // on hold if seen future view
+            if (current_view_ == nullptr) {
+                future_requests_.OnHoldRequest(view_id, SharedLogRequest(op));
+                return;
+            }
+            view = current_view_;
+        } else {
+            // on hold if seen future view
+            if (current_view_ == nullptr || view_id > current_view_->id()) {
+                future_requests_.OnHoldRequest(view_id, SharedLogRequest(op));
+                return;
+            }
+            view = views_.at(view_id);
+        }
+        logspace_id = view->LogSpaceIdentifier(user_logspace);
+    }
+    // install view mmap to target user_logspace
+    SetupUserViewIPCMeta(user_logspace, view);
+    // subscribe user_logspace to index metalog stream
+    {
+        absl::MutexLock lk(&shared_view_mu_);
+        log_view_subscribes_[logspace_id].insert(op->client_id);
+    }
+    // return user_logspace
+    Message response = MessageHelper::NewSharedLogOpSucceeded(
+        SharedLogResultType::SETUP_VIEW_OK);
+    response.user_logspace = user_logspace;
     FinishLocalOpWithResponse(op, &response, /* metalog_progress= */ 0);
 }
 
@@ -373,6 +435,8 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
     LogProducer::AppendResultVec append_results;
+    bool metalog_progress_updated = false;
+    uint64_t indexed_metalog_progress;
     Index::QueryResultVec query_results;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -394,11 +458,16 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
                     locked_index->ProvideMetaLog(metalog_proto);
                 }
                 locked_index->PollQueryResults(&query_results);
+                metalog_progress_updated = locked_index->PollIndexedMetalogProgress(
+                    &indexed_metalog_progress);
             }
         }
     }
     ProcessAppendResults(append_results);
     ProcessIndexQueryResults(query_results);
+    if (metalog_progress_updated) {
+        PropagateIndexedMetalogProgress(indexed_metalog_progress);
+    }
 }
 
 void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
@@ -409,6 +478,8 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
                                          static_cast<int>(payload.size()))) {
         LOG(FATAL) << "Failed to parse IndexDataProto";
     }
+    bool metalog_progress_updated = false;
+    uint64_t indexed_metalog_progress;
     Index::QueryResultVec query_results;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -428,9 +499,14 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
             auto locked_index = index_ptr.Lock();
             locked_index->ProvideIndexData(index_data_proto);
             locked_index->PollQueryResults(&query_results);
+            metalog_progress_updated = locked_index->PollIndexedMetalogProgress(
+                &indexed_metalog_progress);
         }
     }
     ProcessIndexQueryResults(query_results);
+    if (metalog_progress_updated) {
+        PropagateIndexedMetalogProgress(indexed_metalog_progress);
+    }
 }
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
@@ -538,6 +614,25 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         }
     } else {
         HLOG(FATAL) << "Unknown result type: " << message.op_result;
+    }
+}
+
+void Engine::PropagateIndexedMetalogProgress(uint64_t indexed_metalog_progress) {
+    uint32_t logspace_id = bits::HighHalf64(indexed_metalog_progress);
+    // propagate metalog_progress stream to subscribers
+    absl::flat_hash_set<uint16_t> clients;
+    {
+        absl::ReaderMutexLock rlk(&shared_view_mu_);
+        if (!log_view_subscribes_.contains(logspace_id)) {
+            return;
+        }
+        // auto: a container of uint16_t
+        clients = log_view_subscribes_.at(logspace_id);
+    }
+    Message response = MessageHelper::NewSharedLogOpResponse(
+        protocol::SharedLogResultType::METALOG_PROGRESS);
+    for (auto client_id : clients) {
+        SendLocalOpResponse(client_id, &response, indexed_metalog_progress);
     }
 }
 

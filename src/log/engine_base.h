@@ -70,6 +70,7 @@ protected:
         utils::AppendableBuffer data;
         int32_t log_dispatch_delay;
         bool set_aux_data_notify;   // Used by SET_AUXDATA
+        uint16_t view_id;   // Used by SETUP_VIEW
     };
 
     virtual void HandleLocalAppend(LocalOp* op) = 0;
@@ -77,6 +78,7 @@ protected:
     virtual void HandleLocalRead(LocalOp* op) = 0;
     virtual void HandleLocalSetAuxData(LocalOp* op) = 0;
     virtual void HandleLocalIPCBench(LocalOp* op) = 0;
+    virtual void HandleLocalSetupView(LocalOp* op) = 0;
 
     void LocalOpHandler(LocalOp* op);
 
@@ -86,6 +88,8 @@ protected:
     void PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
                           std::span<const char> aux_data);
 
+    bool SendLocalOpResponse(uint16_t client_id, protocol::Message* response,
+                                         uint64_t metalog_progress);
     void IntermediateLocalOpWithResponse(LocalOp* op, protocol::Message* response, 
                                          uint64_t metalog_progress);
     void FinishLocalOpWithResponse(LocalOp* op, protocol::Message* response,

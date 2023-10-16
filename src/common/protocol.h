@@ -111,6 +111,7 @@ enum class SharedLogOpType : uint16_t {
 
     RESPONSE           = 0x30,
     IPC_BENCH          = 0x31,
+    SETUP_VIEW         = 0x32,
 };
 
 class SharedLogOpTypeHelper {
@@ -158,11 +159,15 @@ enum class SharedLogResultType : uint16_t {
     DATA_LOST         = 0x43,  // Failed to extract log data
     TRIM_FAILED       = 0x44,
     IPC_BENCH_OK      = 0x45,
+
+    SETUP_VIEW_OK     = 0x46,
+    METALOG_PROGRESS  = 0x47,
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogLocalId = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
+constexpr uint16_t kInvalidLogViewId  = std::numeric_limits<uint16_t>::max();
 
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
@@ -192,8 +197,12 @@ struct Message {
         uint64_t log_localid;         // [8:16]  Used in SHARED_LOG_OP
     };
     int64_t send_timestamp;       // [16:24]
-    int32_t payload_size;         // [24:28] Used in HANDSHAKE_RESPONSE, INVOKE_FUNC,
-                                  //                 FUNC_CALL_COMPLETE, SHARED_LOG_OP
+
+    union {
+        uint32_t user_logspace;
+        int32_t payload_size;         // [24:28] Used in HANDSHAKE_RESPONSE, INVOKE_FUNC,
+                                      //                 FUNC_CALL_COMPLETE, SHARED_LOG_OP
+    };
     uint32_t flags;               // [28:32]
 
     struct {
@@ -206,8 +215,9 @@ struct Message {
     } __attribute__ ((packed));
 
     union {
+        uint16_t log_view_id;         // [36:38]  Used in SHARED_LOG_OP::SETUP_VIEW
         uint16_t log_num_tags;        // [36:38]
-        uint16_t log_index_engine_id; // Used only when cache miss
+        uint16_t log_index_engine_id; // Used in SHARED_LOG_OP::Readxxxx only when cache miss
     };
     uint16_t log_aux_data_size;   // [38:40]
 
@@ -524,22 +534,23 @@ public:
         return message;
     }
 
-    static Message NewSharedLogOpSucceeded(SharedLogResultType result,
-                                           uint64_t log_seqnum = kInvalidLogSeqNum) {
+    static Message NewSharedLogOpResponse(SharedLogResultType result) {
         NEW_EMPTY_MESSAGE(message);
         message.message_type = static_cast<uint16_t>(MessageType::SHARED_LOG_OP);
         message.log_op = static_cast<uint16_t>(SharedLogOpType::RESPONSE);
         message.log_result = static_cast<uint16_t>(result);
+        return message;
+    }
+
+    static Message NewSharedLogOpSucceeded(SharedLogResultType result,
+                                           uint64_t log_seqnum = kInvalidLogSeqNum) {
+        Message message = NewSharedLogOpResponse(result);
         message.log_seqnum = log_seqnum;
         return message;
     }
 
     static Message NewSharedLogOpFailed(SharedLogResultType result) {
-        NEW_EMPTY_MESSAGE(message);
-        message.message_type = static_cast<uint16_t>(MessageType::SHARED_LOG_OP);
-        message.log_op = static_cast<uint16_t>(SharedLogOpType::RESPONSE);
-        message.log_result = static_cast<uint16_t>(result);
-        return message;
+        return NewSharedLogOpResponse(result);
     }
 
 #undef NEW_EMPTY_MESSAGE
