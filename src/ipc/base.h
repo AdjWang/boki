@@ -23,19 +23,18 @@ std::string GetViewShmPath(uint16_t view_id);
 std::string GetLogSpaceHashMetaPath(std::string_view view_shm_path);
 std::string GetOrCreateCacheShmPath();
 std::string GetIndexSegmentName(uint32_t user_logspace, uint32_t logspace_id);
-bool CheckIndexMeta(uint32_t user_logspace, uint32_t logspace_id);
+std::string GetIndexSegmentFile(uint32_t user_logspace, uint32_t logspace_id);
+bool CheckIndexMetaFile(uint32_t user_logspace, uint32_t logspace_id);
 std::string GetOrCreateIndexMetaPath(uint32_t logspace_id);
 
-std::string GetIndexSegmentPath(std::string_view obj_name,
-                                uint32_t user_logspace, uint32_t logspace_id);
 std::string GetIndexSegmentObjectName(std::string_view obj_name,
                                       uint32_t user_logspace,
                                       uint32_t logspace_id);
 
 std::string GetCacheShmFile(uint32_t user_logspace);
 
-std::string GetIndexMutexName(uint32_t logspace_id);
-std::string GetCacheMutexName(uint32_t user_logspace);
+std::string GetIndexMutexFile(uint32_t logspace_id);
+std::string GetCacheMutexFile(uint32_t user_logspace);
 
 }  // namespace ipc
 }  // namespace faas

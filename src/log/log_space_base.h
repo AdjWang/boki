@@ -144,7 +144,7 @@ void LogSpaceCollection<T>::InstallSharedLogSpace(std::unique_ptr<T> log_space) 
     uint32_t identifier = log_space->identifier();
     DCHECK(active_log_spaces_.count(identifier) == 0);
     active_log_spaces_.insert(identifier);
-    std::string mu_name = ipc::GetIndexMutexName(identifier);
+    std::string mu_name = ipc::GetIndexMutexFile(identifier);
     log_spaces_[identifier] =
         LockablePtr<T>(std::move(log_space), mu_name);
 }

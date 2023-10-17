@@ -208,7 +208,7 @@ void Init(const char* ipc_root_path, int vlog_level) {
 }
 
 int CheckIndexData(uint32_t logspace_id, uint32_t user_logspace) {
-    if (!faas::ipc::CheckIndexMeta(user_logspace, logspace_id)) {
+    if (!faas::ipc::CheckIndexMetaFile(user_logspace, logspace_id)) {
         VLOG_F(1, "ConstructIndexData IndexMetaPath check failed "
                   "index user_logspace={:08X} logspace_id={:08X}",
                   user_logspace, logspace_id);
@@ -223,7 +223,7 @@ void* ConstructIndexData(uint64_t metalog_progress, uint32_t logspace_id,
     auto index_data = std::unique_ptr<faas::log::IndexDataManager>(
         new faas::log::IndexDataManager(logspace_id));
     index_data->LoadIndexData(user_logspace);
-    std::string mu_name = faas::ipc::GetIndexMutexName(logspace_id);
+    std::string mu_name = faas::ipc::GetIndexMutexFile(logspace_id);
     shared_index_t* lockable_index_data =
         new faas::LockablePtr(std::move(index_data), mu_name.c_str());
     return lockable_index_data;

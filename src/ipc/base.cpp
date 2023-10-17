@@ -98,20 +98,30 @@ std::string GetOrCreateCacheShmPath() {
 }
 
 std::string GetIndexSegmentName(uint32_t user_logspace, uint32_t logspace_id) {
-    return ipc::GetIndexSegmentPath("IndexShm", user_logspace, logspace_id);
+    return fmt::format("IndexShm_{}_{}", user_logspace, logspace_id);
+}
+std::string GetIndexSegmentFile(uint32_t user_logspace, uint32_t logspace_id) {
+    return fs_utils::JoinPath(GetOrCreateIndexMetaPath(logspace_id),
+                              GetIndexSegmentName(user_logspace, logspace_id));
 }
 
-bool CheckIndexMeta(uint32_t user_logspace, uint32_t logspace_id) {
+std::string GetIndexSegmentObjectName(std::string_view obj_name,
+                                      uint32_t user_logspace,
+                                      uint32_t logspace_id) {
+    return fmt::format("{}_{}_{}", obj_name, user_logspace, logspace_id);
+}
+
+bool CheckIndexMetaFile(uint32_t user_logspace, uint32_t logspace_id) {
     uint16_t view_id = bits::HighHalf32(logspace_id);
     std::string viewshm_path(ipc::GetViewShmPath(view_id));
     // should have been created when installing the view by engine
     if (!fs_utils::Exists(viewshm_path)) {
         return false;
     }
-    std::string indexshm_path(
+    std::string indexshm_file(
         fs_utils::JoinPath(viewshm_path, fmt::format("index_{}", logspace_id),
                            GetIndexSegmentName(user_logspace, logspace_id)));
-    return fs_utils::Exists(indexshm_path);
+    return fs_utils::Exists(indexshm_file);
 }
 
 std::string GetOrCreateIndexMetaPath(uint32_t logspace_id) {
@@ -131,35 +141,20 @@ std::string GetOrCreateIndexMetaPath(uint32_t logspace_id) {
     return indexshm_path;
 }
 
-std::string GetIndexSegmentPath(std::string_view obj_name,
-                                uint32_t user_logspace, uint32_t logspace_id) {
-    return fs_utils::JoinPath(
-        GetOrCreateIndexMetaPath(logspace_id),
-        fmt::format("{}_{}_{}", obj_name, user_logspace, logspace_id));
-}
-
-std::string GetIndexSegmentObjectName(std::string_view obj_name,
-                                      uint32_t user_logspace,
-                                      uint32_t logspace_id) {
-    return fmt::format("{}_{}_{}", obj_name, user_logspace, logspace_id);
-}
-
 std::string GetCacheShmFile(uint32_t user_logspace) {
     return fs_utils::JoinPath(GetOrCreateCacheShmPath(),
                               fmt::format("user_{}", user_logspace));
 }
 
-std::string GetIndexMutexName(uint32_t logspace_id) {
+std::string GetIndexMutexFile(uint32_t logspace_id) {
     return fs_utils::JoinPath(GetOrCreateIndexMetaPath(logspace_id),
                               fmt::format("index_mu_{}", logspace_id));
-    // return fmt::format("index_mu_{}", logspace_id);
 }
 
-std::string GetCacheMutexName(uint32_t user_logspace) {
+std::string GetCacheMutexFile(uint32_t user_logspace) {
     return fs_utils::JoinPath(
         GetOrCreateCacheShmPath(),
         fmt::format("SharedLRUCache_mu_{}", user_logspace));
-    // return fmt::format("SharedLRUCache_mu_{}", user_logspace);
 }
 
 }  // namespace ipc
