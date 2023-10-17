@@ -5,15 +5,15 @@
 namespace faas {
 namespace log {
 
-#define SHM_SEG_PATH(name) \
-    ipc::GetIndexSegmentPath(name, user_logspace_, logspace_id_).c_str()
+#define SHM_SEG_PATH \
+    ipc::GetIndexSegmentName(user_logspace_, logspace_id_).c_str()
 
 #define SHM_OBJECT_NAME(name) \
     ipc::GetIndexSegmentObjectName(name, user_logspace_, logspace_id_).c_str()
 
 // TODO: set index size in args
 #define ENGINE_SHM_INDEX_INITIALIZER_LIST                                       \
-    segment_(create_only, SHM_SEG_PATH("IndexShm"), 1000 * 1024 * 1024),         \
+    segment_(create_only, SHM_SEG_PATH, 1000 * 1024 * 1024),         \
     alloc_inst_(segment_.get_segment_manager()),                                \
     engine_ids_(segment_.construct<log_engine_id_map_t>                         \
         (SHM_OBJECT_NAME("EngineIdMap"))(0u, boost::hash<uint32_t>(),           \
@@ -31,7 +31,7 @@ namespace log {
                                          alloc_inst_))
 
 #define FAASFUNC_SHM_INDEX_INITIALIZER_LIST                                     \
-    segment_(open_only, SHM_SEG_PATH("IndexShm")),                              \
+    segment_(open_only, SHM_SEG_PATH),                              \
     engine_ids_(segment_.find<log_engine_id_map_t>                              \
         (SHM_OBJECT_NAME("EngineIdMap")).first),                                \
     seqnums_(segment_.find<log_stream_vec_t>                                    \
@@ -53,7 +53,7 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
 
 PerSpaceIndex::~PerSpaceIndex() {
 #if !defined(__COMPILE_AS_SHARED)
-    file_mapping::remove(SHM_SEG_PATH("IndexShm"));
+    file_mapping::remove(SHM_SEG_PATH);
 #endif
 }
 

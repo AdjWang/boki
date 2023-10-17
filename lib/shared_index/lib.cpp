@@ -204,10 +204,10 @@ void Init(const char* ipc_root_path, int vlog_level) {
 
 void* ConstructIndexData(uint64_t metalog_progress, uint32_t logspace_id,
                          uint32_t user_logspace) {
-    if (!faas::ipc::CheckIndexMetaPath(logspace_id)) {
+    if (!faas::ipc::CheckIndexMeta(user_logspace, logspace_id)) {
         VLOG_F(1, "ConstructIndexData IndexMetaPath check failed "
-                  "index logspace_id={:08X}",
-                  logspace_id);
+                  "index user_logspace={:08X} logspace_id={:08X}",
+                  user_logspace, logspace_id);
         return NULL;
     }
     auto index_data = std::unique_ptr<faas::log::IndexDataManager>(
