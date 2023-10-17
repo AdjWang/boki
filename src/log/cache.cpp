@@ -113,7 +113,7 @@ SharedLRUCache::SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
     DCHECK(lru_cache != nullptr);
     lockable_dbm_ = LockablePtr<boost::interprocess::LRUCache>(
         std::move(lru_cache),
-        ipc::GetCacheMutexName(user_logspace));
+        ipc::GetCacheMutexFile(user_logspace));
 }
 
 void SharedLRUCache::Put(const LogMetaData& log_metadata,

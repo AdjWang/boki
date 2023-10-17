@@ -5,15 +5,15 @@
 namespace faas {
 namespace log {
 
-#define SHM_SEG_PATH \
-    ipc::GetIndexSegmentName(user_logspace_, logspace_id_).c_str()
+#define SHM_SEG_FILE \
+    ipc::GetIndexSegmentFile(user_logspace_, logspace_id_).c_str()
 
 #define SHM_OBJECT_NAME(name) \
     ipc::GetIndexSegmentObjectName(name, user_logspace_, logspace_id_).c_str()
 
 // TODO: set index size in args
 #define ENGINE_SHM_INDEX_INITIALIZER_LIST                                       \
-    segment_(create_only, SHM_SEG_PATH, 1000 * 1024 * 1024),         \
+    segment_(create_only, SHM_SEG_FILE, 1000 * 1024 * 1024),         \
     alloc_inst_(segment_.get_segment_manager()),                                \
     engine_ids_(segment_.construct<log_engine_id_map_t>                         \
         (SHM_OBJECT_NAME("EngineIdMap"))(0u, boost::hash<uint32_t>(),           \
@@ -31,7 +31,7 @@ namespace log {
                                          alloc_inst_))
 
 #define FAASFUNC_SHM_INDEX_INITIALIZER_LIST                                     \
-    segment_(open_only, SHM_SEG_PATH),                              \
+    segment_(open_only, SHM_SEG_FILE),                              \
     engine_ids_(segment_.find<log_engine_id_map_t>                              \
         (SHM_OBJECT_NAME("EngineIdMap")).first),                                \
     seqnums_(segment_.find<log_stream_vec_t>                                    \
@@ -53,14 +53,14 @@ PerSpaceIndex::PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace)
 
 PerSpaceIndex::~PerSpaceIndex() {
 #if !defined(__COMPILE_AS_SHARED)
-    file_mapping::remove(SHM_SEG_PATH);
+    file_mapping::remove(SHM_SEG_FILE);
 #endif
 }
 
 #undef FAASFUNC_SHM_INDEX_INITALIZER_LIST
 #undef ENGINE_SHM_INDEX_INITALIZER_LIST
 #undef SHM_OBJECT_NAME
-#undef SHM_SEG_PATH
+#undef SHM_SEG_FILE
 
 #if !defined(__COMPILE_AS_SHARED)
 void PerSpaceIndex::Add(uint64_t localid, uint32_t seqnum_lowhalf, uint16_t engine_id,
@@ -424,8 +424,7 @@ PerSpaceIndex* IndexDataManager::GetOrCreateIndex(uint32_t user_logspace) {
     }
 #if defined(__COMPILE_AS_SHARED)
     // TODO: install view dynamically
-    std::string index_path = ipc::GetIndexSegmentPath("IndexShm", user_logspace, logspace_id_);
-    DCHECK(fs_utils::Exists(index_path)) << index_path;
+    DCHECK(ipc::CheckIndexMetaFile(user_logspace, logspace_id_));
     HVLOG_F(1, "Open index of user_logspace={}", user_logspace);
 #else
     HVLOG_F(1, "Create index of user_logspace={}", user_logspace);

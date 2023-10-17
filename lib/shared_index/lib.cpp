@@ -204,9 +204,19 @@ void Init(const char* ipc_root_path, int vlog_level) {
 
 void* ConstructIndexData(uint64_t metalog_progress, uint32_t logspace_id,
                          uint32_t user_logspace) {
-    if (!faas::ipc::CheckIndexMeta(user_logspace, logspace_id)) {
+    if (!faas::ipc::CheckIndexMetaFile(user_logspace, logspace_id)) {
+        // uint16_t view_id = faas::bits::HighHalf32(logspace_id);
+        // std::string viewshm_path(faas::ipc::GetViewShmPath(view_id));
+        // // should have been created when installing the view by engine
+        // bool view_exists = faas::fs_utils::Exists(viewshm_path);
+        // VLOG_F(1, "view_path={}|{}", viewshm_path, view_exists);
+        // std::string indexshm_path(
+        //     faas::fs_utils::JoinPath(viewshm_path, fmt::format("index_{}", logspace_id),
+        //                              faas::ipc::GetIndexSegmentName(user_logspace, logspace_id)));
+        // bool index_exists = faas::fs_utils::Exists(indexshm_path);
+        // VLOG_F(1, "index_path={}|{}", indexshm_path, index_exists);
         VLOG_F(1, "ConstructIndexData IndexMetaPath check failed "
-                  "index user_logspace={:08X} logspace_id={:08X}",
+                  "index user_logspace={:08X} logspace_id={:08X} ",
                   user_logspace, logspace_id);
         return NULL;
     }
@@ -220,7 +230,7 @@ void* ConstructIndexData(uint64_t metalog_progress, uint32_t logspace_id,
         return NULL;
     }
     index_data->LoadIndexData(user_logspace);
-    std::string mu_name = faas::ipc::GetIndexMutexName(logspace_id);
+    std::string mu_name = faas::ipc::GetIndexMutexFile(logspace_id);
     shared_index_t* lockable_index_data =
         new faas::LockablePtr(std::move(index_data), mu_name.c_str());
     return lockable_index_data;
