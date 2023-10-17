@@ -39,10 +39,9 @@ func TestBinding() {
 //     -> unknown view_id: turn to 2
 type IndexPool map[ /*logspaceId*/ uint32]*IndexData
 type ViewManager struct {
-	UserLogSpace uint32
-
-	mu       sync.Mutex
-	viewPool map[ /*viewId*/ uint16]IndexPool
+	mu           sync.Mutex
+	viewPool     map[ /*viewId*/ uint16]IndexPool
+	userLogSpace uint32
 }
 
 var (
@@ -54,25 +53,31 @@ var (
 func NewViewManager() *ViewManager {
 	return &ViewManager{
 		mu:           sync.Mutex{},
-		UserLogSpace: protocol.InvalidUserLogspace,
+		userLogSpace: protocol.InvalidUserLogspace,
 		viewPool:     make(map[uint16]IndexPool),
 	}
+}
+
+func (view *ViewManager) SetUserLogSpace(userLogSpace uint32) {
+	view.mu.Lock()
+	defer view.mu.Unlock()
+	view.userLogSpace = userLogSpace
 }
 
 func (view *ViewManager) LoadIndexData(logSpaceId uint32) (*IndexData, error) {
 	view.mu.Lock()
 	defer view.mu.Unlock()
 
-	if view.UserLogSpace == protocol.InvalidUserLogspace {
+	if view.userLogSpace == protocol.InvalidUserLogspace {
 		return nil, ViewManagerErr_InvalidUser
 	}
 
 	if logSpaceId == 0 || logSpaceId == protocol.InvalidLogSpaceId {
-		logSpaceId = uint32(C.GetLogSpaceIdentifier(C.uint(view.UserLogSpace)))
+		logSpaceId = uint32(C.GetLogSpaceIdentifier(C.uint(view.userLogSpace)))
 	}
-	ret := int(C.CheckIndexData(C.uint(logSpaceId), C.uint(view.UserLogSpace)))
+	ret := int(C.CheckIndexData(C.uint(logSpaceId), C.uint(view.userLogSpace)))
 	if ret == -1 {
-		return nil, errors.Wrapf(ViewManagerErr_IndexNotExist, "logSpaceId=%08X, userLogSpace=%08X", logSpaceId, view.UserLogSpace)
+		return nil, errors.Wrapf(ViewManagerErr_IndexNotExist, "logSpaceId=%08X, userLogSpace=%08X", logSpaceId, view.userLogSpace)
 	} else if ret != 0 {
 		panic("unreachable")
 	}
@@ -84,7 +89,7 @@ func (view *ViewManager) LoadIndexData(logSpaceId uint32) (*IndexData, error) {
 	if indexData, ok := view.viewPool[viewId][logSpaceId]; ok {
 		return indexData, nil
 	}
-	indexData, err := constructIndexData(0 /*metalogProgress(DEPRECATED)*/, logSpaceId, view.UserLogSpace)
+	indexData, err := constructIndexData(0 /*metalogProgress(DEPRECATED)*/, logSpaceId, view.userLogSpace)
 	if err != nil {
 		return nil, errors.Wrap(ViewManagerErr_ConstructIndexFailed, err.Error())
 	}

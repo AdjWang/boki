@@ -1117,57 +1117,58 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 	direction := 1
 	engineId := uint16(0)
 	querySeqnum := seqNum
-	// // STAT
-	// ts := common.GetMonotonicMicroTimestamp()
-	// // local read
-	// indexData, err := viewManager.LoadIndexData(w.metalogProgress, seqNum)
-	// // STAT
-	// w.logReadStatMu.Lock()
-	// w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	// w.logReadStatMu.Unlock()
+	// STAT
+	ts := common.GetMonotonicMicroTimestamp()
+	// local read
+	indexData, err := w.getOrCreateIndexData(ctx, seqNum)
+	// STAT
+	w.logReadStatMu.Lock()
+	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	w.logReadStatMu.Unlock()
 
-	// if err == nil {
-	// 	response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
-	// 	if err == nil {
-	// 		// STAT
-	// 		defer func() {
-	// 			w.logReadStatMu.Lock()
-	// 			defer w.logReadStatMu.Unlock()
-	// 			w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	// 		}()
-	// 		if response == nil { // EMPTY
-	// 			return nil, nil
-	// 		} else {
-	// 			result := protocol.GetSharedLogResultTypeFromMessage(response)
-	// 			if result == protocol.SharedLogResultType_READ_OK {
-	// 				return buildLogEntryFromReadResponse(response), nil
-	// 			} else {
-	// 				return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
-	// 			}
-	// 		}
-	// 	} else if errors.Is(err, ipc.IndexQueryErr_CacheMiss) {
-	// 		// STAT
-	// 		defer func() {
-	// 			w.logReadStatMu.Lock()
-	// 			defer w.logReadStatMu.Unlock()
-	// 			w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	// 		}()
-	// 		engineId = protocol.GetIndexEngineIdFromMessage(response)
-	// 		querySeqnum = protocol.GetLogSeqNumFromMessage(response)
-	// 		direction = 0
-	// 	} else {
-	// 		// STAT
-	// 		defer func() {
-	// 			w.logReadStatMu.Lock()
-	// 			defer w.logReadStatMu.Unlock()
-	// 			w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	// 		}()
+	if err == nil {
+		responsePair := <-indexData.LogReadNext(w.metalogProgress, seqNum, tag)
+		response, err := responsePair.Response, responsePair.Err
+		if err == nil {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
+			if response == nil { // EMPTY
+				return nil, nil
+			} else {
+				result := protocol.GetSharedLogResultTypeFromMessage(response)
+				if result == protocol.SharedLogResultType_READ_OK {
+					return buildLogEntryFromReadResponse(response), nil
+				} else {
+					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+				}
+			}
+		} else if errors.Is(err, ipc.IndexQueryErr_CacheMiss) {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
+			engineId = protocol.GetIndexEngineIdFromMessage(response)
+			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+			direction = 0
+		} else {
+			// STAT
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
 
-	// 		log.Printf("[WARN] Local LogReadNext failed: %v", err)
-	// 	}
-	// } else {
-	// 	log.Printf("[WARN] LoadIndexData failed: %v", err)
-	// }
+			log.Printf("[WARN] Local LogReadNext failed: %v", err)
+		}
+	} else if !errors.Is(err, ipc.ViewManagerErr_IndexNotExist) {
+		return nil, err
+	}
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
@@ -1447,7 +1448,7 @@ func (w *FuncWorker) SharedLogSetupView(ctx context.Context, viewId uint16) erro
 		return fmt.Errorf("Failed to get setup view response, got=%d", result)
 	}
 	userLogSpace := protocol.GetUserLogspaceFromMessage(response)
-	atomic.StoreUint32(&viewManager.UserLogSpace, userLogSpace)
+	viewManager.SetUserLogSpace(userLogSpace)
 	log.Printf("[DEBUG] SetupView for user %d", userLogSpace)
 	return nil
 }
