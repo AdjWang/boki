@@ -139,6 +139,8 @@ type opsEntry struct {
 	querySeqNum uint64
 	seqNum      uint64
 	opObjName   string
+	delay       int64
+	statHint    int
 }
 type syncToInspector struct {
 	readCount  int
@@ -172,12 +174,21 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector
 		seqNum := txnCommitLog.seqNum
 		for seqNum > txnCommitLog.TxnId {
 			querySeqNum := seqNum - 1
-			logEntry, err := env.faasEnv.SharedLogReadPrev(env.faasCtx, tag, querySeqNum)
+			readStart := time.Now()
+			logEntry, statHint, err := env.faasEnv.SharedLogReadPrevStat(env.faasCtx, tag, querySeqNum)
 			if err != nil {
 				return false, newRuntimeError(err.Error())
 			}
 			if inspector != nil {
 				inspector.txnReadCount++
+				inspector.ops = append(inspector.ops, opsEntry{
+					stackDepth:  depth,
+					querySeqNum: querySeqNum,
+					seqNum:      seqNum,
+					opObjName:   op.ObjName,
+					delay:       time.Since(readStart).Microseconds(),
+					statHint:    statHint,
+				})
 			}
 			if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
 				break
@@ -186,12 +197,6 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector
 			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
 			if inspector != nil {
 				inspector.txnApplyCount++
-				inspector.ops = append(inspector.ops, opsEntry{
-					stackDepth:  depth,
-					querySeqNum: querySeqNum,
-					seqNum:      seqNum,
-					opObjName:   op.ObjName,
-				})
 			}
 
 			objectLog := decodeLogEntry(logEntry)

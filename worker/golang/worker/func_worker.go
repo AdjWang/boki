@@ -1241,6 +1241,73 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, querySeqnum, engineId, direction, false /* block */, id)
 	return w.sharedLogReadCommon(ctx, message, id)
 }
+func (w *FuncWorker) SharedLogReadPrevStat(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, int, error) {
+	direction := -1
+	engineId := uint16(0)
+	querySeqnum := seqNum
+	statVal := 0
+	// STAT
+	ts := common.GetMonotonicMicroTimestamp()
+	// local read
+	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+	// STAT
+	w.logReadStatMu.Lock()
+	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+	w.logReadStatMu.Unlock()
+	if err == nil {
+		response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+		if err == nil {
+			// STAT
+			statVal = 0
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
+			if response == nil { // EMPTY
+				return nil, statVal, nil
+			} else {
+				result := protocol.GetSharedLogResultTypeFromMessage(response)
+				if result == protocol.SharedLogResultType_READ_OK {
+					return buildLogEntryFromReadResponse(response), statVal, nil
+				} else {
+					return nil, statVal, fmt.Errorf("Failed to read log: 0x%02X", result)
+				}
+			}
+		} else if errors.Is(err, ipc.Err_CacheMiss) {
+			// STAT
+			statVal = -1
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
+			engineId = protocol.GetIndexEngineIdFromMessage(response)
+			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+			direction = 0
+		} else {
+			// STAT
+			statVal = -2
+			defer func() {
+				w.logReadStatMu.Lock()
+				defer w.logReadStatMu.Unlock()
+				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+			}()
+
+			log.Printf("[WARN] Local LogReadNext failed: %v", err)
+		}
+	} else {
+		statVal = -3
+		log.Printf("[WARN] LoadIndexData failed: %v", err)
+	}
+	// remote read
+	id := atomic.AddUint64(&w.nextLogOpId, 1)
+	currentCallId := atomic.LoadUint64(&w.currentCall)
+	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
+	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, querySeqnum, engineId, direction, false /* block */, id)
+	logEntry, err := w.sharedLogReadCommon(ctx, message, id)
+	return logEntry, statVal, err
+}
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
