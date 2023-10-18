@@ -20,6 +20,7 @@ import (
 	config "cs.utexas.edu/zjia/faas/config"
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
+	slib "cs.utexas.edu/zjia/faas/slib/common"
 	types "cs.utexas.edu/zjia/faas/types"
 	"cs.utexas.edu/zjia/faas/utils"
 )
@@ -789,6 +790,12 @@ func checkAndDuplicateTagsById(tags []types.Tag) ([]types.Tag, error) {
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []byte) (uint64, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "Append", latency)
+	}()
+
 	if len(data) == 0 {
 		return 0, fmt.Errorf("data cannot be empty")
 	}
@@ -1108,6 +1115,12 @@ func (w *FuncWorker) GenerateUniqueID() uint64 {
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "ReadNext", latency)
+	}()
+
 	direction := 1
 	engineId := uint16(0)
 	querySeqnum := seqNum
@@ -1172,6 +1185,12 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "ReadNextBlock", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
@@ -1181,6 +1200,12 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "ReadPrev", latency)
+	}()
+
 	direction := -1
 	engineId := uint16(0)
 	querySeqnum := seqNum
@@ -1242,6 +1267,12 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	return w.sharedLogReadCommon(ctx, message, id)
 }
 func (w *FuncWorker) SharedLogReadPrevStat(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, int, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "ReadPrev", latency)
+	}()
+
 	direction := -1
 	engineId := uint16(0)
 	querySeqnum := seqNum
