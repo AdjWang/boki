@@ -7,7 +7,7 @@
 #include "common/stat.h"
 
 static absl::Mutex g_cache_mu;
-static std::atomic<faas::log::SharedLRUCache*> g_cache = NULL;
+static std::optional<faas::LockablePtr<faas::log::SharedLRUCache>> g_cache = std::nullopt;
 
 static absl::Mutex g_hash_meta_cache_mu;
 static absl::flat_hash_map<
@@ -29,39 +29,49 @@ static faas::stat::StatisticsCollector<int32_t> index_lock_stat_(
         faas::stat::StatisticsCollector<int32_t>::StandardReportCallback(
             "index_lock"));
 
-static faas::log::SharedLRUCache* GetOrCreateCache(uint32_t user_logspace) {
-    if (g_cache.load() != NULL) {
-        return g_cache.load();
+static std::optional<faas::LockablePtr<faas::log::SharedLRUCache>>
+GetOrLoadCache(uint32_t user_logspace) {
+    if (g_cache.has_value()) {
+        return g_cache.value();
     } else {
         absl::MutexLock lk(&g_cache_mu);
-        if (g_cache.load() != NULL) {
-            return g_cache.load();
+        if (g_cache.has_value()) {
+            return g_cache.value();
         }
         std::string shared_cache_path = faas::ipc::GetCacheShmFile(user_logspace);
         if (!faas::fs_utils::Exists(shared_cache_path)) {
-            return NULL;
+            return std::nullopt;
         }
-        g_cache.store(new faas::log::SharedLRUCache(
-            user_logspace, /*mem_cap_mb*/ -1, shared_cache_path.c_str()));
-        return g_cache.load();
+        std::unique_ptr<faas::log::SharedLRUCache> single_user_cache(
+            new faas::log::SharedLRUCache(user_logspace, /*mem_cap_mb*/ -1,
+                                          shared_cache_path));
+        g_cache = faas::LockablePtr<faas::log::SharedLRUCache>(
+            std::move(single_user_cache),
+            faas::ipc::GetCacheMutexFile(user_logspace));
+        return g_cache;
     }
 }
 
 static std::optional<faas::protocol::Message> TryGetCache(uint32_t user_logspace,
                                                           uint64_t metalog_progress,
                                                           uint64_t seqnum) {
-    faas::log::SharedLRUCache* log_cache = GetOrCreateCache(user_logspace);
-    if (__FAAS_PREDICT_FALSE(log_cache == NULL)) {
+    auto lockable_cache = GetOrLoadCache(user_logspace);
+    if (__FAAS_PREDICT_FALSE(!lockable_cache.has_value())) {
         return std::nullopt;
     }
-    auto cached_log_entry = log_cache->Get(seqnum);
-    if (!cached_log_entry.has_value()) {
-        return std::nullopt;
+    std::optional<faas::log::LogEntry> cached_log_entry = std::nullopt;
+    std::optional<std::string> cached_aux_data = std::nullopt;
+    {
+        auto log_cache = lockable_cache.value().Lock();
+        cached_log_entry = log_cache->Get(seqnum);
+        if (!cached_log_entry.has_value()) {
+            return std::nullopt;
+        }
+        // Cache hits
+        VLOG_F(1, "Cache hits for log entry seqnum={:016X}", seqnum);
+        cached_aux_data = log_cache->GetAuxData(seqnum);
     }
-    // Cache hits
-    VLOG_F(1, "Cache hits for log entry seqnum={:016X}", seqnum);
     const faas::log::LogEntry& log_entry = cached_log_entry.value();
-    std::optional<std::string> cached_aux_data = log_cache->GetAuxData(seqnum);
     std::span<const char> aux_data;
     if (cached_aux_data.has_value()) {
         size_t full_size = log_entry.data.size()
@@ -471,9 +481,10 @@ int LogReadPrev(void* index_data, uint64_t metalog_progress,
 int SetAuxData(uint32_t user_logspace, uint64_t seqnum, void* data, size_t len) {
     DCHECK(data != nullptr);
     DCHECK_GT(len, 0u);
-    faas::log::SharedLRUCache* log_cache = GetOrCreateCache(user_logspace);
-    if (log_cache != NULL) {
-        log_cache->PutAuxData(
+    auto lockable_cache = GetOrLoadCache(user_logspace);
+    if (lockable_cache.has_value()) {
+        auto cache = lockable_cache.value().Lock();
+        cache->PutAuxData(
             seqnum,
             std::span<const char>(reinterpret_cast<const char*>(data), len));
         return APIReturnValue::AuxDataSetOK;

@@ -303,10 +303,9 @@ class SharedLRUCache {
 public:
     explicit SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
                             std::string_view path);
-    SharedLRUCache(SharedLRUCache&& other)
-    : cache_lock_stat_(std::move(other.cache_lock_stat_)) {
+    SharedLRUCache(SharedLRUCache&& other) {
         log_header_ = std::move(other.log_header_);
-        lockable_dbm_ = std::move(other.lockable_dbm_);
+        dbm_ = std::move(other.dbm_);
     }
 
     void Put(const LogMetaData& log_metadata, std::span<const uint64_t> user_tags,
@@ -318,107 +317,23 @@ public:
 
 private:
     std::string log_header_;
-    LockablePtr<boost::interprocess::LRUCache> lockable_dbm_;
-#if !defined(__FAAS_DISABLE_STAT)
-    stat::StatisticsCollector<int32_t> cache_lock_stat_;
-#endif
+    std::unique_ptr<boost::interprocess::LRUCache> dbm_;
+//     LockablePtr<boost::interprocess::LRUCache> lockable_dbm_;
+// #if !defined(__FAAS_DISABLE_STAT)
+//     stat::StatisticsCollector<int32_t> cache_lock_stat_;
+// #endif
 
     DISALLOW_COPY_AND_ASSIGN(SharedLRUCache);
 };
 
 
-template<class TCache>
-class CacheManager {
-public:
-    CacheManager(bool enable, int capacity)
-    : log_header_("CacheManager"),
-      enable_cache_(enable),
-      cap_per_user_(capacity) {}
-
-    void Put(const LogMetaData& log_metadata,
-             std::span<const uint64_t> user_tags,
-             std::span<const char> log_data) {
-        if (!enable_cache_) {
-            return;
-        }
-        HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
-        uint32_t user_logspace = log_metadata.user_logspace;
-        auto& cache = GetOrCreateCache(user_logspace);
-        cache.Put(log_metadata, user_tags, log_data);
-    }
-
-    std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum) {
-        if (!enable_cache_) {
-            return std::nullopt;
-        }
-        const auto& cache = GetCache(user_logspace);
-        if (cache.has_value()) {
-            return cache.value().get().Get(seqnum);
-        } else {
-            return std::nullopt;
-        }
-    }
-    void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data) {
-        if (!enable_cache_) {
-            return;
-        }
-        auto& cache = GetOrCreateCache(user_logspace);
-        cache.PutAuxData(seqnum, data);
-    }
-
-    std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum) {
-        if (!enable_cache_) {
-            return std::nullopt;
-        }
-        const auto& cache = GetCache(user_logspace);
-        if (cache.has_value()) {
-            return cache.value().get().GetAuxData(seqnum);
-        } else {
-            return std::nullopt;
-        }
-    }
-
-private:
-    std::string log_header_;
-    bool enable_cache_;
-    int cap_per_user_;
-
-    absl::Mutex cache_map_mu_;
-    absl::flat_hash_map<uint32_t /*user_logspace*/, TCache> log_caches_
-        ABSL_GUARDED_BY(cache_map_mu_);
-
-    std::optional<std::reference_wrapper<TCache>> GetCache(uint32_t user_logspace) {
-        absl::ReaderMutexLock rlk(&cache_map_mu_);
-        if (!log_caches_.contains(user_logspace)) {
-            return std::nullopt;
-        }
-        return std::optional<std::reference_wrapper<TCache>>(log_caches_.at(user_logspace));
-    }
-
-    TCache& GetOrCreateCache(uint32_t user_logspace) {
-        absl::MutexLock lk(&cache_map_mu_);
-        // TODO: isolate by users
-        if (log_caches_.contains(user_logspace)) {
-            return log_caches_.at(user_logspace);
-        } else {
-            log_caches_.emplace(
-                std::piecewise_construct, std::forward_as_tuple(user_logspace),
-                std::forward_as_tuple(user_logspace, cap_per_user_,
-                                      ipc::GetCacheShmFile(user_logspace).c_str()));
-            return log_caches_.at(user_logspace);
-        }
-    }
-};
-
-// template<class SharedLRUCache>
+// template<class TCache>
 // class CacheManager {
 // public:
 //     CacheManager(bool enable, int capacity)
 //     : log_header_("CacheManager"),
 //       enable_cache_(enable),
-//       cap_per_user_(capacity),
-//       cache_(/*user_logspace*/0u, cap_per_user_,
-//              ipc::GetCacheShmFile(/*user_logspace*/0u).c_str()) {}
+//       cap_per_user_(capacity) {}
 
 //     void Put(const LogMetaData& log_metadata,
 //              std::span<const uint64_t> user_tags,
@@ -428,40 +343,162 @@ private:
 //         }
 //         HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
 //         uint32_t user_logspace = log_metadata.user_logspace;
-//         DCHECK_EQ(user_logspace, 0u);
-//         cache_.Put(log_metadata, user_tags, log_data);
+//         auto& cache = GetOrCreateCache(user_logspace);
+//         cache.Put(log_metadata, user_tags, log_data);
 //     }
 
 //     std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum) {
 //         if (!enable_cache_) {
 //             return std::nullopt;
 //         }
-//         DCHECK_EQ(user_logspace, 0u);
-//         return cache_.Get(seqnum);
+//         const auto& cache = GetCache(user_logspace);
+//         if (cache.has_value()) {
+//             return cache.value().get().Get(seqnum);
+//         } else {
+//             return std::nullopt;
+//         }
 //     }
 //     void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data) {
 //         if (!enable_cache_) {
 //             return;
 //         }
-//         DCHECK_EQ(user_logspace, 0u);
-//         cache_.PutAuxData(seqnum, data);
+//         auto& cache = GetOrCreateCache(user_logspace);
+//         cache.PutAuxData(seqnum, data);
 //     }
 
 //     std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum) {
 //         if (!enable_cache_) {
 //             return std::nullopt;
 //         }
-//         DCHECK_EQ(user_logspace, 0u);
-//         return cache_.GetAuxData(seqnum);
-//     }
+//         const auto& cache = GetCache(user_logspace);
+//         if (cache.has_value()) {
+//             return cache.value().get().GetAuxData(seqnum);
+//         } else {
+//             return std::nullopt;
+//         }
+//     // }
 
 // private:
 //     std::string log_header_;
 //     bool enable_cache_;
 //     int cap_per_user_;
 
-//     SharedLRUCache cache_;
+//     absl::Mutex cache_map_mu_;
+//     absl::flat_hash_map<uint32_t /*user_logspace*/, TCache> log_caches_
+//         ABSL_GUARDED_BY(cache_map_mu_);
+
+//     std::optional<std::reference_wrapper<TCache>> GetCache(uint32_t user_logspace) {
+//         absl::ReaderMutexLock rlk(&cache_map_mu_);
+//         if (!log_caches_.contains(user_logspace)) {
+//             return std::nullopt;
+//         }
+//         return std::optional<std::reference_wrapper<TCache>>(log_caches_.at(user_logspace));
+//     }
+
+//     TCache& GetOrCreateCache(uint32_t user_logspace) {
+//         absl::MutexLock lk(&cache_map_mu_);
+//         // TODO: isolate by users
+//         if (log_caches_.contains(user_logspace)) {
+//             return log_caches_.at(user_logspace);
+//         } else {
+//             log_caches_.emplace(
+//                 std::piecewise_construct, std::forward_as_tuple(user_logspace),
+//                 std::forward_as_tuple(user_logspace, cap_per_user_,
+//                                       ipc::GetCacheShmFile(user_logspace).c_str()));
+//             return log_caches_.at(user_logspace);
+//         }
+//     }
 // };
+
+class CacheManager {
+public:
+    CacheManager(bool enable, int capacity)
+    : log_header_("CacheManager"),
+      enable_cache_(enable),
+      cap_per_user_(capacity) {}
+
+    // void Put(const LogMetaData& log_metadata,
+    //          std::span<const uint64_t> user_tags,
+    //          std::span<const char> log_data) {
+    //     if (!enable_cache_) {
+    //         return;
+    //     }
+    //     HVLOG_F(1, "Store cache for log entry seqnum={:016X}", log_metadata.seqnum);
+    //     uint32_t user_logspace = log_metadata.user_logspace;
+    //     DCHECK_EQ(user_logspace, 0u);
+    //     auto cache = GetOrCreateCache(user_logspace).Lock();
+    //     cache->Put(log_metadata, user_tags, log_data);
+    // }
+
+    // std::optional<LogEntry> Get(uint32_t user_logspace, uint64_t seqnum) {
+    //     if (!enable_cache_) {
+    //         return std::nullopt;
+    //     }
+    //     DCHECK_EQ(user_logspace, 0u);
+    //     auto lockable_cache = GetCache(user_logspace);
+    //     if (!lockable_cache.has_value()) {
+    //         return std::nullopt;
+    //     }
+    //     auto cache = lockable_cache.value().Lock();
+    //     return cache->Get(seqnum);
+    // }
+    // void PutAuxData(uint32_t user_logspace, uint64_t seqnum, std::span<const char> data) {
+    //     if (!enable_cache_) {
+    //         return;
+    //     }
+    //     DCHECK_EQ(user_logspace, 0u);
+    //     auto cache = GetOrCreateCache(user_logspace).Lock();
+    //     cache->PutAuxData(seqnum, data);
+    // }
+
+    // std::optional<std::string> GetAuxData(uint32_t user_logspace, uint64_t seqnum) {
+    //     if (!enable_cache_) {
+    //         return std::nullopt;
+    //     }
+    //     DCHECK_EQ(user_logspace, 0u);
+    //     auto lockable_cache = GetCache(user_logspace);
+    //     if (!lockable_cache.has_value()) {
+    //         return std::nullopt;
+    //     }
+    //     auto cache = lockable_cache.value().Lock();
+    //     return cache->GetAuxData(seqnum);
+    // }
+
+    std::optional<LockablePtr<SharedLRUCache>> GetCache(uint32_t user_logspace) {
+        absl::ReaderMutexLock rlk(&cache_map_mu_);
+        if (!log_caches_.contains(user_logspace)) {
+            return std::nullopt;
+        }
+        return std::optional<LockablePtr<SharedLRUCache>>(
+            log_caches_.at(user_logspace));
+    }
+
+    LockablePtr<SharedLRUCache>& GetOrCreateCache(uint32_t user_logspace) {
+        absl::MutexLock lk(&cache_map_mu_);
+        if (log_caches_.contains(user_logspace)) {
+            return log_caches_.at(user_logspace);
+        } else {
+            std::unique_ptr<SharedLRUCache> single_user_cache(
+                new SharedLRUCache(user_logspace, cap_per_user_,
+                                   ipc::GetCacheShmFile(user_logspace)));
+            log_caches_.emplace(
+                std::piecewise_construct, std::forward_as_tuple(user_logspace),
+                std::forward_as_tuple(LockablePtr<SharedLRUCache>(
+                    std::move(single_user_cache),
+                    ipc::GetCacheMutexFile(user_logspace))));
+            return log_caches_.at(user_logspace);
+        }
+    }
+
+private:
+    std::string log_header_;
+    bool enable_cache_;
+    int cap_per_user_;
+
+    absl::Mutex cache_map_mu_;
+    absl::flat_hash_map<uint32_t /*user_logspace*/, LockablePtr<SharedLRUCache>> log_caches_
+        ABSL_GUARDED_BY(cache_map_mu_);
+};
 
 }  // namespace log
 }  // namespace faas
