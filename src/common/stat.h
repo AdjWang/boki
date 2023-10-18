@@ -19,6 +19,10 @@ public:
         set_report_interval_in_ms(report_interval_in_ms);
         last_report_time_ = -1;
     }
+    ReportTimer(ReportTimer&& other)
+    : report_interval_in_ms_(other.report_interval_in_ms_),
+      last_report_time_(other.last_report_time_) {}
+
     ~ReportTimer() {}
 
     void set_report_interval_in_ms(uint32_t value) {
@@ -87,6 +91,13 @@ public:
         : min_report_samples_(kDefaultMinReportSamples),
           report_callback_(report_callback),
           force_enabled_(false) {}
+    StatisticsCollector(StatisticsCollector&& other)
+    : min_report_samples_(other.min_report_samples_),
+      report_callback_(other.report_callback_),
+      force_enabled_(other.force_enabled_),
+      report_timer_(std::move(other.report_timer_)),
+      samples_(std::move(other.samples_))
+    {}
 
     ~StatisticsCollector() {}
 

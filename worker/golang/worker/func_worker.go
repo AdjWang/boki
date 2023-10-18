@@ -66,6 +66,10 @@ func hexBytes2String(data []byte) string {
 
 // region end
 
+// TODO: read as a flag
+const ENABLE_LOCAL_READ = true
+const ENABLE_LOCAL_CACHE = true
+
 const PIPE_BUF = 4096
 
 var indexDataManagerInitializer sync.Once
@@ -1124,56 +1128,58 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 	direction := 1
 	engineId := uint16(0)
 	querySeqnum := seqNum
-	// STAT
-	ts := common.GetMonotonicMicroTimestamp()
-	// local read
-	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-	// STAT
-	w.logReadStatMu.Lock()
-	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	w.logReadStatMu.Unlock()
+	if ENABLE_LOCAL_READ {
+		// STAT
+		ts := common.GetMonotonicMicroTimestamp()
+		// local read
+		indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+		// STAT
+		w.logReadStatMu.Lock()
+		w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+		w.logReadStatMu.Unlock()
 
-	if err == nil {
-		response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
 		if err == nil {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			if response == nil { // EMPTY
-				return nil, nil
-			} else {
-				result := protocol.GetSharedLogResultTypeFromMessage(response)
-				if result == protocol.SharedLogResultType_READ_OK {
-					return buildLogEntryFromReadResponse(response), nil
+			response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
+			if err == nil {
+				// STAT
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
+				if response == nil { // EMPTY
+					return nil, nil
 				} else {
-					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+					result := protocol.GetSharedLogResultTypeFromMessage(response)
+					if result == protocol.SharedLogResultType_READ_OK {
+						return buildLogEntryFromReadResponse(response), nil
+					} else {
+						return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+					}
 				}
-			}
-		} else if errors.Is(err, ipc.Err_CacheMiss) {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			engineId = protocol.GetIndexEngineIdFromMessage(response)
-			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
-			direction = 0
-		} else {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
+			} else if errors.Is(err, ipc.Err_CacheMiss) {
+				// STAT
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
+				engineId = protocol.GetIndexEngineIdFromMessage(response)
+				querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+				direction = 0
+			} else {
+				// STAT
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
 
-			log.Printf("[WARN] Local LogReadNext failed: %v", err)
+				log.Printf("[WARN] Local LogReadNext failed: %v", err)
+			}
+		} else {
+			log.Printf("[WARN] LoadIndexData failed: %v", err)
 		}
-	} else {
-		log.Printf("[WARN] LoadIndexData failed: %v", err)
 	}
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
@@ -1209,55 +1215,57 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 	direction := -1
 	engineId := uint16(0)
 	querySeqnum := seqNum
-	// STAT
-	ts := common.GetMonotonicMicroTimestamp()
-	// local read
-	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-	// STAT
-	w.logReadStatMu.Lock()
-	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	w.logReadStatMu.Unlock()
-	if err == nil {
-		response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+	if ENABLE_LOCAL_READ {
+		// STAT
+		ts := common.GetMonotonicMicroTimestamp()
+		// local read
+		indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+		// STAT
+		w.logReadStatMu.Lock()
+		w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+		w.logReadStatMu.Unlock()
 		if err == nil {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			if response == nil { // EMPTY
-				return nil, nil
-			} else {
-				result := protocol.GetSharedLogResultTypeFromMessage(response)
-				if result == protocol.SharedLogResultType_READ_OK {
-					return buildLogEntryFromReadResponse(response), nil
+			response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+			if err == nil {
+				// STAT
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
+				if response == nil { // EMPTY
+					return nil, nil
 				} else {
-					return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+					result := protocol.GetSharedLogResultTypeFromMessage(response)
+					if result == protocol.SharedLogResultType_READ_OK {
+						return buildLogEntryFromReadResponse(response), nil
+					} else {
+						return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+					}
 				}
-			}
-		} else if errors.Is(err, ipc.Err_CacheMiss) {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			engineId = protocol.GetIndexEngineIdFromMessage(response)
-			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
-			direction = 0
-		} else {
-			// STAT
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
+			} else if errors.Is(err, ipc.Err_CacheMiss) {
+				// STAT
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
+				engineId = protocol.GetIndexEngineIdFromMessage(response)
+				querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+				direction = 0
+			} else {
+				// STAT
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
 
-			log.Printf("[WARN] Local LogReadNext failed: %v", err)
+				log.Printf("[WARN] Local LogReadNext failed: %v", err)
+			}
+		} else {
+			log.Printf("[WARN] LoadIndexData failed: %v", err)
 		}
-	} else {
-		log.Printf("[WARN] LoadIndexData failed: %v", err)
 	}
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
@@ -1277,59 +1285,61 @@ func (w *FuncWorker) SharedLogReadPrevStat(ctx context.Context, tag uint64, seqN
 	engineId := uint16(0)
 	querySeqnum := seqNum
 	statVal := 0
-	// STAT
-	ts := common.GetMonotonicMicroTimestamp()
-	// local read
-	indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-	// STAT
-	w.logReadStatMu.Lock()
-	w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-	w.logReadStatMu.Unlock()
-	if err == nil {
-		response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+	if ENABLE_LOCAL_READ {
+		// STAT
+		ts := common.GetMonotonicMicroTimestamp()
+		// local read
+		indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
+		// STAT
+		w.logReadStatMu.Lock()
+		w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+		w.logReadStatMu.Unlock()
 		if err == nil {
-			// STAT
-			statVal = 0
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			if response == nil { // EMPTY
-				return nil, statVal, nil
-			} else {
-				result := protocol.GetSharedLogResultTypeFromMessage(response)
-				if result == protocol.SharedLogResultType_READ_OK {
-					return buildLogEntryFromReadResponse(response), statVal, nil
+			response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
+			if err == nil {
+				// STAT
+				statVal = 0
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
+				if response == nil { // EMPTY
+					return nil, statVal, nil
 				} else {
-					return nil, statVal, fmt.Errorf("Failed to read log: 0x%02X", result)
+					result := protocol.GetSharedLogResultTypeFromMessage(response)
+					if result == protocol.SharedLogResultType_READ_OK {
+						return buildLogEntryFromReadResponse(response), statVal, nil
+					} else {
+						return nil, statVal, fmt.Errorf("Failed to read log: 0x%02X", result)
+					}
 				}
-			}
-		} else if errors.Is(err, ipc.Err_CacheMiss) {
-			// STAT
-			statVal = -1
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
-			engineId = protocol.GetIndexEngineIdFromMessage(response)
-			querySeqnum = protocol.GetLogSeqNumFromMessage(response)
-			direction = 0
-		} else {
-			// STAT
-			statVal = -2
-			defer func() {
-				w.logReadStatMu.Lock()
-				defer w.logReadStatMu.Unlock()
-				w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-			}()
+			} else if errors.Is(err, ipc.Err_CacheMiss) {
+				// STAT
+				statVal = -1
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
+				engineId = protocol.GetIndexEngineIdFromMessage(response)
+				querySeqnum = protocol.GetLogSeqNumFromMessage(response)
+				direction = 0
+			} else {
+				// STAT
+				statVal = -2
+				defer func() {
+					w.logReadStatMu.Lock()
+					defer w.logReadStatMu.Unlock()
+					w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
+				}()
 
-			log.Printf("[WARN] Local LogReadNext failed: %v", err)
+				log.Printf("[WARN] Local LogReadNext failed: %v", err)
+			}
+		} else {
+			statVal = -3
+			log.Printf("[WARN] LoadIndexData failed: %v", err)
 		}
-	} else {
-		statVal = -3
-		log.Printf("[WARN] LoadIndexData failed: %v", err)
 	}
 	// remote read
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
@@ -1429,21 +1439,34 @@ func (w *FuncWorker) SharedLogCheckTail(ctx context.Context, tag uint64) (*types
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "SetAuxData", latency)
+	}()
+
 	if len(auxData) == 0 {
 		return fmt.Errorf("Auxiliary data cannot be empty")
 	}
 	if len(auxData) > protocol.MessageInlineDataSize {
 		return fmt.Errorf("Auxiliary data too larger (size=%d), expect no more than %d bytes", len(auxData), protocol.MessageInlineDataSize)
 	}
-	// if localSetErr is nil, perform a blind set
-	// if localSetErr is not nil(Invalid User), perform a reliable set
-	localSetErr := ipc.LogSetAuxData(seqNum, auxData)
-	notify := false
-	if localSetErr != nil && localSetErr == ipc.Err_AuxDataInvalidUser {
-		notify = true
-		log.Printf("[WARN] Local SetAuxData failed seqNum=%016X", seqNum)
-	} else {
-		return localSetErr
+
+	notify := true
+	if ENABLE_LOCAL_CACHE {
+		// if localSetErr is nil, perform a blind set
+		// if localSetErr is not nil(Invalid User), perform a reliable set
+		localSetErr := ipc.LogSetAuxData(seqNum, auxData)
+		if localSetErr == nil {
+			notify = false
+		} else {
+			if errors.Is(localSetErr, ipc.Err_AuxDataInvalidUser) {
+				notify = true
+				log.Printf("[WARN] Local SetAuxData failed seqNum=%016X", seqNum)
+			} else {
+				return localSetErr
+			}
+		}
 	}
 
 	id := atomic.AddUint64(&w.nextLogOpId, 1)

@@ -101,7 +101,10 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
 
 SharedLRUCache::SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
                                std::string_view path)
-    : log_header_(fmt::format("SharedLRUCache[{}]: ", user_logspace)) {
+    : log_header_(fmt::format("SharedLRUCache[{}]: ", user_logspace)),
+      cache_lock_stat_(
+        stat::StatisticsCollector<int32_t>::StandardReportCallback(
+            "cache_lock")) {
     int64_t cap_mem_size = -1;
     if (mem_cap_mb > 0) {
         cap_mem_size = int64_t{mem_cap_mb} << 20;
@@ -119,14 +122,20 @@ SharedLRUCache::SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
 void SharedLRUCache::Put(const LogMetaData& log_metadata,
                          std::span<const uint64_t> user_tags,
                          std::span<const char> log_data) {
+    int64_t ts = faas::GetMonotonicMicroTimestamp();
     auto dbm = lockable_dbm_.Lock();
+    cache_lock_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+
     std::string key_str = fmt::format("0_{:016x}", log_metadata.seqnum);
     std::string data = EncodeLogEntry(log_metadata, user_tags, log_data);
     dbm->insert(key_str, data);
 }
 
 std::optional<LogEntry> SharedLRUCache::Get(uint64_t seqnum) {
+    int64_t ts = faas::GetMonotonicMicroTimestamp();
     auto dbm = lockable_dbm_.Lock();
+    cache_lock_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+
     std::string key_str = fmt::format("0_{:016x}", seqnum);
     auto data = dbm->get(key_str);
     if (data.has_value()) {
@@ -140,13 +149,19 @@ std::optional<LogEntry> SharedLRUCache::Get(uint64_t seqnum) {
 }
 
 void SharedLRUCache::PutAuxData(uint64_t seqnum, std::span<const char> data) {
+    int64_t ts = faas::GetMonotonicMicroTimestamp();
     auto dbm = lockable_dbm_.Lock();
+    cache_lock_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+
     std::string key_str = fmt::format("1_{:016x}", seqnum);
     dbm->insert(key_str, std::string(data.data(), data.size()));
 }
 
 std::optional<std::string> SharedLRUCache::GetAuxData(uint64_t seqnum) {
+    int64_t ts = faas::GetMonotonicMicroTimestamp();
     auto dbm = lockable_dbm_.Lock();
+    cache_lock_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+
     std::string key_str = fmt::format("1_{:016x}", seqnum);
     auto data = dbm->get(key_str);
     if (data.has_value()) {

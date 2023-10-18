@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/stat.h"
 #include "log/common.h"
 #include "utils/fs.h"
 #include "utils/lockable_ptr.h"
@@ -302,7 +303,8 @@ class SharedLRUCache {
 public:
     explicit SharedLRUCache(uint32_t user_logspace, int mem_cap_mb,
                             std::string_view path);
-    SharedLRUCache(SharedLRUCache&& other) {
+    SharedLRUCache(SharedLRUCache&& other)
+    : cache_lock_stat_(std::move(other.cache_lock_stat_)) {
         log_header_ = std::move(other.log_header_);
         lockable_dbm_ = std::move(other.lockable_dbm_);
     }
@@ -316,8 +318,10 @@ public:
 
 private:
     std::string log_header_;
-
     LockablePtr<boost::interprocess::LRUCache> lockable_dbm_;
+#if !defined(__FAAS_DISABLE_STAT)
+    stat::StatisticsCollector<int32_t> cache_lock_stat_;
+#endif
 
     DISALLOW_COPY_AND_ASSIGN(SharedLRUCache);
 };

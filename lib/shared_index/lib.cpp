@@ -25,6 +25,10 @@ static faas::stat::StatisticsCollector<int32_t> cache_read_delay_stat_(
         faas::stat::StatisticsCollector<int32_t>::StandardReportCallback(
             "cache_read_delay"));
 
+static faas::stat::StatisticsCollector<int32_t> index_lock_stat_(
+        faas::stat::StatisticsCollector<int32_t>::StandardReportCallback(
+            "index_lock"));
+
 static faas::log::SharedLRUCache* GetOrCreateCache(uint32_t user_logspace) {
     if (g_cache.load() != NULL) {
         return g_cache.load();
@@ -243,7 +247,11 @@ void DestructIndexData(void* index_data) {
 int IndexReadLocalId(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                      uint32_t user_logspace, uint64_t localid,
                      /*Out*/ uint64_t* seqnum, /*Out*/ uint16_t* engine_id) {
+    // STAT
+    int64_t ts = faas::GetMonotonicMicroTimestamp();
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
+    index_lock_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadLocalId,
         .initial = true,
@@ -278,7 +286,11 @@ int IndexReadLocalId(void* index_data, /*InOut*/ uint64_t* metalog_progress,
 int IndexReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                   uint32_t user_logspace, uint64_t query_seqnum,
                   uint64_t query_tag, /*Out*/ uint64_t* seqnum, /*Out*/ uint16_t* engine_id) {
+    // STAT
+    int64_t ts = faas::GetMonotonicMicroTimestamp();
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
+    index_lock_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadNext,
         .initial = true,
@@ -313,7 +325,11 @@ int IndexReadNext(void* index_data, /*InOut*/ uint64_t* metalog_progress,
 int IndexReadPrev(void* index_data, /*InOut*/ uint64_t* metalog_progress,
                   uint32_t user_logspace, uint64_t query_seqnum,
                   uint64_t query_tag, /*Out*/ uint64_t* seqnum, /*Out*/ uint16_t* engine_id) {
+    // STAT
+    int64_t ts = faas::GetMonotonicMicroTimestamp();
     auto locked_index_data = SHARED_INDEX_CAST(index_data)->Lock();
+    index_lock_stat_.AddSample(gsl::narrow_cast<int32_t>(faas::GetMonotonicMicroTimestamp()-ts));
+
     faas::log::IndexQuery query = faas::log::IndexQuery {
         .direction = faas::log::IndexQuery::kReadPrev,
         .initial = true,
