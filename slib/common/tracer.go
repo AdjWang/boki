@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 )
+
+var tracerMu = sync.Mutex{}
 
 type TracerType map[string][]int64
 
@@ -43,6 +46,9 @@ func PrintTrace(ctx context.Context, tag string) {
 }
 
 func AppendTrace(ctx context.Context, fnName string, latency int64) {
+	tracerMu.Lock()
+	defer tracerMu.Unlock()
+
 	rawTracer := ctx.Value("CTX_TRACE")
 	if rawTracer == nil {
 		return

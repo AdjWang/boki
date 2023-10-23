@@ -124,7 +124,15 @@ func (env *envImpl) TxnCommit() (bool /* committed */, error) {
 	objectLog.fillWriteSet()
 	objectLog.seqNum = seqNum
 	// Check for status
-	if committed, err := objectLog.checkTxnCommitResult(env); err != nil {
+	inspector := syncToInspector{
+		readCount:  0,
+		applyCount: 0,
+
+		txnReadCount:  0,
+		txnApplyCount: 0,
+		ops:           make([]opsEntry, 0, 20),
+	}
+	if committed, err := objectLog.checkTxnCommitResult(env, &inspector, 0 /*depth*/); err != nil {
 		return false, err
 	} else {
 		return committed, nil
