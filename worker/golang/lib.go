@@ -16,7 +16,6 @@ import (
 
 func Serve(factory types.FuncHandlerFactory) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
 	runtime.GOMAXPROCS(1)
 	ipc.SetRootPathForIpc(os.Getenv("FAAS_ROOT_PATH_FOR_IPC"))
 	// TODO: proper way to set vlog level

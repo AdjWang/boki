@@ -32,6 +32,8 @@ func (env *envImpl) Object(name string) *ObjectRef {
 	if env.txnCtx != nil && !env.txnCtx.active {
 		panic("Cannot create object within inactive transaction!")
 	}
+	env.objsMu.Lock()
+	defer env.objsMu.Unlock()
 	if obj, exists := env.objs[name]; exists {
 		return obj
 	} else {
