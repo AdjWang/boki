@@ -7,7 +7,7 @@ from functools import partial
 from tqdm import tqdm
 import pandas as pd
 
-PARALLEL = 8
+PARALLEL = 1
 
 def percentile(datas):
     def __percentile(data_list, p):
@@ -68,14 +68,16 @@ if __name__ == '__main__':
         f2e_latency, query_latency, e2f_latency, cache_hit, metapos_inside = entry
         f2e_latency, query_latency, e2f_latency, = \
             int(f2e_latency), int(query_latency), int(e2f_latency)
+        overall = f2e_latency + query_latency + e2f_latency
         query_ratio = query_latency / (f2e_latency + query_latency + e2f_latency)
         assert cache_hit == 'true' or cache_hit == 'false'
         assert metapos_inside == 'true' or metapos_inside == 'false'
         cache_hit = True if cache_hit == 'true' else False
         metapos_inside = True if metapos_inside == 'true' else False
-        return (f2e_latency, query_latency, e2f_latency, query_ratio, cache_hit, metapos_inside)
-    keys = ('f2e_latency', 'query_latency', 'e2f_latency', 'query_ratio', 'cache_hit', 'metapos_inside')
+        return (overall, f2e_latency, query_latency, e2f_latency, query_ratio, cache_hit, metapos_inside)
+    keys = ('overall_latency', 'f2e_latency', 'query_latency', 'e2f_latency', 'query_ratio', 'cache_hit', 'metapos_inside')
     query_stat = gather_info(logs, r'slog read f2e=(\d+) query=(\d+) e2f=(\d+) cacheHit=(\w+) metaposInside=(\w+)', __extract_get_query_ratio)
+    del logs
     if len(query_stat) > 0:
         print('QueryInfo')
         
@@ -85,6 +87,7 @@ if __name__ == '__main__':
             if dataframe is None:
                 return
             print(f'Summary of {title}:')
+            print_percentile('overallLatency', dataframe['overall_latency'].tolist())
             print_percentile('f2eLatency', dataframe['f2e_latency'].tolist())
             print_percentile('e2fLatency', dataframe['e2f_latency'].tolist())
             print_percentile('QueryLatency', dataframe['query_latency'].tolist())
