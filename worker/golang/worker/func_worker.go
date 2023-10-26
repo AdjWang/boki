@@ -737,6 +737,12 @@ func checkAndDuplicateTagsById(tags []types.Tag) ([]types.Tag, error) {
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogAppend(ctx context.Context, tags []uint64, data []byte) (uint64, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "Append", latency)
+	}()
+
 	if len(data) == 0 {
 		return 0, fmt.Errorf("data cannot be empty")
 	}
@@ -1223,6 +1229,12 @@ func (w *FuncWorker) SharedLogCheckTail(ctx context.Context, tag uint64) (*types
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "SetAuxData", latency)
+	}()
+
 	if len(auxData) == 0 {
 		return fmt.Errorf("Auxiliary data cannot be empty")
 	}
