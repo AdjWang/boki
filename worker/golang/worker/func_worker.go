@@ -117,12 +117,6 @@ type FuncWorker struct {
 	// STAT
 	statMu      sync.Mutex
 	processStat map[uint64][]statEntry
-	// STAT
-	logReadStatMu        sync.Mutex
-	logLoadIndexStat     *utils.StatisticsCollector
-	logReadCacheHitStat  *utils.StatisticsCollector
-	logReadCacheMissStat *utils.StatisticsCollector
-	logReadEagainStat    *utils.StatisticsCollector
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -151,12 +145,6 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		// STAT
 		statMu:      sync.Mutex{},
 		processStat: make(map[uint64][]statEntry),
-		// STAT
-		logReadStatMu:        sync.Mutex{},
-		logLoadIndexStat:     utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogLoadIndex delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
-		logReadCacheHitStat:  utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadCacheHit delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
-		logReadCacheMissStat: utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadCacheMiss delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
-		logReadEagainStat:    utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d LogReadEagain delay(us)", funcId, clientId), 200 /*reportSamples*/, 10*time.Second),
 	}
 	indexDataManagerInitializer.Do(func() {
 		indexDataManager = ipc.NewIndexDataManager()
@@ -291,11 +279,11 @@ func (w *FuncWorker) Run() {
 				w.statAppend(funcCall.FullCallId(), LogOpType_Read, int64(f2eDispatchDelay+queryDelay)+e2fDispatchDelay)
 				// readSc.AddSample(float64(dispatchDelay))
 
-				flags := protocol.GetFlagsFromMessage(message)
-				cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
-				metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
-				log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
-					f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
+				// flags := protocol.GetFlagsFromMessage(message)
+				// cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
+				// metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
+				// log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
+				// 	f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
 			case protocol.SharedLogResultType_AUXDATA_OK:
 				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
 				setAuxDelay := protocol.GetEngineOpDelayInMessage(message)
@@ -1120,61 +1108,38 @@ func (w *FuncWorker) GenerateUniqueID() uint64 {
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
 	logAPITs := time.Now()
-	defer func() {
-		latency := time.Since(logAPITs).Microseconds()
-		slib.AppendTrace(ctx, "ReadNext", latency)
-	}()
 
 	direction := 1
 	engineId := uint16(0)
 	querySeqnum := seqNum
 	if ENABLE_LOCAL_READ {
-		// STAT
-		ts := common.GetMonotonicMicroTimestamp()
 		// local read
 		indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-		// STAT
-		w.logReadStatMu.Lock()
-		w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-		w.logReadStatMu.Unlock()
-
 		if err == nil {
 			response, err := indexData.LogReadNext(w.metalogProgress, seqNum, tag)
 			if err == nil {
-				// STAT
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
+				var logEntry *types.LogEntry
+				var err error
 				if response == nil { // EMPTY
-					return nil, nil
+					logEntry, err = nil, nil
 				} else {
 					result := protocol.GetSharedLogResultTypeFromMessage(response)
 					if result == protocol.SharedLogResultType_READ_OK {
-						return buildLogEntryFromReadResponse(response), nil
+						logEntry, err = buildLogEntryFromReadResponse(response), nil
 					} else {
-						return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+						logEntry, err = nil, fmt.Errorf("Failed to read log: 0x%02X", result)
 					}
 				}
+				if err == nil {
+					// STAT
+					slib.AppendTrace(ctx, "ReadNext-CacheHit", time.Since(logAPITs).Microseconds())
+				}
+				return logEntry, err
 			} else if errors.Is(err, ipc.Err_CacheMiss) {
-				// STAT
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
 				engineId = protocol.GetIndexEngineIdFromMessage(response)
 				querySeqnum = protocol.GetLogSeqNumFromMessage(response)
 				direction = 0
 			} else {
-				// STAT
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
-
 				log.Printf("[WARN] Local LogReadNext failed: %v", err)
 			}
 		} else {
@@ -1186,7 +1151,12 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
 	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, querySeqnum, engineId, direction, false /* block */, id)
-	return w.sharedLogReadCommon(ctx, message, id)
+	logEntry, err := w.sharedLogReadCommon(ctx, message, id)
+	if err == nil {
+		// STAT
+		slib.AppendTrace(ctx, "ReadNext-CacheMiss", time.Since(logAPITs).Microseconds())
+	}
+	return logEntry, err
 }
 
 // Implement types.Environment
@@ -1207,137 +1177,41 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
 	logAPITs := time.Now()
-	defer func() {
-		latency := time.Since(logAPITs).Microseconds()
-		slib.AppendTrace(ctx, "ReadPrev", latency)
-	}()
 
 	direction := -1
 	engineId := uint16(0)
 	querySeqnum := seqNum
 	if ENABLE_LOCAL_READ {
-		// STAT
-		ts := common.GetMonotonicMicroTimestamp()
 		// local read
 		indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-		// STAT
-		w.logReadStatMu.Lock()
-		w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-		w.logReadStatMu.Unlock()
 		if err == nil {
 			response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
 			if err == nil {
-				// STAT
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
+				var logEntry *types.LogEntry
+				var err error
 				if response == nil { // EMPTY
-					return nil, nil
+					logEntry, err = nil, nil
 				} else {
 					result := protocol.GetSharedLogResultTypeFromMessage(response)
 					if result == protocol.SharedLogResultType_READ_OK {
-						return buildLogEntryFromReadResponse(response), nil
+						logEntry, err = buildLogEntryFromReadResponse(response), nil
 					} else {
-						return nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+						logEntry, err = nil, fmt.Errorf("Failed to read log: 0x%02X", result)
 					}
 				}
+				if err == nil {
+					// STAT
+					slib.AppendTrace(ctx, "ReadPrev-CacheHit", time.Since(logAPITs).Microseconds())
+				}
+				return logEntry, err
 			} else if errors.Is(err, ipc.Err_CacheMiss) {
-				// STAT
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
 				engineId = protocol.GetIndexEngineIdFromMessage(response)
 				querySeqnum = protocol.GetLogSeqNumFromMessage(response)
 				direction = 0
 			} else {
-				// STAT
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
-
-				log.Printf("[WARN] Local LogReadNext failed: %v", err)
+				log.Printf("[WARN] Local LogReadPrev failed: %v", err)
 			}
 		} else {
-			log.Printf("[WARN] LoadIndexData failed: %v", err)
-		}
-	}
-	// remote read
-	id := atomic.AddUint64(&w.nextLogOpId, 1)
-	currentCallId := atomic.LoadUint64(&w.currentCall)
-	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
-	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, querySeqnum, engineId, direction, false /* block */, id)
-	return w.sharedLogReadCommon(ctx, message, id)
-}
-func (w *FuncWorker) SharedLogReadPrevStat(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, int, error) {
-	logAPITs := time.Now()
-	defer func() {
-		latency := time.Since(logAPITs).Microseconds()
-		slib.AppendTrace(ctx, "ReadPrev", latency)
-	}()
-
-	direction := -1
-	engineId := uint16(0)
-	querySeqnum := seqNum
-	statVal := 0
-	if ENABLE_LOCAL_READ {
-		// STAT
-		ts := common.GetMonotonicMicroTimestamp()
-		// local read
-		indexData, err := indexDataManager.LoadIndexData(w.metalogProgress, seqNum)
-		// STAT
-		w.logReadStatMu.Lock()
-		w.logLoadIndexStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-		w.logReadStatMu.Unlock()
-		if err == nil {
-			response, err := indexData.LogReadPrev(w.metalogProgress, seqNum, tag)
-			if err == nil {
-				// STAT
-				statVal = 0
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadCacheHitStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
-				if response == nil { // EMPTY
-					return nil, statVal, nil
-				} else {
-					result := protocol.GetSharedLogResultTypeFromMessage(response)
-					if result == protocol.SharedLogResultType_READ_OK {
-						return buildLogEntryFromReadResponse(response), statVal, nil
-					} else {
-						return nil, statVal, fmt.Errorf("Failed to read log: 0x%02X", result)
-					}
-				}
-			} else if errors.Is(err, ipc.Err_CacheMiss) {
-				// STAT
-				statVal = -1
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadCacheMissStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
-				engineId = protocol.GetIndexEngineIdFromMessage(response)
-				querySeqnum = protocol.GetLogSeqNumFromMessage(response)
-				direction = 0
-			} else {
-				// STAT
-				statVal = -2
-				defer func() {
-					w.logReadStatMu.Lock()
-					defer w.logReadStatMu.Unlock()
-					w.logReadEagainStat.AddSample(float64(common.GetMonotonicMicroTimestamp() - ts))
-				}()
-
-				log.Printf("[WARN] Local LogReadNext failed: %v", err)
-			}
-		} else {
-			statVal = -3
 			log.Printf("[WARN] LoadIndexData failed: %v", err)
 		}
 	}
@@ -1347,7 +1221,11 @@ func (w *FuncWorker) SharedLogReadPrevStat(ctx context.Context, tag uint64, seqN
 	metalogProgress := atomic.LoadUint64(&w.metalogProgress)
 	message := protocol.NewSharedLogReadMessage(currentCallId, metalogProgress, w.clientId, tag, querySeqnum, engineId, direction, false /* block */, id)
 	logEntry, err := w.sharedLogReadCommon(ctx, message, id)
-	return logEntry, statVal, err
+	if err == nil {
+		// STAT
+		slib.AppendTrace(ctx, "ReadPrev-CacheMiss", time.Since(logAPITs).Microseconds())
+	}
+	return logEntry, err
 }
 
 // Implement types.Environment

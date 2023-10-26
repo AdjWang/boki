@@ -142,7 +142,6 @@ type opsEntry struct {
 	seqNum      uint64
 	opObjName   string
 	delay       int64
-	statHint    int
 }
 type syncToInspector struct {
 	readCount  int
@@ -257,7 +256,7 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector
 			for seqNum > txnCommitLog.TxnId {
 				querySeqNum := seqNum - 1
 				readStart := time.Now()
-				logEntry, statHint, err := env.faasEnv.SharedLogReadPrevStat(env.faasCtx, tag, querySeqNum)
+				logEntry, err := env.faasEnv.SharedLogReadPrev(env.faasCtx, tag, querySeqNum)
 				if err != nil {
 					// return false, newRuntimeError(err.Error())
 					panic(err)
@@ -270,7 +269,6 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector
 						seqNum:      seqNum,
 						opObjName:   op.ObjName,
 						delay:       time.Since(readStart).Microseconds(),
-						statHint:    statHint,
 					})
 				}
 				if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
