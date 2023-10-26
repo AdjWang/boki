@@ -19,6 +19,7 @@ import (
 	config "cs.utexas.edu/zjia/faas/config"
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
+	slib "cs.utexas.edu/zjia/faas/slib/common"
 	types "cs.utexas.edu/zjia/faas/types"
 	"cs.utexas.edu/zjia/faas/utils"
 )
@@ -148,8 +149,8 @@ func (w *FuncWorker) statInit(fullCallId uint64) {
 	w.processStat[fullCallId] = make([]statEntry, 0, 30)
 }
 func (w *FuncWorker) statTrim(fullCallId uint64) {
-	statList := w.processStat[fullCallId]
-	log.Printf("[STAT] fullCallId=%d stat=%v", fullCallId, statList)
+	// statList := w.processStat[fullCallId]
+	// log.Printf("[STAT] fullCallId=%d stat=%v", fullCallId, statList)
 
 	delete(w.processStat, fullCallId)
 }
@@ -239,11 +240,12 @@ func (w *FuncWorker) Run() {
 				queryDelay := protocol.GetEngineOpDelayInMessage(message)
 				w.statAppend(funcCall.FullCallId(), LogOpType_Read, int64(f2eDispatchDelay)+queryDelay+e2fDispatchDelay)
 				// readSc.AddSample(float64(dispatchDelay))
-				flags := protocol.GetFlagsFromMessage(message)
-				cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
-				metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
-				log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
-					f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
+
+				// flags := protocol.GetFlagsFromMessage(message)
+				// cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
+				// metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
+				// log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
+				// 	f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
 			case protocol.SharedLogResultType_AUXDATA_OK:
 				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
 				setAuxDelay := protocol.GetEngineOpDelayInMessage(message)
@@ -946,6 +948,37 @@ func (w *FuncWorker) sharedLogReadCommon(ctx context.Context, message []byte, op
 	}
 }
 
+func (w *FuncWorker) sharedLogReadCommonStat(ctx context.Context, message []byte, opId uint64) (*types.LogEntry, []byte, error) {
+	// count := atomic.AddInt32(&w.sharedLogReadCount, int32(1))
+	// if count > 16 {
+	// 	log.Printf("[WARN] Make %d-th shared log read request", count)
+	// }
+
+	w.mux.Lock()
+	outputChan := make(chan []byte, 1)
+	w.outgoingLogOps[opId] = outputChan
+	_, err := w.outputPipe.Write(message)
+	w.mux.Unlock()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var response []byte
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case response = <-outputChan:
+	}
+	result := protocol.GetSharedLogResultTypeFromMessage(response)
+	if result == protocol.SharedLogResultType_READ_OK {
+		return buildLogEntryFromReadResponse(response), response, nil
+	} else if result == protocol.SharedLogResultType_EMPTY {
+		return nil, response, nil
+	} else {
+		return nil, nil, fmt.Errorf("Failed to read log: 0x%02X", result)
+	}
+}
+
 // async appends are wrapped with cond, remember to unwrap it before return to user
 // TODO: remove this
 func (w *FuncWorker) asyncSharedLogReadCommon(ctx context.Context, message []byte, opId uint64) (*types.LogEntryWithMeta, error) {
@@ -1052,10 +1085,27 @@ func (w *FuncWorker) GenerateUniqueID() uint64 {
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	logAPITs := time.Now()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
-	return w.sharedLogReadCommon(ctx, message, id)
+	logEntry, response, err := w.sharedLogReadCommonStat(ctx, message, id)
+
+	if err == nil {
+		// STAT
+		flags := protocol.GetFlagsFromMessage(response)
+		cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
+		// metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
+
+		latency := time.Since(logAPITs).Microseconds()
+		if cacheHit {
+			slib.AppendTrace(ctx, "ReadNext-CacheHit", latency)
+		} else {
+			slib.AppendTrace(ctx, "ReadNext-CacheMiss", latency)
+		}
+	}
+	return logEntry, err
 }
 
 // Implement types.Environment
@@ -1068,10 +1118,27 @@ func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seq
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	logAPITs := time.Now()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
-	return w.sharedLogReadCommon(ctx, message, id)
+	logEntry, response, err := w.sharedLogReadCommonStat(ctx, message, id)
+
+	if err == nil {
+		// STAT
+		flags := protocol.GetFlagsFromMessage(response)
+		cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
+		// metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
+
+		latency := time.Since(logAPITs).Microseconds()
+		if cacheHit {
+			slib.AppendTrace(ctx, "ReadPrev-CacheHit", latency)
+		} else {
+			slib.AppendTrace(ctx, "ReadPrev-CacheMiss", latency)
+		}
+	}
+	return logEntry, err
 }
 
 // Implement types.Environment
