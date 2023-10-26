@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"cs.utexas.edu/zjia/faas/slib/common"
@@ -153,81 +151,6 @@ type syncToInspector struct {
 	txnAssertDuration time.Duration
 }
 
-// func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector *syncToInspector, depth int) (bool, error) {
-// 	if txnCommitLog.LogType != LOG_TxnCommit {
-// 		panic("Wrong log type")
-// 	}
-// 	if txnCommitLog.auxData != nil {
-// 		if v, exists := txnCommitLog.auxData["r"]; exists {
-// 			return v.(bool), nil
-// 		}
-// 	} else {
-// 		txnCommitLog.auxData = make(map[string]interface{})
-// 	}
-// 	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
-// 	commitResult := true
-// 	checkedTag := make(map[uint64]bool)
-// 	for _, op := range txnCommitLog.Ops {
-// 		tag := objectLogTag(common.NameHash(op.ObjName))
-// 		if _, exists := checkedTag[tag]; exists {
-// 			continue
-// 		}
-// 		seqNum := txnCommitLog.seqNum
-// 		for seqNum > txnCommitLog.TxnId {
-// 			querySeqNum := seqNum - 1
-// 			readStart := time.Now()
-// 			logEntry, statHint, err := env.faasEnv.SharedLogReadPrevStat(env.faasCtx, tag, querySeqNum)
-// 			if err != nil {
-// 				return false, newRuntimeError(err.Error())
-// 			}
-// 			if inspector != nil {
-// 				inspector.txnReadCount++
-// 				inspector.ops = append(inspector.ops, opsEntry{
-// 					stackDepth:  depth,
-// 					querySeqNum: querySeqNum,
-// 					seqNum:      seqNum,
-// 					opObjName:   op.ObjName,
-// 					delay:       time.Since(readStart).Microseconds(),
-// 					statHint:    statHint,
-// 				})
-// 			}
-// 			if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
-// 				break
-// 			}
-// 			seqNum = logEntry.SeqNum
-// 			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
-// 			if inspector != nil {
-// 				inspector.txnApplyCount++
-// 			}
-
-// 			objectLog := decodeLogEntry(logEntry)
-// 			if !txnCommitLog.writeSetOverlapped(objectLog) {
-// 				continue
-// 			}
-// 			if objectLog.LogType == LOG_NormalOp {
-// 				commitResult = false
-// 				break
-// 			} else if objectLog.LogType == LOG_TxnCommit {
-// 				if committed, err := objectLog.checkTxnCommitResult(env, inspector, depth+1); err != nil {
-// 					return false, err
-// 				} else if committed {
-// 					commitResult = false
-// 					break
-// 				}
-// 			}
-// 		}
-// 		if !commitResult {
-// 			break
-// 		}
-// 		checkedTag[tag] = true
-// 	}
-// 	txnCommitLog.auxData["r"] = commitResult
-// 	if !FLAGS_DisableAuxData {
-// 		env.setLogAuxData(txnCommitLog.seqNum, txnCommitLog.auxData)
-// 	}
-// 	return commitResult, nil
-// }
-
 func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector *syncToInspector, depth int) (bool, error) {
 	if txnCommitLog.LogType != LOG_TxnCommit {
 		panic("Wrong log type")
@@ -240,76 +163,150 @@ func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector
 		txnCommitLog.auxData = make(map[string]interface{})
 	}
 	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
-	commitResult := atomic.Bool{}
-	commitResult.Store(true)
+	commitResult := true
 	checkedTag := make(map[uint64]bool)
-	wg := sync.WaitGroup{}
 	for _, op := range txnCommitLog.Ops {
 		tag := objectLogTag(common.NameHash(op.ObjName))
 		if _, exists := checkedTag[tag]; exists {
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			seqNum := txnCommitLog.seqNum
-			for seqNum > txnCommitLog.TxnId {
-				querySeqNum := seqNum - 1
-				readStart := time.Now()
-				logEntry, err := env.faasEnv.SharedLogReadPrev(env.faasCtx, tag, querySeqNum)
-				if err != nil {
-					// return false, newRuntimeError(err.Error())
-					panic(err)
-				}
-				if inspector != nil {
-					inspector.txnReadCount++
-					inspector.ops = append(inspector.ops, opsEntry{
-						stackDepth:  depth,
-						querySeqNum: querySeqNum,
-						seqNum:      seqNum,
-						opObjName:   op.ObjName,
-						delay:       time.Since(readStart).Microseconds(),
-					})
-				}
-				if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
-					break
-				}
-				seqNum = logEntry.SeqNum
-				// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
-				if inspector != nil {
-					inspector.txnApplyCount++
-				}
+		seqNum := txnCommitLog.seqNum
+		for seqNum > txnCommitLog.TxnId {
+			querySeqNum := seqNum - 1
+			readStart := time.Now()
+			logEntry, err := env.faasEnv.SharedLogReadPrev(env.faasCtx, tag, querySeqNum)
+			if err != nil {
+				return false, newRuntimeError(err.Error())
+			}
+			if inspector != nil {
+				inspector.txnReadCount++
+				inspector.ops = append(inspector.ops, opsEntry{
+					stackDepth:  depth,
+					querySeqNum: querySeqNum,
+					seqNum:      seqNum,
+					opObjName:   op.ObjName,
+					delay:       time.Since(readStart).Microseconds(),
+				})
+			}
+			if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
+				break
+			}
+			seqNum = logEntry.SeqNum
+			// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
+			if inspector != nil {
+				inspector.txnApplyCount++
+			}
 
-				objectLog := decodeLogEntry(logEntry)
-				if !txnCommitLog.writeSetOverlapped(objectLog) {
-					continue
-				}
-				if objectLog.LogType == LOG_NormalOp {
-					commitResult.Store(false)
+			objectLog := decodeLogEntry(logEntry)
+			if !txnCommitLog.writeSetOverlapped(objectLog) {
+				continue
+			}
+			if objectLog.LogType == LOG_NormalOp {
+				commitResult = false
+				break
+			} else if objectLog.LogType == LOG_TxnCommit {
+				if committed, err := objectLog.checkTxnCommitResult(env, inspector, depth+1); err != nil {
+					return false, err
+				} else if committed {
+					commitResult = false
 					break
-				} else if objectLog.LogType == LOG_TxnCommit {
-					if committed, err := objectLog.checkTxnCommitResult(env, inspector, depth+1); err != nil {
-						// return false, err
-						panic(err)
-					} else if committed {
-						commitResult.Store(false)
-						break
-					}
 				}
 			}
-		}()
+		}
+		if !commitResult {
+			break
+		}
 		checkedTag[tag] = true
 	}
-	wg.Wait()
-	// if !commitResult.Load() {
-	// 	break
-	// }
-	txnCommitLog.auxData["r"] = commitResult.Load()
+	txnCommitLog.auxData["r"] = commitResult
 	if !FLAGS_DisableAuxData {
 		env.setLogAuxData(txnCommitLog.seqNum, txnCommitLog.auxData)
 	}
-	return commitResult.Load(), nil
+	return commitResult, nil
 }
+
+// func (txnCommitLog *ObjectLogEntry) checkTxnCommitResult(env *envImpl, inspector *syncToInspector, depth int) (bool, error) {
+// 	if txnCommitLog.LogType != LOG_TxnCommit {
+// 		panic("Wrong log type")
+// 	}
+// 	if txnCommitLog.auxData != nil {
+// 		if v, exists := txnCommitLog.auxData["r"]; exists {
+// 			return v.(bool), nil
+// 		}
+// 	} else {
+// 		txnCommitLog.auxData = make(map[string]interface{})
+// 	}
+// 	// log.Printf("[DEBUG] Failed to load txn status: seqNum=%#016x", txnCommitLog.seqNum)
+// 	commitResult := atomic.Bool{}
+// 	commitResult.Store(true)
+// 	checkedTag := make(map[uint64]bool)
+// 	wg := sync.WaitGroup{}
+// 	for _, op := range txnCommitLog.Ops {
+// 		tag := objectLogTag(common.NameHash(op.ObjName))
+// 		if _, exists := checkedTag[tag]; exists {
+// 			continue
+// 		}
+// 		wg.Add(1)
+// 		go func() {
+// 			defer wg.Done()
+// 			seqNum := txnCommitLog.seqNum
+// 			for seqNum > txnCommitLog.TxnId {
+// 				querySeqNum := seqNum - 1
+// 				readStart := time.Now()
+// 				logEntry, err := env.faasEnv.SharedLogReadPrev(env.faasCtx, tag, querySeqNum)
+// 				if err != nil {
+// 					// return false, newRuntimeError(err.Error())
+// 					panic(err)
+// 				}
+// 				if inspector != nil {
+// 					inspector.txnReadCount++
+// 					inspector.ops = append(inspector.ops, opsEntry{
+// 						stackDepth:  depth,
+// 						querySeqNum: querySeqNum,
+// 						seqNum:      seqNum,
+// 						opObjName:   op.ObjName,
+// 						delay:       time.Since(readStart).Microseconds(),
+// 					})
+// 				}
+// 				if logEntry == nil || logEntry.SeqNum <= txnCommitLog.TxnId {
+// 					break
+// 				}
+// 				seqNum = logEntry.SeqNum
+// 				// log.Printf("[DEBUG] Read log with seqnum %#016x", seqNum)
+// 				if inspector != nil {
+// 					inspector.txnApplyCount++
+// 				}
+
+// 				objectLog := decodeLogEntry(logEntry)
+// 				if !txnCommitLog.writeSetOverlapped(objectLog) {
+// 					continue
+// 				}
+// 				if objectLog.LogType == LOG_NormalOp {
+// 					commitResult.Store(false)
+// 					break
+// 				} else if objectLog.LogType == LOG_TxnCommit {
+// 					if committed, err := objectLog.checkTxnCommitResult(env, inspector, depth+1); err != nil {
+// 						// return false, err
+// 						panic(err)
+// 					} else if committed {
+// 						commitResult.Store(false)
+// 						break
+// 					}
+// 				}
+// 			}
+// 		}()
+// 		checkedTag[tag] = true
+// 	}
+// 	wg.Wait()
+// 	// if !commitResult.Load() {
+// 	// 	break
+// 	// }
+// 	txnCommitLog.auxData["r"] = commitResult.Load()
+// 	if !FLAGS_DisableAuxData {
+// 		env.setLogAuxData(txnCommitLog.seqNum, txnCommitLog.auxData)
+// 	}
+// 	return commitResult.Load(), nil
+// }
 
 func (l *ObjectLogEntry) hasCachedObjectView(objName string) bool {
 	if l.auxData == nil {
