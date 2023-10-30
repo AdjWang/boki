@@ -804,6 +804,12 @@ func (w *FuncWorker) AsyncSharedLogAppend(ctx context.Context, tags []types.Tag,
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogAppendWithDeps(ctx context.Context, tags []types.Tag, data []byte, deps []uint64) (types.Future[uint64], error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncAppend", latency)
+	}()
+
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data cannot be empty")
 	}
@@ -1116,6 +1122,12 @@ func (w *FuncWorker) SharedLogReadNext(ctx context.Context, tag uint64, seqNum u
 
 // Implement types.Environment
 func (w *FuncWorker) SharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntry, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "ReadNextB", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
@@ -1149,6 +1161,12 @@ func (w *FuncWorker) SharedLogReadPrev(ctx context.Context, tag uint64, seqNum u
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadNext", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
@@ -1157,6 +1175,12 @@ func (w *FuncWorker) AsyncSharedLogReadNext(ctx context.Context, tag uint64, seq
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadNextB", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
@@ -1165,6 +1189,12 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock(ctx context.Context, tag uint64
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seqNum uint64) (*types.LogEntryWithMeta, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadPrev", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
@@ -1174,6 +1204,12 @@ func (w *FuncWorker) AsyncSharedLogReadPrev(ctx context.Context, tag uint64, seq
 // TODO: replace original API ------------------------------------
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadNext", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, false /* block */, id)
@@ -1182,6 +1218,12 @@ func (w *FuncWorker) AsyncSharedLogReadNext2(ctx context.Context, tag uint64, se
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadNextB", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, 1 /* direction */, true /* block */, id)
@@ -1190,6 +1232,12 @@ func (w *FuncWorker) AsyncSharedLogReadNextBlock2(ctx context.Context, tag uint6
 
 // Implement types.Environment
 func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, seqNum uint64) (types.Future[*types.LogEntryWithMeta], error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadPrev", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadMessage(currentCallId, w.clientId, tag, seqNum, -1 /* direction */, false /* block */, id)
@@ -1201,6 +1249,12 @@ func (w *FuncWorker) AsyncSharedLogReadPrev2(ctx context.Context, tag uint64, se
 // Implement types.Environment
 // TODO: delete this and move to async read
 func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, localId uint64) (*types.LogEntryWithMeta, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadIndexData", latency)
+	}()
+
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
 	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, localId, id)
@@ -1210,6 +1264,12 @@ func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, localId uint64) (*t
 // Implement types.Environment
 // TODO: delete this and move to async read
 func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncReadIndex", latency)
+	}()
+
 	condLogEntry, err := w.AsyncSharedLogRead(ctx, localId)
 	if err != nil {
 		return 0, err
