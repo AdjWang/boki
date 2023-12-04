@@ -385,6 +385,7 @@ public:
  void TakeOff(uint64_t id, uint64_t key);
  void Landing(uint64_t key, T* value);
  void Direct(uint64_t id, uint64_t key, T* value);
+ void Inspect();
 private:
     std::function<void(T*)> on_sliding_;
 
