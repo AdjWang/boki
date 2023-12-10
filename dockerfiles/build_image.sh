@@ -4,7 +4,7 @@ set -euxo pipefail
 BOKI_DIR=$(realpath $(dirname $0)/..)   # */boki/
 DOCKERFILE_DIR=$BOKI_DIR/dockerfiles
 
-DOCKER_BUILDER=$HOME/.docker/cli-plugins/docker-buildx
+DOCKER_BUILDER="docker buildx"
 
 # NO_CACHE="--no-cache"
 NO_CACHE=""
