@@ -33,7 +33,15 @@ func (t *APITracer) PrintTrace(tag string) {
 		n, sum, max, min := summary(records)
 		traceSummary[name] = fmt.Sprintf("%v(n=%v max=%v min=%v)", sum, n, max, min)
 	}
-	log.Printf("[%v] %+v", tag, traceSummary)
+	if len(traceSummary) > 0 {
+		log.Printf("[%v] %+v", tag, traceSummary)
+
+		t.clearTraces()
+	}
+}
+
+func (t *APITracer) clearTraces() {
+	t.records = make(map[string][]int64)
 }
 
 // https://pkg.go.dev/context#WithValue
