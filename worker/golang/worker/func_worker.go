@@ -650,6 +650,12 @@ func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte,
 
 // Implement types.Environment
 func (w *FuncWorker) InvokeFunc(ctx context.Context, funcName string, input []byte) ([]byte, error) {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "SyncInvoke", latency)
+	}()
+
 	entry := config.FindByFuncName(funcName)
 	if entry == nil {
 		return nil, fmt.Errorf("Invalid function name: %s", funcName)
@@ -665,6 +671,12 @@ func (w *FuncWorker) InvokeFunc(ctx context.Context, funcName string, input []by
 
 // Implement types.Environment
 func (w *FuncWorker) InvokeFuncAsync(ctx context.Context, funcName string, input []byte) error {
+	logAPITs := time.Now()
+	defer func() {
+		latency := time.Since(logAPITs).Microseconds()
+		slib.AppendTrace(ctx, "AsyncInvoke", latency)
+	}()
+
 	entry := config.FindByFuncName(funcName)
 	if entry == nil {
 		return fmt.Errorf("Invalid function name: %s", funcName)
