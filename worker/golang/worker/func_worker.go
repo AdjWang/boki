@@ -132,43 +132,8 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		currentCall:          0,
 		uidHighHalf:          uidHighHalf,
 		nextUidLowHalf:       0,
-		// STAT
-		statMu:      sync.Mutex{},
-		processStat: make(map[uint64][]statEntry),
 	}
 	return w, nil
-}
-
-func (w *FuncWorker) statInit(fullCallId uint64) {
-	w.statMu.Lock()
-	defer w.statMu.Unlock()
-
-	if _, ok := w.processStat[fullCallId]; ok {
-		log.Panicf("unknown existing stat info before invoke func. fullCallId=%d", fullCallId)
-	}
-	w.processStat[fullCallId] = make([]statEntry, 0, 30)
-}
-func (w *FuncWorker) statTrim(fullCallId uint64) {
-	// statList := w.processStat[fullCallId]
-	// log.Printf("[STAT] fullCallId=%d stat=%v", fullCallId, statList)
-
-	delete(w.processStat, fullCallId)
-}
-func (w *FuncWorker) statAppend(fullCallId uint64, opType uint8, opDelay int64) {
-	w.statMu.Lock()
-	defer w.statMu.Unlock()
-
-	if _, ok := w.processStat[fullCallId]; !ok {
-		log.Panicf("stat info after invoke func not found. fullCallId=%d, opType=%d", fullCallId, opType)
-	}
-	w.processStat[fullCallId] = append(w.processStat[fullCallId], statEntry{
-		opType:  opType,
-		opDelay: opDelay,
-	})
-
-	if opType == LogOpType_Total {
-		w.statTrim(fullCallId)
-	}
 }
 
 func (w *FuncWorker) Run() {
@@ -226,19 +191,13 @@ func (w *FuncWorker) Run() {
 			// go func(dispatchDelay int64, message []byte) {
 			slogSc.AddSample(float64(e2fDispatchDelay))
 			resultType := protocol.GetSharedLogResultTypeFromMessage(message)
-			funcCall := protocol.GetFuncCallFromMessage(message)
+			// funcCall := protocol.GetFuncCallFromMessage(message)
 			switch resultType {
 			case protocol.SharedLogResultType_APPEND_OK:
 				fallthrough
 			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
-				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
-				appendDelay := protocol.GetEngineOpDelayInMessage(message)
-				w.statAppend(funcCall.FullCallId(), LogOpType_Append, int64(f2eDispatchDelay)+appendDelay+e2fDispatchDelay)
 				// appendSc.AddSample(float64(dispatchDelay))
 			case protocol.SharedLogResultType_READ_OK:
-				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
-				queryDelay := protocol.GetEngineOpDelayInMessage(message)
-				w.statAppend(funcCall.FullCallId(), LogOpType_Read, int64(f2eDispatchDelay)+queryDelay+e2fDispatchDelay)
 				// readSc.AddSample(float64(dispatchDelay))
 
 				// flags := protocol.GetFlagsFromMessage(message)
@@ -247,9 +206,6 @@ func (w *FuncWorker) Run() {
 				// log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
 				// 	f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
 			case protocol.SharedLogResultType_AUXDATA_OK:
-				f2eDispatchDelay := protocol.GetLogDispatchDelayInMessage(message)
-				setAuxDelay := protocol.GetEngineOpDelayInMessage(message)
-				w.statAppend(funcCall.FullCallId(), LogOpType_SetAux, int64(f2eDispatchDelay)+setAuxDelay+e2fDispatchDelay)
 			default:
 				// otherSc.AddSample(float64(dispatchDelay))
 			}
@@ -395,8 +351,6 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 	var output []byte
 	atomic.StoreInt32(&w.sharedLogReadCount, int32(0))
 	atomic.StoreUint64(&w.currentCall, funcCall.FullCallId())
-	// STAT
-	w.statInit(funcCall.FullCallId())
 
 	startTimestamp := common.GetMonotonicMicroTimestamp()
 	if w.isGrpcSrv {
@@ -409,8 +363,6 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 	if err != nil {
 		log.Printf("[ERROR] FuncCall failed with error: %v", err)
 	}
-	// STAT
-	w.statAppend(funcCall.FullCallId(), LogOpType_Total, processingTime)
 
 	var response []byte
 	if w.useFifoForNestedCall {
