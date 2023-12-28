@@ -357,8 +357,13 @@ void Index::AdvanceIndexProgress() {
                         < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
                     unfinished.push_back(std::make_pair(start_timestamp, query));
                 } else {
+                    HLOG_F(WARNING, "Blocking query timeout. dir={} seqnum={:016X}",
+                                    query.direction, query.query_seqnum);
                     pending_query_results_.push_back(BuildNotFoundResult(query));
                 }
+            } else {
+                HVLOG_F(1, "Blocking query reached. dir={} seqnum={:016X}",
+                           query.direction, query.query_seqnum);
             }
         }
         blocking_reads_ = std::move(unfinished);

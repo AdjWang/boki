@@ -322,7 +322,7 @@ void IOUring::EventLoopRunOnce(size_t* inflight_ops) {
         int io_uring_ret = DCHECK_NOTNULL(cqe)->res;
         if (-io_uring_ret == EINTR) {
             // Interrupted system call, try again
-            VLOG_F(2, "Interrupted system call for op_id={}", op_id);
+            VLOG_F(1, "Retry interrupted system call for op_id={}", op_id);
             io_uring_cqe_seen(&ring_, cqe);
             EnqueueOp(op);
         } else {
