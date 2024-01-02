@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,49 +20,15 @@ import (
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	slib "cs.utexas.edu/zjia/faas/slib/common"
 	types "cs.utexas.edu/zjia/faas/types"
-	"cs.utexas.edu/zjia/faas/utils"
 )
 
-// region debug pipe
-type dbgPipe struct {
-	fp *os.File
-}
-
-func newDebugPipe(fp *os.File) *dbgPipe {
-	return &dbgPipe{
-		fp: fp,
-	}
-}
-
-func (p *dbgPipe) Write(b []byte) (n int, err error) {
-	dbgPrintMessage(b)
-	return p.fp.Write(b)
-}
-
-func dbgPrintMessage(rawMsg []byte) {
-	funcCall := protocol.GetFuncCallFromMessage(rawMsg)
-	if funcCall.FullCallId() == 0 {
-		buf := make([]byte, 10000)
-		n := runtime.Stack(buf, false)
-		dbgPrintFuncCall(rawMsg)
-		log.Printf("[DEBUG] Stack trace : %s ", string(buf[:n]))
-	}
-}
-
-func dbgPrintFuncCall(rawMsg []byte) {
-	funcCall := protocol.GetFuncCallFromMessage(rawMsg)
-	log.Printf("[DEBUG] funcCall: %+v", funcCall)
-}
-
-func hexBytes2String(data []byte) string {
+func toHexString(data []byte) string {
 	output := "["
 	for i := range data {
 		output += fmt.Sprintf("%02X ", data[i])
 	}
 	return strings.TrimSpace(output) + "]"
 }
-
-// region end
 
 const PIPE_BUF = 4096
 
@@ -89,10 +54,8 @@ type FuncWorker struct {
 	engineConn           net.Conn
 	newFuncCallChan      chan []byte
 	inputPipe            *os.File
-	outputPipe           *os.File // protected by mux
-	// DEBUG
-	// outputPipe        *dbgPipe                 // protected by mux
-	outgoingFuncCalls map[uint64](chan []byte) // protected by mux
+	outputPipe           *os.File                 // protected by mux
+	outgoingFuncCalls    map[uint64](chan []byte) // protected by mux
 	// an async request returns twice, first to asyncOutgoing, second to outgoing
 	asyncOutgoingLogOps map[uint64](chan []byte) // protected by mux
 	outgoingLogOps      map[uint64](chan []byte) // protected by mux
@@ -106,8 +69,8 @@ type FuncWorker struct {
 	sharedLogReadCount  int32
 	mux                 sync.Mutex
 	// STAT
-	statMu      sync.Mutex
-	processStat map[uint64][]statEntry
+	// statMu      sync.Mutex
+	// processStat map[uint64][]statEntry
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -149,10 +112,10 @@ func (w *FuncWorker) Run() {
 	// readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 	// otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 
-	sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	dispatchSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Dispatch delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	callSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Call delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	slogSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d SLog delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// dispatchSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Dispatch delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// callSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Call delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// slogSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d SLog delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
 
 	for {
 		message := protocol.NewEmptyMessage()
@@ -162,21 +125,17 @@ func (w *FuncWorker) Run() {
 			log.Panicf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
 		// DEBUG: PROF
-		e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-		sc.AddSample(float64(e2fDispatchDelay))
+		// e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		// sc.AddSample(float64(e2fDispatchDelay))
 
 		if protocol.IsDispatchFuncCallMessage(message) {
 			// DEBUG: PROF
-			// go func(dispatchDelay int64, message []byte) {
-			dispatchSc.AddSample(float64(e2fDispatchDelay))
-			// }(dispatchDelay, message)
+			// dispatchSc.AddSample(float64(e2fDispatchDelay))
 
 			w.newFuncCallChan <- message
 		} else if protocol.IsFuncCallCompleteMessage(message) || protocol.IsFuncCallFailedMessage(message) {
 			// DEBUG: PROF
-			// go func(dispatchDelay int64, message []byte) {
-			callSc.AddSample(float64(e2fDispatchDelay))
-			// }(dispatchDelay, message)
+			// callSc.AddSample(float64(e2fDispatchDelay))
 
 			funcCall := protocol.GetFuncCallFromMessage(message)
 			w.mux.Lock()
@@ -188,30 +147,27 @@ func (w *FuncWorker) Run() {
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			// DEBUG: PROF
-			// go func(dispatchDelay int64, message []byte) {
-			slogSc.AddSample(float64(e2fDispatchDelay))
-			resultType := protocol.GetSharedLogResultTypeFromMessage(message)
+			// slogSc.AddSample(float64(e2fDispatchDelay))
+			// resultType := protocol.GetSharedLogResultTypeFromMessage(message)
 			// funcCall := protocol.GetFuncCallFromMessage(message)
-			switch resultType {
-			case protocol.SharedLogResultType_APPEND_OK:
-				fallthrough
-			case protocol.SharedLogResultType_ASYNC_APPEND_OK:
-				// appendSc.AddSample(float64(dispatchDelay))
-			case protocol.SharedLogResultType_READ_OK:
-				// readSc.AddSample(float64(dispatchDelay))
+			// switch resultType {
+			// case protocol.SharedLogResultType_APPEND_OK:
+			// 	fallthrough
+			// case protocol.SharedLogResultType_ASYNC_APPEND_OK:
+			// 	// appendSc.AddSample(float64(dispatchDelay))
+			// case protocol.SharedLogResultType_READ_OK:
+			// 	// readSc.AddSample(float64(dispatchDelay))
 
-				// flags := protocol.GetFlagsFromMessage(message)
-				// cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
-				// metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
-				// log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
-				// 	f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
-			case protocol.SharedLogResultType_AUXDATA_OK:
-			default:
-				// otherSc.AddSample(float64(dispatchDelay))
-			}
-			// }(dispatchDelay, message)
+			// 	// flags := protocol.GetFlagsFromMessage(message)
+			// 	// cacheHit := (flags & protocol.FLAG_kLogReadBenchCacheHitFlag) != 0
+			// 	// metaposInside := (flags & protocol.FLAG_kLogReadBenchMetaInsideFlag) != 0
+			// 	// log.Printf("[DEBUG] slog read f2e=%d query=%d e2f=%d cacheHit=%v metaposInside=%v",
+			// 	// 	f2eDispatchDelay, queryDelay, e2fDispatchDelay, cacheHit, metaposInside)
+			// case protocol.SharedLogResultType_AUXDATA_OK:
+			// default:
+			// 	// otherSc.AddSample(float64(dispatchDelay))
+			// }
 
-			// log.Printf("[DEBUG] SharedLogOp received cid=%v %v", id, protocol.InspectMessage(message))
 			w.mux.Lock()
 			if protocol.IsSharedLogAsyncResult(message) {
 				if ch, exists := w.asyncOutgoingLogOps[id]; exists {
@@ -295,8 +251,6 @@ func (w *FuncWorker) doHandshake() error {
 	if err != nil {
 		return err
 	}
-	// DEBUG
-	// w.outputPipe = newDebugPipe(op)
 	w.outputPipe = op
 
 	return nil
@@ -573,8 +527,7 @@ func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte,
 			return nil, nil
 		}
 		if protocol.IsFuncCallFailedMessage(message) {
-			dbgPrintFuncCall(message)
-			return nil, fmt.Errorf("FuncCall failed due to failed message: %v", hexBytes2String(message))
+			return nil, fmt.Errorf("FuncCall failed due to failed message: %v", toHexString(message))
 		}
 		payloadSize := protocol.GetPayloadSizeFromMessage(message)
 		if payloadSize < 0 {
