@@ -17,10 +17,16 @@ public:
     bool all_metalog_replicated() const {
         return replicated_metalog_position_ == metalog_position();
     }
+    bool no_replica() const { return metalog_progresses_.empty(); }
 
     void UpdateStorageProgress(uint16_t storage_id,
                                const std::vector<uint32_t>& progress);
     void UpdateReplicaProgress(uint16_t sequencer_id, uint32_t metalog_position);
+    // Used by single primary node configuration.
+    void ForceUpdateReplicaProgress() {
+        DCHECK(metalog_progresses_.empty());
+        replicated_metalog_position_ = metalog_position_;
+    }
     std::optional<MetaLogProto> MarkNextCut();
 
 private:
