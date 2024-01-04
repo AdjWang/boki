@@ -75,9 +75,9 @@ type FuncWorker struct {
 	engineConn           net.Conn
 	newFuncCallChan      chan []byte
 	inputPipe            *os.File
-	// outputPipe           *os.File                 // protected by mux
+	outputPipe           *os.File // protected by mux
 	// DEBUG
-	outputPipe        *dbgPipe                 // protected by mux
+	// outputPipe        *dbgPipe                 // protected by mux
 	outgoingFuncCalls map[uint64](chan []byte) // protected by mux
 	// an async request returns twice, first to asyncOutgoing, second to outgoing
 	asyncOutgoingLogOps map[uint64](chan []byte) // protected by mux
@@ -229,7 +229,8 @@ func (w *FuncWorker) doHandshake() error {
 		return err
 	}
 	// DEBUG
-	w.outputPipe = newDebugPipe(op)
+	// w.outputPipe = newDebugPipe(op)
+	w.outputPipe = op
 
 	return nil
 }
