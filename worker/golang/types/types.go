@@ -83,7 +83,7 @@ type Environment interface {
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, futureMeta FutureMeta) (*CondLogEntry, error)
-	AsyncSharedLogReadIndex(ctx context.Context, futureMeta FutureMeta) (uint64, error)
+	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
 }
 
 type FuncHandler interface {

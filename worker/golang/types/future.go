@@ -10,6 +10,20 @@ import (
 	"github.com/pkg/errors"
 )
 
+func GroupLocalIdByEngine(localIds []uint64) map[uint16][]uint64 {
+	grouped := make(map[uint16][]uint64)
+	for _, id := range localIds {
+		engineId := uint16((id & 0x0000FFFF00000000) >> 32)
+		if group_ids, ok := grouped[engineId]; ok {
+			group_ids = append(group_ids, id)
+			grouped[engineId] = group_ids
+		} else {
+			grouped[engineId] = []uint64{id}
+		}
+	}
+	return grouped
+}
+
 var InvalidFutureMeta = FutureMeta{LocalId: math.MaxUint64}
 
 // Serializable

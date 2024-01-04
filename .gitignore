@@ -23,7 +23,7 @@
 /examples/node/node_modules
 
 # Editor related
-/.vscode/
+.vscode/
 
 # Protobuf generated code
 /src/proto/*.pb.h

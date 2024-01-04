@@ -918,10 +918,10 @@ func (w *FuncWorker) AsyncSharedLogRead(ctx context.Context, futureMeta types.Fu
 }
 
 // Implement types.Environment
-func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, futureMeta types.FutureMeta) (uint64, error) {
+func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error) {
 	id := atomic.AddUint64(&w.nextLogOpId, 1)
 	currentCallId := atomic.LoadUint64(&w.currentCall)
-	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, futureMeta, id)
+	message := protocol.NewAsyncSharedLogReadIndexMessage(currentCallId, w.clientId, localId, id)
 	return w.asyncSharedLogReadIndex(ctx, message, id)
 }
 
