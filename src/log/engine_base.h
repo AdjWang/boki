@@ -134,6 +134,10 @@ private:
 
     std::optional<LRUCache> log_cache_;
 
+    absl::Mutex stat_mu_;
+    stat::StatisticsCollector<int32_t> slog_message_delay_stat_ ABSL_GUARDED_BY(stat_mu_);
+    stat::Counter slog_message_count_stat_ ABSL_GUARDED_BY(stat_mu_);
+
     void SetupZKWatchers();
     void SetupTimers();
 

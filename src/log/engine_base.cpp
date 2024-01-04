@@ -24,7 +24,11 @@ using protocol::SharedLogResultType;
 EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
-      next_local_op_id_(0) {}
+      next_local_op_id_(0),
+      slog_message_delay_stat_(
+          stat::StatisticsCollector<int32_t>::StandardReportCallback("slog_message_delay")),
+      slog_message_count_stat_(stat::Counter::StandardReportCallback("slog_message_count"))
+    {}
 
 EngineBase::~EngineBase() {}
 
@@ -182,6 +186,15 @@ static std::string DebugPrintMessage(const Message& message) {
         message.message_type, message.log_client_id, message.log_client_data, message.log_op);
 }
 void EngineBase::OnMessageFromFuncWorker(const Message& message) {
+    {
+        absl::MutexLock lk(&stat_mu_);
+        int32_t message_delay = MessageHelper::ComputeMessageDelay(message);
+        if (message_delay >= 0) {
+            slog_message_delay_stat_.AddSample(message_delay);
+        }
+        slog_message_count_stat_.Tick();
+    }
+
     protocol::FuncCall func_call = MessageHelper::GetFuncCall(message);
     FnCallContext ctx;
     {
