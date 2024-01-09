@@ -19,7 +19,7 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
-	utils "cs.utexas.edu/zjia/faas/utils"
+	"cs.utexas.edu/zjia/faas/utils"
 )
 
 // region debug pipe
@@ -92,6 +92,11 @@ type FuncWorker struct {
 	nextUidLowHalf      uint32
 	sharedLogReadCount  int32
 	mux                 sync.Mutex
+
+	// STAT
+	statMu                sync.Mutex
+	funcInvocationStat    *utils.StatisticsCollector
+	funcInvocationCounter *utils.CounterCollector
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -116,6 +121,10 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		currentCall:          0,
 		uidHighHalf:          uidHighHalf,
 		nextUidLowHalf:       0,
+
+		statMu:                sync.Mutex{},
+		funcInvocationStat:    utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d delay(us)", funcId, clientId), 1000 /*reportSamples*/, 10*time.Second),
+		funcInvocationCounter: utils.NewCounterCollector(fmt.Sprintf("f%dc%d count", funcId, clientId), 10*time.Second),
 	}
 	return w, nil
 }
@@ -130,10 +139,10 @@ func (w *FuncWorker) Run() {
 	// STAT
 	// sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
 	// cc := utils.NewCounterCollector(fmt.Sprintf("f%dc%d IPC count", w.funcId, w.clientId), 10*time.Second)
-	funcSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d fIPC delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
-	funcCc := utils.NewCounterCollector(fmt.Sprintf("f%dc%d fIPC count", w.funcId, w.clientId), 10*time.Second)
-	slogSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d slogIPC delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
-	slogCc := utils.NewCounterCollector(fmt.Sprintf("f%dc%d slogIPC count", w.funcId, w.clientId), 10*time.Second)
+	// funcSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d fIPC delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	// funcCc := utils.NewCounterCollector(fmt.Sprintf("f%dc%d fIPC count", w.funcId, w.clientId), 10*time.Second)
+	// slogSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d slogIPC delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	// slogCc := utils.NewCounterCollector(fmt.Sprintf("f%dc%d slogIPC count", w.funcId, w.clientId), 10*time.Second)
 
 	go w.servingLoop()
 	for {
@@ -144,15 +153,15 @@ func (w *FuncWorker) Run() {
 			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
 		// STAT
-		e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		// e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
 		// sc.AddSample(float64(e2fDispatchDelay))
 		// cc.Tick(1)
 
 		if protocol.IsDispatchFuncCallMessage(message) {
 			w.newFuncCallChan <- message
 			// STAT
-			funcSc.AddSample(float64(e2fDispatchDelay))
-			funcCc.Tick(1)
+			// funcSc.AddSample(float64(e2fDispatchDelay))
+			// funcCc.Tick(1)
 		} else if protocol.IsFuncCallCompleteMessage(message) || protocol.IsFuncCallFailedMessage(message) {
 			funcCall := protocol.GetFuncCallFromMessage(message)
 			w.mux.Lock()
@@ -162,8 +171,8 @@ func (w *FuncWorker) Run() {
 			}
 			w.mux.Unlock()
 			// STAT
-			funcSc.AddSample(float64(e2fDispatchDelay))
-			funcCc.Tick(1)
+			// funcSc.AddSample(float64(e2fDispatchDelay))
+			// funcCc.Tick(1)
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			w.mux.Lock()
@@ -184,8 +193,8 @@ func (w *FuncWorker) Run() {
 			}
 			w.mux.Unlock()
 			// STAT
-			slogSc.AddSample(float64(e2fDispatchDelay))
-			slogCc.Tick(1)
+			// slogSc.AddSample(float64(e2fDispatchDelay))
+			// slogCc.Tick(1)
 		} else {
 			log.Fatal("[FATAL] Unknown message type")
 		}
@@ -316,6 +325,14 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 	atomic.StoreUint64(&w.currentCall, 0)
 	if err != nil {
 		log.Printf("[ERROR] FuncCall failed with error: %v", err)
+	}
+	// STAT
+	// Frontend
+	if funcCall.FuncId == 1 {
+		w.statMu.Lock()
+		w.funcInvocationStat.AddSample(float64(processingTime))
+		w.funcInvocationCounter.Tick(1)
+		w.statMu.Unlock()
 	}
 
 	var response []byte
@@ -483,6 +500,9 @@ func (w *FuncWorker) newFuncCallCommon(funcCall protocol.FuncCall, input []byte,
 	}
 	_, err = w.outputPipe.Write(message)
 	w.mux.Unlock()
+	if err != nil {
+		return nil, err
+	}
 
 	if w.useFifoForNestedCall {
 		headerBuf := make([]byte, 4)
