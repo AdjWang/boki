@@ -284,6 +284,16 @@ void HttpConnection::OnNewHttpRequest(std::string_view method, std::string_view 
     } else if(absl::StartsWith(path, "/list_functions")) {
         SendHttpResponse(HttpStatus::OK, server_->func_config()->list_functions());
         return;
+    } else if(absl::StartsWith(path, "/mark_event")) {
+        // Usage:
+        // curl -X GET -H "Content-Type: application/json" http://localhost:9000/mark_event?name=warmup_start
+        // ...
+        // curl -X GET -H "Content-Type: application/json" http://localhost:9000/mark_event?name=warmup_end
+        std::string encoded_json(QueryStringToJSON(qs));
+        json event_content = json::parse(encoded_json);
+        HLOG_F(INFO, "Mark benchmark event={}", event_content["name"]);
+        SendHttpResponse(HttpStatus::OK);
+        return;
     } else {
         SendHttpResponse(HttpStatus::NOT_FOUND);
         return;

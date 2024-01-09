@@ -89,7 +89,8 @@ void Server::OnConnectionClose(server::ConnectionBase* connection) {
           || conn_type == kGrpcConnectionTypeId) {
         absl::MutexLock lk(&mu_);
         DCHECK(connections_.contains(connection->id()));
-        connections_.erase(connection->id());
+        // DEBUG: https://github.com/ut-osa/nightcore/issues/5
+        // connections_.erase(connection->id());
     } else if (conn_type == kEngineIngressTypeId) {
         DCHECK(engine_ingress_conns_.contains(connection->id()));
         engine_ingress_conns_.erase(connection->id());
