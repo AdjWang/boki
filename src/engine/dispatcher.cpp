@@ -33,11 +33,11 @@ Dispatcher::Dispatcher(Engine* engine, uint16_t func_id)
     func_config_entry_ = func_entry;
     if (func_config_entry_->min_workers > 0) {
         min_workers_ = gsl::narrow_cast<size_t>(func_config_entry_->min_workers);
-        HLOG(INFO) << "min_workers=" << min_workers_;
+        HVLOG(1) << "min_workers=" << min_workers_;
     }
     if (func_config_entry_->max_workers > 0) {
         max_workers_ = gsl::narrow_cast<size_t>(func_config_entry_->max_workers);
-        HLOG(INFO) << "max_workers=" << max_workers_;
+        HVLOG(1) << "max_workers=" << max_workers_;
     }
 }
 
@@ -94,11 +94,11 @@ bool Dispatcher::OnNewFuncCall(const FuncCall& func_call, const FuncCall& parent
     if (idle_worker) {
         DispatchFuncCall(idle_worker, dispatch_func_call_message);
     } else {
-        VLOG(1) << "No idle worker at the moment";
         pending_func_calls_.push({
             .dispatch_func_call_message = dispatch_func_call_message,
             .func_call_info = func_call_info
         });
+        HLOG_F(INFO, "No idle worker at the moment, pending={}", pending_func_calls_.size());
     }
     return true;
 }

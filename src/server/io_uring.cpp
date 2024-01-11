@@ -318,11 +318,19 @@ void IOUring::EventLoopRunOnce(size_t* inflight_ops) {
         uint64_t op_id = DCHECK_NOTNULL(cqe)->user_data;
         DCHECK(ops_.contains(op_id));
         Op* op = ops_[op_id];
-        ops_.erase(op_id);
-        OnOpComplete(op, cqe);
-        op_pool_.Return(op);
-        io_uring_cqe_seen(&ring_, cqe);
-        count++;
+        int io_uring_ret = DCHECK_NOTNULL(cqe)->res;
+        if (-io_uring_ret == EINTR) {
+            // Interrupted system call, try again
+            HLOG_F(WARNING, "Interrupted system call for op_id={}, retry", op_id);
+            io_uring_cqe_seen(&ring_, cqe);
+            EnqueueOp(op);
+        } else {
+            ops_.erase(op_id);
+            OnOpComplete(op, cqe);
+            op_pool_.Return(op);
+            io_uring_cqe_seen(&ring_, cqe);
+            count++;
+        }
     }
     if (count > 0) {
         int64_t elasped_time = GetMonotonicNanoTimestamp() - start_timestamp;
@@ -448,11 +456,11 @@ void IOUring::EnqueueOp(Op* op) {
     VLOG_F(2, "EnqueueOp: id={}, type={}, fd={}",
            (op->id >> 8), kOpTypeStr[op_type(op)], op_fd(op));
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_);
-    // CHECK(sqe != NULL) << "io_uring_get_sqe failed";
     if(!sqe) {
         if(!pending_ops_.contains(op->id)) {
             pending_ops_[op->id] = op;
         }
+        HLOG_F(WARNING, "io_uring sqe full, pending op={} n={}", op->id, pending_ops_.size());
         return;
     }
     switch (op_type(op)) {
