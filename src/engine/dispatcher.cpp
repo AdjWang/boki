@@ -98,7 +98,8 @@ bool Dispatcher::OnNewFuncCall(const FuncCall& func_call, const FuncCall& parent
             .dispatch_func_call_message = dispatch_func_call_message,
             .func_call_info = func_call_info
         });
-        HLOG_F(INFO, "No idle worker at the moment, pending={}", pending_func_calls_.size());
+        HLOG_F(INFO, "No idle worker at the moment. FnId={} Reqs={} Running={} Idling={}",
+                     func_id_, pending_func_calls_.size(), running_workers_.size(), idle_workers_.size());
     }
     return true;
 }
