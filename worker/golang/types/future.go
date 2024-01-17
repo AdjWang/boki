@@ -2,11 +2,35 @@ package types
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+func IdsToString(ids []uint64) string {
+	result := ""
+	for _, id := range ids {
+		result += fmt.Sprintf("%016X, ", id)
+	}
+	return "[" + strings.TrimSuffix(result, ", ") + "]"
+}
+
+func GroupLocalIdByEngine(localIds []uint64) map[uint16][]uint64 {
+	grouped := make(map[uint16][]uint64)
+	for _, id := range localIds {
+		engineId := uint16((id & 0x0000FFFF00000000) >> 32)
+		if group_ids, ok := grouped[engineId]; ok {
+			group_ids = append(group_ids, id)
+			grouped[engineId] = group_ids
+		} else {
+			grouped[engineId] = []uint64{id}
+		}
+	}
+	return grouped
+}
 
 var InvalidLocalId uint64 = math.MaxUint64
 
