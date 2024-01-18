@@ -27,7 +27,9 @@ Dispatcher::Dispatcher(Engine* engine, uint16_t func_id)
       estimated_rps_stat_(stat::StatisticsCollector<float>::StandardReportCallback(
           fmt::format("estimated_rps[{}]", func_id))),
       estimated_concurrency_stat_(stat::StatisticsCollector<float>::StandardReportCallback(
-          fmt::format("estimated_concurrency[{}]", func_id))) {
+          fmt::format("estimated_concurrency[{}]", func_id))),
+      queuing_count_stat_(stat::StatisticsCollector<size_t>::StandardReportCallback(
+          fmt::format("queuing_requests[{}]", func_id))) {
     const FuncConfig::Entry* func_entry = engine_->func_config()->find_by_func_id(func_id);
     DCHECK(func_entry != nullptr);
     func_config_entry_ = func_entry;
@@ -101,6 +103,7 @@ bool Dispatcher::OnNewFuncCall(const FuncCall& func_call, const FuncCall& parent
         HLOG_F(INFO, "No idle worker at the moment. FnId={} Reqs={} Running={} Idling={}",
                      func_id_, pending_func_calls_.size(), running_workers_.size(), idle_workers_.size());
     }
+    queuing_count_stat_.AddSample(pending_func_calls_.size());
     return true;
 }
 
