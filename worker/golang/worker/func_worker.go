@@ -327,8 +327,8 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 		log.Printf("[ERROR] FuncCall failed with error: %v", err)
 	}
 	// STAT
-	// Frontend
-	if funcCall.FuncId == 1 {
+	// ComposeReview
+	if funcCall.FuncId == 6 {
 		w.statMu.Lock()
 		w.funcInvocationStat.AddSample(float64(processingTime))
 		w.funcInvocationCounter.Tick(1)
