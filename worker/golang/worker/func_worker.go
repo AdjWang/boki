@@ -1191,6 +1191,9 @@ func (w *FuncWorker) AsyncSharedLogReadIndex(ctx context.Context, localId uint64
 	if err != nil {
 		return 0, err
 	}
+	if condLogEntry == nil {
+		log.Panicf("read nothing from localid=%016X", localId)
+	}
 	return condLogEntry.SeqNum, err
 }
 

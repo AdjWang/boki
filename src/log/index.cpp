@@ -240,17 +240,17 @@ void Index::MakeQuery(const IndexQuery& query) {
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
         } else if (view_id < view_->id()) {
-            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query viewid={} smaller than current viewid={}",
-                    uint16_t(query.type), query.query_seqnum, view_id, view_->id());
+            HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} "
+                       "since pending_query viewid={} smaller than current viewid={}",
+                       uint16_t(query.type), query.query_seqnum, view_id, view_->id());
             ProcessQuery(query);
         } else {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
             if (position <= indexed_metalog_position_) {
-                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query metalog_position={} not larger than indexed_metalog_position={}",
-                        uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
+                HVLOG_F(1, "MakeQuery Process query type=0x{:02X} seqnum=0x{:016X} "
+                           "since pending_query metalog_position={} not larger than indexed_metalog_position={}",
+                           uint16_t(query.type), query.query_seqnum, position, indexed_metalog_position_);
                 ProcessQuery(query);
             } else {
                 // DEBUG: stat temporary
@@ -357,6 +357,8 @@ void Index::AdvanceIndexProgress() {
                         < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
                     unfinished.push_back(std::make_pair(start_timestamp, query));
                 } else {
+                    HLOG_F(WARNING, "Pending query timeout. type={} id={:016X}",
+                                    query.direction, query.query_seqnum);
                     pending_query_results_.push_back(BuildNotFoundResult(query));
                 }
             }
@@ -369,9 +371,9 @@ void Index::AdvanceIndexProgress() {
             break;
         }
         const IndexQuery& query = iter->second;
-        HVLOG_F(1, "AdvanceIndexProgress Process query type=0x{:02X} seqnum=0x{:016X} \
-since pending_query metalog_position={} not larger than indexed_metalog_position={}",
-                uint16_t(query.type), query.query_seqnum, iter->first, indexed_metalog_position_);
+        HVLOG_F(1, "AdvanceIndexProgress Process query type=0x{:02X} seqnum=0x{:016X} "
+                   "since pending_query metalog_position={} not larger than indexed_metalog_position={}",
+                   uint16_t(query.type), query.query_seqnum, iter->first, indexed_metalog_position_);
         ProcessQuery(query);
         iter = pending_queries_.erase(iter);
     }
@@ -402,9 +404,6 @@ bool Index::ProcessLocalIdQuery(const IndexQuery& query) {
     // replace seqnum if querying by localid
     uint64_t local_id = query.query_seqnum;
     if (log_index_map_.find(local_id) == log_index_map_.end()) {
-        // not found
-        // HVLOG_F(1, "pending ProcessQuery: NotFoundResult due to log_index_map_ not indexed local_id: 0x{:016X}",
-        //         local_id);
         return false;
     } else {
         // found
