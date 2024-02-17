@@ -124,6 +124,7 @@ void EngineBase::RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay)
         read_delay_stat_.AddSample(delay);
         break;
     case SharedLogOpType::ASYNC_READ_PREV:
+    case SharedLogOpType::ASYNC_READ_NEXT:
     case SharedLogOpType::ASYNC_READ_NEXT_B:
     case SharedLogOpType::ASYNC_READ_LOCALID:
         break;
@@ -134,7 +135,7 @@ void EngineBase::RecordOpDelay(protocol::SharedLogOpType op_type, int32_t delay)
     case SharedLogOpType::IPC_BENCH:
         break;
     default:
-        UNREACHABLE();
+        UNREACHABLE() << fmt::format(" SharedLogOpType={}", static_cast<int>(op_type));
     }
 #endif  // !defined(__FAAS_DISABLE_STAT)
 }
@@ -164,7 +165,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
         HandleLocalIPCBench(op);
         break;
     default:
-        UNREACHABLE();
+        UNREACHABLE() << fmt::format(" SharedLogOpType={}", static_cast<int>(op->type));
     }
 }
 

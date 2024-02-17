@@ -181,6 +181,8 @@ public:
         report_timer_.set_report_interval_in_ms(value);
     }
 
+    int64_t count() const { return value_; }
+
     void Tick(int delta = 1) {
 #ifndef __FAAS_DISABLE_STAT
         DCHECK_GT(delta, 0);

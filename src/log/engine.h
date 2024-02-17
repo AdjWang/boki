@@ -32,6 +32,9 @@ private:
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_local_reads_;
 
+    absl::Mutex stat_mu_;
+    stat::StatisticsCollector<int32_t> local_order_stat_   ABSL_GUARDED_BY(stat_mu_);
+
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;

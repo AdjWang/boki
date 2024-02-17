@@ -20,6 +20,7 @@ import (
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	slib "cs.utexas.edu/zjia/faas/slib/common"
 	types "cs.utexas.edu/zjia/faas/types"
+	"cs.utexas.edu/zjia/faas/utils"
 )
 
 func toHexString(data []byte) string {
@@ -68,9 +69,6 @@ type FuncWorker struct {
 	nextUidLowHalf      uint32
 	sharedLogReadCount  int32
 	mux                 sync.Mutex
-	// STAT
-	// statMu      sync.Mutex
-	// processStat map[uint64][]statEntry
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -108,14 +106,16 @@ func (w *FuncWorker) Run() {
 	log.Printf("[INFO] Handshake with engine done")
 
 	go w.servingLoop()
-	// appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	// readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	// otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	// appendSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Append delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	// readSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Read delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	// otherSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Other delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
 
-	// sc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	// dispatchSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Dispatch delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	// callSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Call delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
-	// slogSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d SLog delay(us)", w.funcId, w.clientId), 200 /*reportSamples*/, 10*time.Second)
+	ipcSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d IPC delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	ipcCounter := utils.NewCounterCollector(fmt.Sprintf("f%dc%d IPC counter", w.funcId, w.clientId), 10*time.Second)
+	// dispatchSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Dispatch delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	// callSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d Call delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	slogSc := utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d SLog delay(us)", w.funcId, w.clientId), 1000 /*reportSamples*/, 10*time.Second)
+	slogCounter := utils.NewCounterCollector(fmt.Sprintf("f%dc%d SLog counter", w.funcId, w.clientId), 10*time.Second)
 
 	for {
 		message := protocol.NewEmptyMessage()
@@ -125,8 +125,9 @@ func (w *FuncWorker) Run() {
 			log.Panicf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
 		// DEBUG: PROF
-		// e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
-		// sc.AddSample(float64(e2fDispatchDelay))
+		e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
+		ipcSc.AddSample(float64(e2fDispatchDelay))
+		ipcCounter.Tick(1)
 
 		if protocol.IsDispatchFuncCallMessage(message) {
 			// DEBUG: PROF
@@ -147,7 +148,8 @@ func (w *FuncWorker) Run() {
 		} else if protocol.IsSharedLogOpMessage(message) {
 			id := protocol.GetLogClientDataFromMessage(message)
 			// DEBUG: PROF
-			// slogSc.AddSample(float64(e2fDispatchDelay))
+			slogSc.AddSample(float64(e2fDispatchDelay))
+			slogCounter.Tick(1)
 			// resultType := protocol.GetSharedLogResultTypeFromMessage(message)
 			// funcCall := protocol.GetFuncCallFromMessage(message)
 			// switch resultType {
