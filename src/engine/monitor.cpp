@@ -68,6 +68,33 @@ static float compute_rate(int64_t timestamp1, int64_t value1, int64_t timestamp2
 static int64_t tick_to_ns(int32_t tick) {
     return int64_t{tick} * 10000000;
 }
+
+static bool report_proc_stat() {
+    docker_utils::ProcStat stat;
+    if (!docker_utils::ReadProcStat(&stat)) {
+        HLOG(ERROR) << "Failed to read container stat: container_id=0";
+        return false;
+    }
+    int32_t total_stat = stat.cpu_user + stat.cpu_nice + stat.cpu_system + stat.cpu_idle +
+                            stat.cpu_iowait + stat.cpu_irq + stat.cpu_softirq + stat.cpu_steal +
+                            stat.cpu_guest + stat.cpu_guest_nice;
+    float cpu_user_stat = static_cast<float>(stat.cpu_user) / static_cast<float>(total_stat);
+    float cpu_nice_stat = static_cast<float>(stat.cpu_nice) / static_cast<float>(total_stat);
+    float cpu_system_stat = static_cast<float>(stat.cpu_system) / static_cast<float>(total_stat);
+    float cpu_idle_stat = static_cast<float>(stat.cpu_idle) / static_cast<float>(total_stat);
+    float cpu_iowait_stat = static_cast<float>(stat.cpu_iowait) / static_cast<float>(total_stat);
+    float cpu_irq_stat = static_cast<float>(stat.cpu_irq) / static_cast<float>(total_stat);
+    float cpu_softirq_stat = static_cast<float>(stat.cpu_softirq) / static_cast<float>(total_stat);
+    float cpu_steal_stat = static_cast<float>(stat.cpu_steal) / static_cast<float>(total_stat);
+    float cpu_guest_stat = static_cast<float>(stat.cpu_guest) / static_cast<float>(total_stat);
+    float cpu_guest_nice_stat = static_cast<float>(stat.cpu_guest_nice) / static_cast<float>(total_stat);
+    HLOG_F(INFO,
+           "ProcStat user={:.4f} nice={:.4f} system={:.4f} idle={:.4f} iowait={:.4f} irq={:.4f} "
+           "softirq={:.4f} steal={:.4f} guest={:.4f} guest_nice={:.4f}",
+           cpu_user_stat, cpu_nice_stat, cpu_system_stat, cpu_idle_stat, cpu_iowait_stat,
+           cpu_irq_stat, cpu_softirq_stat, cpu_steal_stat, cpu_guest_stat, cpu_guest_nice_stat);
+    return true;
+}
 }
 
 void Monitor::BackgroundThreadMain() {
@@ -103,6 +130,10 @@ void Monitor::BackgroundThreadMain() {
             HLOG(WARNING) << "read on timerfd returns wrong size";
         } else if (exp > 1) {
             HLOG(WARNING) << "timerfd expires more than once";
+        }
+
+        if (!report_proc_stat()) {
+            HLOG(WARNING) << "failed to report from /proc/stat";
         }
 
         std::vector<std::pair</* func_id */ int, /* container_id */ std::string>> container_ids;

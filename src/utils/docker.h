@@ -26,7 +26,22 @@ struct ContainerStat {
     int32_t cpu_stat_sys;   // in tick, from cpuacct.stat
 };
 
+struct ProcStat {
+    // 10 metrics from /proc/stat
+    int32_t cpu_user;
+    int32_t cpu_nice;
+    int32_t cpu_system;
+    int32_t cpu_idle;
+    int32_t cpu_iowait;
+    int32_t cpu_irq;
+    int32_t cpu_softirq;
+    int32_t cpu_steal;
+    int32_t cpu_guest;
+    int32_t cpu_guest_nice;
+};
+
 bool ReadContainerStat(std::string_view container_id, ContainerStat* stat);
+bool ReadProcStat(ProcStat* stat);
 
 }  // namespace docker_utils
 }  // namespace faas
