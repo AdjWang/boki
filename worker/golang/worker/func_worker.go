@@ -19,21 +19,20 @@ import (
 	ipc "cs.utexas.edu/zjia/faas/ipc"
 	protocol "cs.utexas.edu/zjia/faas/protocol"
 	types "cs.utexas.edu/zjia/faas/types"
-	"cs.utexas.edu/zjia/faas/utils"
 )
 
 // region debug pipe
-type dbgPipe struct {
+type pipeWrapper struct {
 	fp *os.File
 }
 
-func newDebugPipe(fp *os.File) *dbgPipe {
-	return &dbgPipe{
+func newPipeWrapper(fp *os.File) *pipeWrapper {
+	return &pipeWrapper{
 		fp: fp,
 	}
 }
 
-func (p *dbgPipe) Write(b []byte) (n int, err error) {
+func (p *pipeWrapper) Write(b []byte) (n int, err error) {
 	// dbgPrintMessage(b)
 	protocol.SetSendTimestampInMessage(b, common.GetMonotonicMicroTimestamp())
 	return p.fp.Write(b)
@@ -78,7 +77,7 @@ type FuncWorker struct {
 	inputPipe            *os.File
 	// outputPipe           *os.File // protected by mux
 	// DEBUG
-	outputPipe        *dbgPipe                 // protected by mux
+	outputPipe        *pipeWrapper             // protected by mux
 	outgoingFuncCalls map[uint64](chan []byte) // protected by mux
 	// an async request returns twice, first to asyncOutgoing, second to outgoing
 	asyncOutgoingLogOps map[uint64](chan []byte) // protected by mux
@@ -94,9 +93,9 @@ type FuncWorker struct {
 	mux                 sync.Mutex
 
 	// STAT
-	statMu                sync.Mutex
-	funcInvocationStat    *utils.StatisticsCollector
-	funcInvocationCounter *utils.CounterCollector
+	// statMu                sync.Mutex
+	// funcInvocationStat    *utils.StatisticsCollector
+	// funcInvocationCounter *utils.CounterCollector
 }
 
 func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFactory) (*FuncWorker, error) {
@@ -122,9 +121,9 @@ func NewFuncWorker(funcId uint16, clientId uint16, factory types.FuncHandlerFact
 		uidHighHalf:          uidHighHalf,
 		nextUidLowHalf:       0,
 
-		statMu:                sync.Mutex{},
-		funcInvocationStat:    utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d delay(us)", funcId, clientId), 1000 /*reportSamples*/, 10*time.Second),
-		funcInvocationCounter: utils.NewCounterCollector(fmt.Sprintf("f%dc%d count", funcId, clientId), 10*time.Second),
+		// statMu:                sync.Mutex{},
+		// funcInvocationStat:    utils.NewStatisticsCollector(fmt.Sprintf("f%dc%d delay(us)", funcId, clientId), 1000 /*reportSamples*/, 10*time.Second),
+		// funcInvocationCounter: utils.NewCounterCollector(fmt.Sprintf("f%dc%d count", funcId, clientId), 10*time.Second),
 	}
 	return w, nil
 }
@@ -260,7 +259,7 @@ func (w *FuncWorker) doHandshake() error {
 		return err
 	}
 	// DEBUG
-	w.outputPipe = newDebugPipe(op)
+	w.outputPipe = newPipeWrapper(op)
 	// w.outputPipe = op
 
 	return nil
@@ -328,12 +327,12 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 	}
 	// STAT
 	// ComposeReview
-	if funcCall.FuncId == 6 {
-		w.statMu.Lock()
-		w.funcInvocationStat.AddSample(float64(processingTime))
-		w.funcInvocationCounter.Tick(1)
-		w.statMu.Unlock()
-	}
+	// if funcCall.FuncId == 6 {
+	// 	w.statMu.Lock()
+	// 	w.funcInvocationStat.AddSample(float64(processingTime))
+	// 	w.funcInvocationCounter.Tick(1)
+	// 	w.statMu.Unlock()
+	// }
 
 	var response []byte
 	if w.useFifoForNestedCall {
