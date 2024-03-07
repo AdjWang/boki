@@ -1,6 +1,7 @@
 #pragma once
 
 #include "log/log_space_base.h"
+#include "common/stat.h"
 
 namespace faas {
 namespace log {
@@ -110,6 +111,11 @@ private:
         UserTagVec user_tags;
     };
     std::map</* local_id */ uint64_t, AsyncIndexData> log_index_map_;
+    // log sync read index stat
+    stat::Counter blocking_read_index_count_;
+    stat::Counter read_index_count_;
+    stat::StatisticsCollector<double> blocking_read_index_ratio_stat_;
+    stat::StatisticsCollector<int32_t> read_index_stat_;
 
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);

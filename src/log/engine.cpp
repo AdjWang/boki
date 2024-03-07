@@ -19,7 +19,9 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) {}
+      current_view_active_(false),
+      local_order_stat_(stat::StatisticsCollector<int32_t>::StandardReportCallback(
+          "local_order_delay")) {}
 
 Engine::~Engine() {}
 
@@ -169,6 +171,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type));
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
+    int64_t start_timestamp = GetMonotonicMicroTimestamp();
     const View* view = nullptr;
     LogMetaData log_metadata = MetaDataFromAppendOp(op);
     {
@@ -188,6 +191,12 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         }
     }
     if (op->type == SharedLogOpType::ASYNC_APPEND) {
+        int32_t op_delay = gsl::narrow_cast<int32_t>(
+            GetMonotonicMicroTimestamp() - start_timestamp);
+        {
+            absl::MutexLock stat_lk(&stat_mu_);
+            local_order_stat_.AddSample(op_delay);
+        }
         // here's the first return of an async append, the second is identical to
         // sync append
         Message response = MessageHelper::NewSharedLogOpSucceeded(

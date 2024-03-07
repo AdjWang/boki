@@ -41,7 +41,15 @@ Index::Index(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       indexed_metalog_position_(0),
       data_received_seqnum_position_(0),
-      indexed_seqnum_position_(0) {
+      indexed_seqnum_position_(0),
+      blocking_read_index_count_(
+          stat::Counter::StandardReportCallback("blocking_read_index_count")),
+      read_index_count_(
+          stat::Counter::StandardReportCallback("read_index_count")),
+      blocking_read_index_ratio_stat_(
+          stat::StatisticsCollector<double>::StandardReportCallback("blocking_read_index_ratio")),
+      read_index_stat_(
+          stat::StatisticsCollector<int32_t>::StandardReportCallback("read_index_delay")) {
     log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
 }
@@ -332,6 +340,11 @@ void Index::AdvanceIndexProgress() {
             bool query_result;
             if (query.type == IndexQuery::kAsync) {
                 query_result = ProcessAsyncQuery(query);
+                // stat
+                if (query_result) {
+                    read_index_stat_.AddSample(
+                        gsl::narrow_cast<int32_t>(current_timestamp - start_timestamp));
+                }
             } else {
                 query_result = ProcessBlockingQuery(query);
             }
@@ -403,7 +416,14 @@ bool Index::ProcessAsyncQuery(const IndexQuery& query) {
 
 void Index::ProcessQuery(const IndexQuery& query) {
     if (query.type == IndexQuery::kAsync) {
-        ProcessAsyncQuery(query);
+        read_index_count_.Tick(1);
+        bool success = ProcessAsyncQuery(query);
+        if (!success) {
+            blocking_read_index_count_.Tick(1);
+        }
+        double blocking_read_ratio =
+            static_cast<double>(blocking_read_index_count_.count()) / read_index_count_.count();
+        blocking_read_index_ratio_stat_.AddSample(blocking_read_ratio);
     } else {
         if (query.direction == IndexQuery::kReadNextB) {
             bool success = ProcessBlockingQuery(query);

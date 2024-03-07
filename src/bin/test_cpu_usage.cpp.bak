@@ -1,0 +1,79 @@
+#define __FAAS_NOWARN_SIGN_CONVERSION
+#include "base/init.h"
+#include "base/common.h"
+#include "common/time.h"
+#include "utils/bench.h"
+#include "utils/docker.h"
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/eventfd.h>
+#include <sys/timerfd.h>
+
+using namespace faas;
+
+#define log_header_ "Monitor: "
+
+
+int main(int argc, char* argv[]) {
+    base::InitMain(argc, argv);
+
+    LOG(INFO) << "test cpu usage report";
+
+    int64_t frequency_hz_ = 2;
+    int64_t interval_in_ns = gsl::narrow_cast<int64_t>(float{1e9} / frequency_hz_);
+
+    struct timespec now;
+    PCHECK(clock_gettime(CLOCK_MONOTONIC, &now) == 0) << "clock_gettime failed";
+
+    struct itimerspec timer_spec;
+    timer_spec.it_value = now;
+    timer_spec.it_interval.tv_sec = gsl::narrow_cast<time_t>(interval_in_ns / 1000000000);
+    timer_spec.it_interval.tv_nsec = gsl::narrow_cast<long>(interval_in_ns % 1000000000);
+
+    int timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    PCHECK(timer_fd != -1) << "timerfd_create failed";
+    PCHECK(timerfd_settime(timer_fd, TFD_TIMER_ABSTIME, &timer_spec, 0) == 0)
+        << "timerfd_settime failed";
+
+    while (true) {
+        uint64_t exp;
+        ssize_t nread = read(timer_fd, &exp, sizeof(uint64_t));
+        if (nread < 0) {
+            PLOG(ERROR) << "read on timerfd failed";
+            break;
+        }
+        if (nread != sizeof(uint64_t)) {
+            HLOG(WARNING) << "read on timerfd returns wrong size";
+        } else if (exp > 1) {
+            HLOG(WARNING) << "timerfd expires more than once";
+        }
+
+        HLOG(INFO) << "cpu usage report";
+
+        docker_utils::ProcStat stat;
+        if (!docker_utils::ReadProcStat(&stat)) {
+            HLOG(ERROR) << "Failed to read container stat: container_id=0";
+            continue;
+        }
+        int32_t total_stat = stat.cpu_user + stat.cpu_nice + stat.cpu_system + stat.cpu_idle +
+                             stat.cpu_iowait + stat.cpu_irq + stat.cpu_softirq + stat.cpu_steal +
+                             stat.cpu_guest + stat.cpu_guest_nice;
+        float cpu_user_stat = static_cast<float>(stat.cpu_user) / static_cast<float>(total_stat);
+        float cpu_nice_stat = static_cast<float>(stat.cpu_nice) / static_cast<float>(total_stat);
+        float cpu_system_stat = static_cast<float>(stat.cpu_system) / static_cast<float>(total_stat);
+        float cpu_idle_stat = static_cast<float>(stat.cpu_idle) / static_cast<float>(total_stat);
+        float cpu_iowait_stat = static_cast<float>(stat.cpu_iowait) / static_cast<float>(total_stat);
+        float cpu_irq_stat = static_cast<float>(stat.cpu_irq) / static_cast<float>(total_stat);
+        float cpu_softirq_stat = static_cast<float>(stat.cpu_softirq) / static_cast<float>(total_stat);
+        float cpu_steal_stat = static_cast<float>(stat.cpu_steal) / static_cast<float>(total_stat);
+        float cpu_guest_stat = static_cast<float>(stat.cpu_guest) / static_cast<float>(total_stat);
+        float cpu_guest_nice_stat = static_cast<float>(stat.cpu_guest_nice) / static_cast<float>(total_stat);
+        LOG_F(INFO, "user={:.4f} nice={:.4f} system={:.4f} idle={:.4f} iowait={:.4f} irq={:.4f} softirq={:.4f} "
+                    "steal={:.4f} guest={:.4f} guest_nice={:.4f}",
+                    cpu_user_stat, cpu_nice_stat, cpu_system_stat, cpu_idle_stat, cpu_iowait_stat,
+                    cpu_irq_stat, cpu_softirq_stat, cpu_steal_stat, cpu_guest_stat, cpu_guest_nice_stat);
+    }
+
+    return 0;
+}

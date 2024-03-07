@@ -10,6 +10,7 @@
 namespace faas {
 namespace base {
 
+void SetupSignalHandler();
 void InitMain(int argc, char* argv[],
               std::vector<char*>* positional_args = nullptr);
 
