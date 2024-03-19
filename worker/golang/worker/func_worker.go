@@ -68,7 +68,7 @@ const PIPE_BUF = 4096
 
 // STAT
 var (
-	EnableStat  = true
+	EnableStat  = false
 	ipcStatMu   = sync.Mutex{}
 	ipcSc       = utils.NewStatisticsCollector("IPC delay(us)", 1000 /*reportSamples*/, 10*time.Second)
 	ipcCounter  = utils.NewCounterCollector("IPC counter", 10*time.Second)
@@ -147,8 +147,8 @@ func (w *FuncWorker) Run() {
 			log.Fatalf("[FATAL] Failed to read one complete engine message: nread=%d", n)
 		}
 		// STAT
-		e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
 		if EnableStat {
+			e2fDispatchDelay := common.GetMonotonicMicroTimestamp() - protocol.GetSendTimestampFromMessage(message)
 			ipcStatMu.Lock()
 			ipcSc.AddSample(float64(e2fDispatchDelay))
 			ipcCounter.Tick(1)
