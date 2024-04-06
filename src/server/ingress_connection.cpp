@@ -17,10 +17,7 @@ IngressConnection::IngressConnection(int type, int sockfd, size_t msghdr_size)
       buf_size_(kDefaultBufSize),
       log_header_(GetLogHeader(type, sockfd)),
       message_throughput_stat_(stat::Counter::StandardReportCallback(
-          GetStatLogHeader(type, sockfd))),
-      message_delay_stat_(
-          stat::StatisticsCollector<int32_t>::StandardReportCallback(
-              GetStatLogHeader(type, sockfd))) {}
+          GetStatLogHeader(type, sockfd))) {}
 
 IngressConnection::~IngressConnection() {
     DCHECK(state_ == kCreated || state_ == kClosed);
@@ -68,33 +65,16 @@ void IngressConnection::SetNewMessageCallback(NewMessageCallback cb) {
 }
 
 void IngressConnection::ProcessMessages() {
-    using protocol::ConnPerfMessage;
     DCHECK(io_worker_->WithinMyEventLoopThread());
     while (read_buffer_.length() >= msghdr_size_) {
         std::span<const char> header(read_buffer_.data(), msghdr_size_);
-#ifdef __FAAS_DISABLE_STAT
         size_t full_size = message_full_size_cb_(header);
         DCHECK_GE(full_size, msghdr_size_);
-        size_t read_size = full_size;
-#else
-        size_t full_size = message_full_size_cb_(header);
-        DCHECK_GE(full_size, msghdr_size_);
-        size_t read_size = full_size + sizeof(ConnPerfMessage);
-#endif
-        if (read_buffer_.length() >= read_size) {
+        if (read_buffer_.length() >= full_size) {
             new_message_cb_(std::span<const char>(read_buffer_.data(), full_size));
             read_buffer_.ConsumeFront(full_size);
-#ifndef __FAAS_DISABLE_STAT
-            std::span<const char> perf_payload(read_buffer_.data(),
-                                               sizeof(ConnPerfMessage));
-            const ConnPerfMessage* perf_message =
-                reinterpret_cast<const ConnPerfMessage*>(perf_payload.data());
-            // Ignore the perf message itself
+
             message_throughput_stat_.Tick(gsl::narrow_cast<int>(full_size));
-            message_delay_stat_.AddSample(gsl::narrow_cast<int32_t>(
-                GetMonotonicMicroTimestamp() - perf_message->send_timestamp));
-            read_buffer_.ConsumeFront(sizeof(ConnPerfMessage));
-#endif
         } else {
             break;
         }

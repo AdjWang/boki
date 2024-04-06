@@ -668,27 +668,5 @@ private:
     DISALLOW_IMPLICIT_CONSTRUCTORS(SharedLogMessageHelper);
 };
 
-struct ConnPerfMessage {
-    int64_t send_timestamp;
-} __attribute__ ((packed));
-
-
-class ConnPerfMessageHelper {
-public:
-#define NEW_EMPTY_PERF_MESSAGE(MSG_VAR) \
-    ConnPerfMessage MSG_VAR;            \
-    memset(&MSG_VAR, 0, sizeof(ConnPerfMessage))
-
-    static ConnPerfMessage NewConnPerfMessage(int64_t timestamp) {
-        NEW_EMPTY_PERF_MESSAGE(message);
-        message.send_timestamp = timestamp;
-        return message;
-    }
-
-#undef NEW_EMPTY_PERF_MESSAGE
-private:
-    DISALLOW_IMPLICIT_CONSTRUCTORS(ConnPerfMessageHelper);
-};
-
 }  // namespace protocol
 }  // namespace faas

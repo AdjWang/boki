@@ -59,7 +59,6 @@ private:
 
     // Inside a race free event loop
     stat::Counter message_throughput_stat_;
-    stat::StatisticsCollector<int32_t> message_delay_stat_;
 
     void ProcessMessages();
     bool OnRecvData(int status, std::span<const char> data);

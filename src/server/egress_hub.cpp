@@ -70,14 +70,6 @@ void EgressHub::SendMessage(std::span<const char> header, std::span<const char> 
     write_buffer_.AppendData(payload1);
     write_buffer_.AppendData(payload2);
     write_buffer_.AppendData(payload3);
-#ifndef __FAAS_DISABLE_STAT
-    using protocol::ConnPerfMessage;
-    using protocol::ConnPerfMessageHelper;
-    ConnPerfMessage perf_message =
-        ConnPerfMessageHelper::NewConnPerfMessage(GetMonotonicMicroTimestamp());
-    write_buffer_.AppendData(std::span<const char>(
-        reinterpret_cast<const char*>(&perf_message), sizeof(ConnPerfMessage)));
-#endif
     ScheduleSendFunction();
 }
 
