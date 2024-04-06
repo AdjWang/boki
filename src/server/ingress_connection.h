@@ -2,6 +2,7 @@
 
 #include "base/common.h"
 #include "common/protocol.h"
+#include "common/stat.h"
 #include "utils/appendable_buffer.h"
 #include "server/io_worker.h"
 
@@ -56,10 +57,15 @@ private:
     std::string log_header_;
     utils::AppendableBuffer read_buffer_;
 
+    // Inside a race free event loop
+    stat::Counter message_throughput_stat_;
+    stat::StatisticsCollector<int32_t> message_delay_stat_;
+
     void ProcessMessages();
     bool OnRecvData(int status, std::span<const char> data);
 
     static std::string GetLogHeader(int type, int sockfd);
+    static std::string GetStatLogHeader(int type, int sockfd);
 
     DISALLOW_COPY_AND_ASSIGN(IngressConnection);
 };

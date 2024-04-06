@@ -2,6 +2,7 @@
 
 #include "common/flags.h"
 #include "server/constants.h"
+#include "common/protocol.h"
 
 namespace faas {
 namespace server {
@@ -55,20 +56,28 @@ void EgressHub::SetHandshakeMessageCallback(HandshakeMessageCallback cb) {
     handshake_message_cb_ = cb;
 }
 
-void EgressHub::SendMessage(std::span<const char> part1, std::span<const char> part2,
-                            std::span<const char> part3, std::span<const char> part4) {
+void EgressHub::SendMessage(std::span<const char> header, std::span<const char> payload1,
+                            std::span<const char> payload2, std::span<const char> payload3) {
     DCHECK(io_worker_->WithinMyEventLoopThread());
     if (state_ != kRunning) {
         HLOG(ERROR) << "Connection is closing or has closed, will not send this message";
         return;
     }
-    if (part1.size() + part2.size() + part3.size() + part4.size() == 0) {
+    if (header.size() + payload1.size() + payload2.size() + payload3.size() == 0) {
         return;
     }
-    write_buffer_.AppendData(part1);
-    write_buffer_.AppendData(part2);
-    write_buffer_.AppendData(part3);
-    write_buffer_.AppendData(part4);
+    write_buffer_.AppendData(header);
+    write_buffer_.AppendData(payload1);
+    write_buffer_.AppendData(payload2);
+    write_buffer_.AppendData(payload3);
+#ifndef __FAAS_DISABLE_STAT
+    using protocol::ConnPerfMessage;
+    using protocol::ConnPerfMessageHelper;
+    ConnPerfMessage perf_message =
+        ConnPerfMessageHelper::NewConnPerfMessage(GetMonotonicMicroTimestamp());
+    write_buffer_.AppendData(std::span<const char>(
+        reinterpret_cast<const char*>(&perf_message), sizeof(ConnPerfMessage)));
+#endif
     ScheduleSendFunction();
 }
 
