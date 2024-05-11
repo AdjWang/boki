@@ -78,12 +78,19 @@ type Environment interface {
 	// Set auxiliary data for log entry of given `seqNum`
 	SharedLogSetAuxData(ctx context.Context, seqNum uint64, auxData []byte) error
 
+	// DoubleTrack
 	AsyncSharedLogAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte) (Future[uint64], error)
 	AsyncSharedLogCondAppend(ctx context.Context, tags []uint64, tagBuildMeta []TagMeta, data []byte, cond func(CondHandle)) (Future[uint64], error)
 	AsyncSharedLogReadNext(ctx context.Context, tag uint64, seqNum uint64) (*CondLogEntry, error)
 	// async read API
 	AsyncSharedLogRead(ctx context.Context, futureMeta FutureMeta) (*CondLogEntry, error)
 	AsyncSharedLogReadIndex(ctx context.Context, localId uint64) (uint64, error)
+
+	// Halfmoon
+	// Conditional append, succeed only if the position of this log on the stream of `condTag` equals to `condPos`
+	SharedLogConditionalAppend(ctx context.Context, tags []uint64, data []byte, condTag uint64, condPos uint32) ( /* seqnum */ uint64, error)
+	// Overwrite a log entry, used for callee to write to a position specified by the caller
+	SharedLogOverwrite(ctx context.Context, tag uint64, pos uint32, data []byte) error
 }
 
 type FuncHandler interface {

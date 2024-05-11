@@ -27,7 +27,8 @@ EngineBase::EngineBase(engine::Engine* engine)
       next_local_op_id_(0),
       slog_message_delay_stat_(
           stat::StatisticsCollector<int32_t>::StandardReportCallback("slog_message_delay")),
-      slog_message_count_stat_(stat::Counter::StandardReportCallback("slog_message_count"))
+      slog_message_count_stat_(stat::Counter::StandardReportCallback("slog_message_count")),
+      use_txn_engine_(absl::GetFlag(FLAGS_use_txn_engine))
     {}
 
 EngineBase::~EngineBase() {}
@@ -173,7 +174,9 @@ void EngineBase::PopulateLogTagsAndData(const Message& message, LocalOp* op) {
     op->data.AppendData(data.subspan(num_tags * sizeof(uint64_t)));
 }
 
-std::string EngineBase::DebugListExistingFnCall(const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>& fn_call_ctx) {
+std::string EngineBase::DebugListExistingFnCall(
+    const absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>&
+        fn_call_ctx) {
     std::string output(" Existing function call: ");
     for (auto it = fn_call_ctx.begin(); it != fn_call_ctx.end(); ++it) {
         output += fmt::format("{} ", it->first);

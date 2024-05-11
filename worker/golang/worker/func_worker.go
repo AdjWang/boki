@@ -787,6 +787,112 @@ func (w *FuncWorker) AsyncSharedLogCondAppend(ctx context.Context, tags []uint64
 	}
 }
 
+// Implement types.Environment
+func (w *FuncWorker) SharedLogConditionalAppend(ctx context.Context, tags []uint64, data []byte, condTag uint64, condPos uint32) (uint64, error) {
+	if len(data) == 0 {
+		return 0, fmt.Errorf("Data cannot be empty")
+	}
+	tags, err := checkAndDuplicateTags(tags)
+	if err != nil {
+		return 0, err
+	}
+	if len(data)+len(tags)*protocol.SharedLogTagByteSize > protocol.MessageInlineDataSize {
+		return 0, fmt.Errorf("Data too larger (size=%d, num_tags=%d), expect no more than %d bytes", len(data), len(tags), protocol.MessageInlineDataSize)
+	}
+
+	// sleepDuration := 5 * time.Millisecond
+	// remainingRetries := 4
+
+	for {
+		id := atomic.AddUint64(&w.nextLogOpId, 1)
+		currentCallId := atomic.LoadUint64(&w.currentCall)
+		message := protocol.NewSharedLogConditionalAppendMessage(currentCallId, w.clientId, uint16(len(tags)), id, condTag, condPos)
+		if len(tags) == 0 {
+			protocol.FillInlineDataInMessage(message, data)
+		} else {
+			tagBuffer := protocol.BuildLogTagsBuffer(tags)
+			protocol.FillInlineDataInMessage(message, bytes.Join([][]byte{tagBuffer, data}, nil /* sep */))
+		}
+
+		w.mux.Lock()
+		outputChan := make(chan []byte, 1)
+		w.outgoingLogOps[id] = outputChan
+		_, err = w.outputPipe.Write(message)
+		w.mux.Unlock()
+		if err != nil {
+			return 0, err
+		}
+
+		response := <-outputChan
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_APPEND_OK {
+			return protocol.GetLogSeqNumFromMessage(response), nil
+		} else if result == protocol.SharedLogResultType_COND_FAILED {
+			return 0, fmt.Errorf("Condition failed")
+			// log.Printf("[ERROR] Append discarded, will retry")
+			// if remainingRetries > 0 {
+			// 	time.Sleep(sleepDuration)
+			// 	sleepDuration *= 2
+			// 	remainingRetries--
+			// 	continue
+			// } else {
+			// 	return 0, fmt.Errorf("Failed to append log")
+			// }
+		} else {
+			return protocol.InvalidLogSeqnum, fmt.Errorf("Failed to append log")
+		}
+	}
+}
+
+// Implement types.Environment
+func (w *FuncWorker) SharedLogOverwrite(ctx context.Context, tag uint64, pos uint32, data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("Data cannot be empty")
+	}
+	if tag == 0 || ^tag == 0 {
+		return fmt.Errorf("Invalid tag: %v", tag)
+	}
+	if len(data) > protocol.MessageInlineDataSize {
+		return fmt.Errorf("Data too large (size=%d), expect no more than %d bytes", len(data), protocol.MessageInlineDataSize)
+	}
+
+	// sleepDuration := 5 * time.Millisecond
+	// remainingRetries := 4
+
+	for {
+		id := atomic.AddUint64(&w.nextLogOpId, 1)
+		currentCallId := atomic.LoadUint64(&w.currentCall)
+		message := protocol.NewSharedLogOverwriteMessage(currentCallId, w.clientId, id, tag, pos)
+		protocol.FillInlineDataInMessage(message, data)
+
+		w.mux.Lock()
+		outputChan := make(chan []byte, 1)
+		w.outgoingLogOps[id] = outputChan
+		_, err := w.outputPipe.Write(message)
+		w.mux.Unlock()
+		if err != nil {
+			return err
+		}
+
+		response := <-outputChan
+		result := protocol.GetSharedLogResultTypeFromMessage(response)
+		if result == protocol.SharedLogResultType_APPEND_OK {
+			return nil
+		} else if result == protocol.SharedLogResultType_DISCARDED {
+			return fmt.Errorf("Failed to perform log overwrite")
+			// log.Printf("[ERROR] Append discarded, will retry")
+			// if remainingRetries > 0 {
+			// 	time.Sleep(sleepDuration)
+			// 	sleepDuration *= 2
+			// 	remainingRetries--
+			// 	continue
+			// } else {
+			// 	return 0, fmt.Errorf("Failed to append log")
+			// }
+		}
+	}
+}
+
 func buildLogEntryFromReadResponse(response []byte) *types.LogEntry {
 	seqNum := protocol.GetLogSeqNumFromMessage(response)
 	numTags := protocol.GetLogNumTagsFromMessage(response)
