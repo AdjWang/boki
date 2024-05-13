@@ -1,5 +1,5 @@
 #include "log/storage_base.h"
-
+#include "log/utils.h"
 #include "log/flags.h"
 #include "server/constants.h"
 #include "utils/fs.h"
@@ -23,7 +23,9 @@ StorageBase::StorageBase(uint16_t node_id)
     : ServerBase(fmt::format("storage_{}", node_id)),
       node_id_(node_id),
       db_(nullptr),
-      background_thread_("BG", [this] { this->BackgroundThreadMain(); }) {}
+      background_thread_("BG", [this] { this->BackgroundThreadMain(); }),
+      use_txn_engine_(absl::GetFlag(FLAGS_use_txn_engine))
+      {}
 
 StorageBase::~StorageBase() {}
 
@@ -88,7 +90,15 @@ void StorageBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_AT:
         HandleReadAtRequest(message);
         break;
+    case SharedLogOpType::CC_READ_KVS:
+        HandleCCReadKVSRequest(message);
+        break;
+    case SharedLogOpType::CC_READ_LOG:
+        HandleCCReadLogRequest(message);
+        break;
+    case SharedLogOpType::APPEND:       // Halfmoon only
     case SharedLogOpType::REPLICATE:
+    case SharedLogOpType::OVERWRITE:    // Halfmoon only
         HandleReplicateRequest(message, payload);
         break;
     case SharedLogOpType::METALOGS:
@@ -194,6 +204,8 @@ void StorageBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
     DCHECK(
         (conn_type == kSequencerIngressTypeId && op_type == SharedLogOpType::METALOGS)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_AT)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::APPEND)      // Halfmoon only
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::OVERWRITE)   // Halfmoon only
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::REPLICATE)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::SET_AUXDATA)
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
@@ -297,6 +309,62 @@ EgressHub* StorageBase::CreateEgressHub(protocol::ConnType conn_type,
         egress_hubs_[egress_hub->id()] = std::move(egress_hub);
     }
     return hub;
+}
+
+std::optional<CCLogEntry>
+StorageBase::GetCCLogEntryFromDB(uint32_t logspace_id, uint64_t localid)
+{
+    auto encoded = db_->Get(logspace_id, localid);
+    if (!encoded) {
+        return std::nullopt;
+    }
+    CCLogEntry log_entry;
+    log_utils::DecodeCCLogEntry(*encoded, log_entry);
+    return log_entry;
+}
+
+void
+StorageBase::PutCCLogEntryToDB(uint32_t logspace_id,
+                               uint64_t localid,
+                               const CCLogEntry& log_entry)
+{
+    std::string encoded;
+    log_utils::EncodeCCLogEntry(encoded, log_entry);
+    db_->Put(logspace_id, localid, STRING_AS_SPAN(encoded));
+}
+
+std::optional<std::string>
+StorageBase::GetKVFromDB(uint64_t seqnum, uint64_t key)
+{
+    return db_->GetKV(seqnum, key);
+}
+
+void
+StorageBase::PutKVToDB(uint64_t seqnum, uint64_t key, const std::string& value)
+{
+    db_->PutKV(seqnum, key, STRING_AS_SPAN(value));
+}
+
+void
+StorageBase::CCSendIndexData(const View* view,
+                             uint32_t logspace_id,
+                             const PerStorageIndexProto& index_data_proto)
+{
+    DCHECK_EQ(view->id(), bits::HighHalf32(logspace_id));
+    const View::Sequencer* sequencer_node =
+        view->GetSequencerNode(bits::LowHalf32(logspace_id));
+    std::string serialized_data;
+    CHECK(index_data_proto.SerializeToString(&serialized_data));
+    SharedLogMessage message =
+        SharedLogMessageHelper::NewIndexDataMessage(logspace_id);
+    message.origin_node_id = node_id_;
+    message.payload_size = gsl::narrow_cast<uint32_t>(serialized_data.size());
+    for (uint16_t engine_id: sequencer_node->GetIndexEngineNodes()) {
+        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
+                             engine_id,
+                             message,
+                             STRING_AS_SPAN(serialized_data));
+    }
 }
 
 }  // namespace log

@@ -122,3 +122,28 @@ message IndexDataProto {
     repeated uint32 user_tag_sizes = 5;
     repeated uint64 user_tags      = 6;
 }
+
+message PerLogIndexProto {
+    enum Flag {
+        EMPTY = 0;
+        APPEND = 1;
+        TXN = 2;
+        OVERWRITE = 4;
+        CONDITIONAL = 8;
+    }
+    int32 flags = 1;
+    uint32 cond_pos = 2;
+    uint64 cond_tag = 3;
+    repeated uint64 user_tags = 4;
+}
+
+message PerEngineIndexProto {
+    uint32 start_seqnum = 1;
+    uint64 start_localid = 2;
+    repeated PerLogIndexProto log_indices = 3;
+}
+
+// may correspond to multiple metalogs
+message PerStorageIndexProto {
+    repeated PerEngineIndexProto engine_indices = 1;
+}

@@ -101,6 +101,78 @@ void RocksDBBackend::Put(uint32_t logspace_id, uint32_t key, std::span<const cha
     ROCKSDB_CHECK_OK(status, Put);
 }
 
+std::optional<std::string>
+RocksDBBackend::Get(uint32_t logspace_id, uint64_t key)
+{
+    rocksdb::ColumnFamilyHandle* cf_handle = GetCFHandle(logspace_id);
+    if (cf_handle == nullptr) {
+        HLOG_F(WARNING, "Log space {} not created", bits::HexStr0x(logspace_id));
+        return std::nullopt;
+    }
+    std::string key_str = bits::HexStr(key);
+    std::string data;
+    auto status = db_->Get(rocksdb::ReadOptions(), cf_handle, key_str, &data);
+    if (status.IsNotFound()) {
+        return std::nullopt;
+    }
+    ROCKSDB_CHECK_OK(status, Get);
+    return data;
+}
+
+void
+RocksDBBackend::Put(uint32_t logspace_id, uint64_t key, std::span<const char> data)
+{
+    rocksdb::ColumnFamilyHandle* cf_handle = GetCFHandle(logspace_id);
+    if (cf_handle == nullptr) {
+        HLOG_F(ERROR, "Log space {} not created", bits::HexStr0x(logspace_id));
+        return;
+    }
+    std::string key_str = bits::HexStr(key);
+    auto status = db_->Put(rocksdb::WriteOptions(),
+                           cf_handle,
+                           key_str,
+                           rocksdb::Slice(data.data(), data.size()));
+    ROCKSDB_CHECK_OK(status, Put);
+}
+
+std::optional<std::string>
+RocksDBBackend::GetKV(uint64_t seqnum, uint64_t key)
+{
+    uint32_t logspace_id = bits::HighHalf64(seqnum);
+    uint32_t seqnum_lowhalf = bits::LowHalf64(seqnum);
+    rocksdb::ColumnFamilyHandle* cf_handle = GetCFHandle(logspace_id);
+    if (cf_handle == nullptr) {
+        HLOG_F(WARNING, "Log space {} not created", bits::HexStr0x(logspace_id));
+        return std::nullopt;
+    }
+    std::string key_str = fmt::format("{:08x}-{:016x}", seqnum_lowhalf, key);
+    std::string data;
+    auto status = db_->Get(rocksdb::ReadOptions(), cf_handle, key_str, &data);
+    if (status.IsNotFound()) {
+        return std::nullopt;
+    }
+    ROCKSDB_CHECK_OK(status, Get);
+    return data;
+}
+
+void
+RocksDBBackend::PutKV(uint64_t seqnum, uint64_t key, std::span<const char> value)
+{
+    uint32_t logspace_id = bits::HighHalf64(seqnum);
+    uint32_t seqnum_lowhalf = bits::LowHalf64(seqnum);
+    rocksdb::ColumnFamilyHandle* cf_handle = GetCFHandle(logspace_id);
+    if (cf_handle == nullptr) {
+        HLOG_F(ERROR, "Log space {} not created", bits::HexStr0x(logspace_id));
+        return;
+    }
+    std::string key_str = fmt::format("{:08x}-{:016x}", seqnum_lowhalf, key);
+    auto status = db_->Put(rocksdb::WriteOptions(),
+                           cf_handle,
+                           key_str,
+                           rocksdb::Slice(value.data(), value.size()));
+    ROCKSDB_CHECK_OK(status, Put);
+}
+
 rocksdb::ColumnFamilyHandle* RocksDBBackend::GetCFHandle(uint32_t logspace_id) {
     absl::ReaderMutexLock lk(&mu_);
     if (!column_families_.contains(logspace_id)) {
@@ -181,6 +253,36 @@ std::optional<std::string> TkrzwDBMBackend::Get(uint32_t logspace_id, uint32_t k
 }
 
 void TkrzwDBMBackend::Put(uint32_t logspace_id, uint32_t key, std::span<const char> data) {
+    tkrzw::DBM* dbm = GetDBM(logspace_id);
+    if (dbm == nullptr) {
+        HLOG_F(FATAL, "Log space {} not created", bits::HexStr0x(logspace_id));
+    }
+    std::string key_str = bits::HexStr(key);
+    auto status = dbm->Set(key_str, std::string_view(data.data(), data.size()));
+    TKRZW_CHECK_OK(status, Set);
+}
+
+std::optional<std::string>
+TkrzwDBMBackend::Get(uint32_t logspace_id, uint64_t key)
+{
+    tkrzw::DBM* dbm = GetDBM(logspace_id);
+    if (dbm == nullptr) {
+        HLOG_F(WARNING, "Log space {} not created", bits::HexStr0x(logspace_id));
+        return std::nullopt;
+    }
+    std::string key_str = bits::HexStr(key);
+    std::string data;
+    auto status = dbm->Get(key_str, &data);
+    if (status.IsOK()) {
+        return data;
+    } else {
+        return std::nullopt;
+    }
+}
+
+void
+TkrzwDBMBackend::Put(uint32_t logspace_id, uint64_t key, std::span<const char> data)
+{
     tkrzw::DBM* dbm = GetDBM(logspace_id);
     if (dbm == nullptr) {
         HLOG_F(FATAL, "Log space {} not created", bits::HexStr0x(logspace_id));

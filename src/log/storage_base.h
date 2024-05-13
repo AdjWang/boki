@@ -23,6 +23,8 @@ public:
 protected:
     uint16_t my_node_id() const { return node_id_; }
 
+    bool use_txn_engine() const { return use_txn_engine_; }
+
     virtual void OnViewCreated(const View* view) = 0;
     virtual void OnViewFinalized(const FinalizedView* finalized_view) = 0;
 
@@ -55,6 +57,26 @@ protected:
                             std::span<const char> payload2 = EMPTY_CHAR_SPAN,
                             std::span<const char> payload3 = EMPTY_CHAR_SPAN);
 
+    virtual void HandleCCReadLogRequest(
+        const protocol::SharedLogMessage& request) = 0;
+    virtual void HandleCCReadKVSRequest(
+        const protocol::SharedLogMessage& request) = 0;
+    virtual void HandleCCTxnWriteRequest(const protocol::SharedLogMessage& message,
+                                         std::span<const char> payload) = 0;
+
+    std::optional<CCLogEntry> GetCCLogEntryFromDB(uint32_t logspace_id,
+                                                  uint64_t localid);
+    void PutCCLogEntryToDB(uint32_t logspace_id,
+                           uint64_t localid,
+                           const CCLogEntry& log_entry);
+
+    std::optional<std::string> GetKVFromDB(uint64_t seqnum, uint64_t key);
+    void PutKVToDB(uint64_t seqnum, uint64_t key, const std::string& value);
+
+    void CCSendIndexData(const View* view,
+                         uint32_t logspace_id,
+                         const PerStorageIndexProto& index_data_proto);
+
 private:
     const uint16_t node_id_;
 
@@ -73,6 +95,8 @@ private:
         egress_hubs_ ABSL_GUARDED_BY(conn_mu_);
 
     std::optional<LRUCache> log_cache_;
+
+    bool use_txn_engine_;
 
     void SetupDB();
     void SetupZKWatchers();

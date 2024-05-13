@@ -291,7 +291,7 @@ void HttpConnection::OnNewHttpRequest(std::string_view method, std::string_view 
         // curl -X GET -H "Content-Type: application/json" http://localhost:9000/mark_event?name=warmup_end
         std::string encoded_json(QueryStringToJSON(qs));
         json event_content = json::parse(encoded_json);
-        HLOG_F(INFO, "Mark benchmark event={}", event_content["name"]);
+        HLOG_F(INFO, "Mark benchmark event={}", event_content["name"].template get<std::string>());
         SendHttpResponse(HttpStatus::OK);
         return;
     } else {

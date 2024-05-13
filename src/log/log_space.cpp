@@ -5,6 +5,34 @@
 namespace faas {
 namespace log {
 
+template <>
+size_t
+ProtoBuffer<MetaLogProto>::currentPosition(MetaLogProto* proto)
+{
+    return proto->metalog_seqnum();
+}
+
+template <>
+size_t
+ProtoBuffer<MetaLogProto>::nextPosition(MetaLogProto* proto)
+{
+    return proto->metalog_seqnum() + 1;
+}
+
+template <>
+size_t
+ProtoBuffer<PerEngineIndexProto>::currentPosition(PerEngineIndexProto* proto)
+{
+    return proto->start_seqnum();
+}
+
+template <>
+size_t
+ProtoBuffer<PerEngineIndexProto>::nextPosition(PerEngineIndexProto* proto)
+{
+    return proto->start_seqnum() + static_cast<size_t>(proto->log_indices_size());
+}
+
 MetaLogPrimary::MetaLogPrimary(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       replicated_metalog_position_(0) {

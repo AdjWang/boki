@@ -118,6 +118,7 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
     switch (op->type) {
     case SharedLogOpType::APPEND:
     case SharedLogOpType::ASYNC_APPEND:
+    case SharedLogOpType::OVERWRITE:
         HandleLocalAppend(op);
         break;
     case SharedLogOpType::READ_NEXT:
@@ -155,6 +156,8 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
         OnRecvNewMetaLogs(message, payload);
         break;
     case SharedLogOpType::RESPONSE:
+    case SharedLogOpType::CC_READ_KVS:
+    case SharedLogOpType::CC_READ_LOG:
         OnRecvResponse(message, payload);
         break;
     default:
@@ -229,6 +232,17 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->user_tags.clear();
     op->data.Reset();
 
+    // cond_tag is either the history log tag for a function instance
+    // or 0(kEmptyLogTag) for non-fault-tolerant functions
+    op->conditional = (message.flags & protocol::kConditionalOpFlag) != 0;
+    if (op->conditional) {
+        op->cond_tag = message.log_tag;
+        op->cond_pos = message.cond_pos;
+    } else {
+        op->cond_tag = kEmptyLogTag;
+        op->cond_pos = kInvalidCondPos;
+    }
+
     switch (op->type) {
     case SharedLogOpType::APPEND:
     case SharedLogOpType::ASYNC_APPEND:
@@ -249,6 +263,11 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         break;
     case SharedLogOpType::SET_AUXDATA:
         op->seqnum = message.log_seqnum;
+        op->data.AppendData(MessageHelper::GetInlineData(message));
+        break;
+    case SharedLogOpType::OVERWRITE:
+        op->cond_tag = message.log_tag;
+        op->cond_pos = message.cond_pos;
         op->data.AppendData(MessageHelper::GetInlineData(message));
         break;
     default:
@@ -314,7 +333,8 @@ void EngineBase::IntermediateLocalOpWithResponse(LocalOp* op, Message* response)
 }
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
-                                           uint64_t metalog_progress) {
+                                           uint64_t metalog_progress,
+                                           bool recycle) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
         if (fn_call_ctx_.contains(op->func_call_id)) {
@@ -327,6 +347,11 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
     log_op_pool_.Return(op);
+
+    if (recycle) {
+        // RecycleLocalOp(op);
+        log_op_pool_.Return(op);
+    }
 }
 
 void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType result,
@@ -442,6 +467,101 @@ bool EngineBase::SendSequencerMessage(uint16_t sequencer_id,
 
 server::IOWorker* EngineBase::SomeIOWorker() {
     return engine_->SomeIOWorker();
+}
+
+bool
+EngineBase::ReplicateCCLogEntry(const View* view,
+                                SharedLogMessage& message,
+                                std::span<const uint64_t> user_tags,
+                                std::span<const char> log_data)
+{
+    message.origin_node_id = node_id_;
+    message.payload_size = gsl::narrow_cast<uint32_t>(
+        user_tags.size() * sizeof(uint64_t) + log_data.size());
+    const View::Engine* engine_node = view->GetEngineNode(node_id_);
+    for (uint16_t storage_id: engine_node->GetStorageNodes()) {
+        if (!engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,
+                                           storage_id,
+                                           message,
+                                           VECTOR_AS_CHAR_SPAN(user_tags),
+                                           log_data))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+void
+EngineBase::CCLogCachePut(uint64_t localid, std::span<const char> log_data)
+{
+    if (!log_cache_.has_value()) {
+        return;
+    }
+    // HVLOG_F(1, "Store cache for cc log entry (localid {:#x})", localid);
+    log_cache_->CCPut(localid, log_data);
+}
+
+void
+EngineBase::CCLogCachePut(uint64_t seqnum, uint64_t key, std::span<const char> value)
+{
+    if (!log_cache_.has_value()) {
+        return;
+    }
+    // HVLOG_F(1, "Store cache for cc log entry (localid {:#x})", localid);
+    log_cache_->CCPut(seqnum, key, value);
+}
+
+std::optional<std::string>
+EngineBase::CCLogCacheGet(uint64_t localid)
+{
+    // HVLOG_F(1, "try get cc log cache at localid({:#x})", localid);
+    return log_cache_.has_value() ? log_cache_->CCGet(localid) : std::nullopt;
+}
+
+std::optional<std::string>
+EngineBase::CCLogCacheGet(uint64_t seqnum, uint64_t key)
+{
+    // HVLOG_F(1, "try get cc log cache at localid({:#x})", localid);
+    return log_cache_.has_value() ? log_cache_->CCGet(seqnum, key) : std::nullopt;
+}
+
+void
+EngineBase::CCLogCachePutAuxData(uint64_t seqnum,
+                                 //  uint64_t key,
+                                 std::span<const char> aux_data)
+{
+    if (!log_cache_.has_value()) {
+        return;
+    }
+    // HVLOG_F(1, "Store aux data for seqnum {:#x} key {}", seqnum, key);
+    log_cache_->CCPutAuxData(seqnum, aux_data);
+}
+
+std::optional<std::string>
+EngineBase::CCLogCacheGetAuxData(uint64_t seqnum /* uint64_t key */)
+{
+    // HVLOG_F(1, "try get aux data for seqnum {:#x} key {}", seqnum, key);
+    return log_cache_.has_value() ? log_cache_->CCGetAuxData(seqnum) : std::nullopt;
+}
+
+bool
+EngineBase::SendStorageCCReadRequest(protocol::SharedLogMessage& request,
+                                     const View::Engine* engine_node)
+{
+    static constexpr int kMaxRetries = 3;
+    request.origin_node_id = node_id_; // always use local engine
+    for (int i = 0; i < kMaxRetries; i++) {
+        uint16_t storage_id = engine_node->PickStorageNode();
+        bool success =
+            engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,
+                                          storage_id,
+                                          request);
+        if (success) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace log

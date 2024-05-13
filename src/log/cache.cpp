@@ -101,5 +101,75 @@ std::optional<std::string> LRUCache::GetAuxData(uint64_t seqnum) {
     }
 }
 
+// 1. engines cache(only data) upon op finished
+// 2. storage side, support full mode and lite mode(only data) read/write, but always
+// store in full mode.
+// 3. storage and engine cache all use localid as index, and the mapping between
+// localid and seqnum is defined by metalog
+// 4. aux data is indexed by seqnum
+
+void
+LRUCache::CCPut(uint64_t localid, std::span<const char> log_data)
+{
+    std::string key = fmt::format("l{:016x}", localid);
+    dbm_->Set(key,
+              std::string_view(log_data.data(), log_data.size()),
+              /* overwrite= */ true);
+}
+
+void
+LRUCache::CCPut(uint64_t seqnum, uint64_t key, std::span<const char> value)
+{
+    std::string key_str = fmt::format("{:016x}-{:016x}", seqnum, key);
+    dbm_->Set(key_str,
+              std::string_view(value.data(), value.size()),
+              /* overwrite= */ true);
+}
+
+std::optional<std::string>
+LRUCache::CCGet(uint64_t localid)
+{
+    std::string key = fmt::format("l{:016x}", localid);
+    std::string log_data;
+    if (dbm_->Get(key, &log_data) != tkrzw::Status::SUCCESS) {
+        return std::nullopt;
+    }
+    return log_data;
+}
+
+std::optional<std::string>
+LRUCache::CCGet(uint64_t seqnum, uint64_t key)
+{
+    std::string key_str = fmt::format("{:016x}-{:016x}", seqnum, key);
+    std::string value;
+    if (dbm_->Get(key_str, &value) != tkrzw::Status::SUCCESS) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+void
+LRUCache::CCPutAuxData(uint64_t seqnum,
+                       //    uint64_t key,
+                       std::span<const char> aux_data)
+{
+    std::string key = fmt::format("s{:016x}", seqnum);
+    dbm_->Set(key,
+              std::string_view(aux_data.data(), aux_data.size()),
+              /* overwrite= */ true);
+}
+
+std::optional<std::string>
+LRUCache::CCGetAuxData(uint64_t seqnum /* uint64_t key */)
+{
+    std::string key = fmt::format("s{:016x}", seqnum);
+    // VLOG(1) << fmt::format("get aux data with key={}", key_str);
+    std::string aux_data;
+    if (dbm_->Get(key, &aux_data) != tkrzw::Status::SUCCESS) {
+        return std::nullopt;
+    }
+    return aux_data;
+}
+
 }  // namespace log
 }  // namespace faas

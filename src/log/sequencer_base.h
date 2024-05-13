@@ -56,6 +56,8 @@ private:
     absl::flat_hash_map</* id */ int, std::unique_ptr<server::EgressHub>>
         egress_hubs_ ABSL_GUARDED_BY(conn_mu_);
 
+    bool use_txn_engine_;
+
     void SetupZKWatchers();
     void SetupTimers();
 
@@ -75,6 +77,8 @@ private:
     server::EgressHub* CreateEgressHub(protocol::ConnType conn_type,
                                        uint16_t dst_node_id,
                                        server::IOWorker* io_worker);
+
+    std::string SerializedMetaLog(const MetaLogProto& metalog);
 
     DISALLOW_COPY_AND_ASSIGN(SequencerBase);
 };

@@ -12,6 +12,257 @@ namespace log {
 using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
+using protocol::SharedLogResultType;
+
+template <class KeyType, class ValueType>
+void
+InMemStore<KeyType, ValueType>::PollItemsForPersistence(std::vector<ItemType>& items)
+{
+    if (live_keys_.size() <= persisted_offset_) {
+        return;
+    }
+    items.reserve(live_keys_.size() - persisted_offset_);
+    for (size_t i = persisted_offset_; i < live_keys_.size(); i++) {
+        auto& key = live_keys_[i];
+        items.emplace_back(key, store_.at(key));
+    }
+    return;
+}
+
+template <class KeyType, class ValueType>
+void
+InMemStore<KeyType, ValueType>::TrimPersistedItems()
+{
+    if (live_keys_.size() <= max_size) {
+        return;
+    }
+    size_t num_to_trim = std::min(live_keys_.size() - max_size, persisted_offset_);
+    for (size_t i = 0; i < num_to_trim; i++) {
+        store_.erase(live_keys_[i]);
+    }
+    live_keys_.erase(live_keys_.begin(),
+                     live_keys_.begin() + static_cast<long>(num_to_trim));
+    persisted_offset_ -= num_to_trim;
+}
+
+CCStorage::CCStorage(const View* view, uint16_t storage_id, uint16_t sequencer_id)
+    : view_(view),
+      storage_node_(view_->GetStorageNode(storage_id)),
+      shard_progress_dirty_(false),
+      log_store_(absl::GetFlag(FLAGS_slog_storage_max_live_entries)),
+      kv_store_(absl::GetFlag(FLAGS_slog_storage_max_live_entries))
+{
+    for (uint16_t engine_id: storage_node_->GetSourceEngineNodes()) {
+        shard_progresses_[engine_id] = 0;
+    }
+    logspace_id_ = bits::JoinTwo16(view->id(), sequencer_id);
+}
+
+void
+CCStorage::ApplyMetaLogs(std::vector<MetaLogProto*>& metalog_protos)
+{
+    const auto& engine_node_ids = view_->GetEngineNodes();
+    index_data_.Clear();
+    index_data_.mutable_engine_indices()->Reserve(
+        static_cast<int>(metalog_protos.size() * shard_progresses_.size()));
+    for (MetaLogProto* metalog_proto: metalog_protos) {
+        VLOG_F(1,
+               "Apply metalog: metalog_seqnum={}, start_seqnum={}",
+               metalog_proto->metalog_seqnum(),
+               metalog_proto->new_logs_proto().start_seqnum());
+        const auto& progress_vec = metalog_proto->new_logs_proto();
+        uint32_t start_seqnum = progress_vec.start_seqnum();
+        for (size_t i = 0; i < engine_node_ids.size(); i++) {
+            uint16_t engine_id = engine_node_ids[i];
+            uint32_t shard_start = progress_vec.shard_starts(static_cast<int>(i));
+            uint32_t shard_delta = progress_vec.shard_deltas(static_cast<int>(i));
+            if (shard_delta == 0) {
+                continue;
+            }
+            if (shard_progresses_.contains(engine_id)) {
+                ApplyMetaLogForEngine(start_seqnum,
+                                      bits::JoinTwo32(engine_id, shard_start),
+                                      shard_delta);
+            }
+            start_seqnum += shard_delta;
+            indexed_seqnum_ += shard_delta;
+        }
+    }
+}
+
+void
+CCStorage::ApplyMetaLogForEngine(uint32_t start_seqnum,
+                                 uint64_t start_localid,
+                                 uint32_t shard_delta)
+{
+    VLOG(1) << fmt::format(
+        "Apply metalog for engine {}: seqnum {}->{}, localid {:#x}->{:#x}, "
+        "delta={}",
+        bits::HighHalf64(start_localid),
+        start_seqnum,
+        start_seqnum + shard_delta,
+        start_localid,
+        start_localid + shard_delta,
+        shard_delta);
+    auto* engine_index = index_data_.mutable_engine_indices()->Add();
+    engine_index->set_start_seqnum(start_seqnum);
+    engine_index->set_start_localid(start_localid);
+    engine_index->mutable_log_indices()->Reserve(static_cast<int>(shard_delta));
+    for (uint32_t i = 0; i < shard_delta; i++) {
+        auto* log_index = engine_index->mutable_log_indices()->Add();
+        // mark as live, become candidate for persistence
+        uint64_t localid = start_localid + i;
+        uint64_t seqnum = bits::JoinTwo32(logspace_id_, start_seqnum + i);
+        auto log_entry = log_store_.Get(localid);
+        if (!log_entry) {
+            log_store_.Remove(localid);
+            // NOTE: txn write still has a empty entry in the index
+            continue;
+        }
+        // it is possible to shrink live entries here, but we leave that completely
+        // to the background thread
+        log_store_.OnItemsPersisted(localid);
+        // populate log index
+        int flags = log_utils::PopulateIndexFlags(log_entry->metadata);
+        log_index->set_flags(flags);
+        log_index->set_cond_pos(log_entry->metadata.cond_pos);
+        log_index->set_cond_tag(log_entry->metadata.cond_tag);
+        log_index->mutable_user_tags()->Add(log_entry->user_tags.begin(),
+                                            log_entry->user_tags.end());
+        // install pending writes for CC_TXN_START
+        if (log_entry->metadata.op_type ==
+            static_cast<uint16_t>(SharedLogOpType::CC_TXN_START))
+        {
+            for (uint64_t key: log_entry->user_tags) {
+                auto versioned_key = std::make_pair(seqnum, key);
+                if (!blocking_kvs_reads_.contains(versioned_key)) {
+                    blocking_kvs_reads_[versioned_key] = {};
+                }
+            }
+        }
+    }
+}
+
+std::optional<PerStorageIndexProto>
+CCStorage::PollIndexData()
+{
+    if (index_data_.engine_indices_size() == 0) {
+        return std::nullopt;
+    }
+    PerStorageIndexProto index_data;
+    index_data.Swap(&index_data_);
+    return index_data;
+}
+
+// void
+// CCStorage::StoreLog(uint64_t localid, CCLogEntry* log_entry)
+// {
+//     uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
+//     log_store_.PutAllocated(localid, log_entry);
+//     AdvanceShardProgress(engine_id);
+// }
+
+void
+CCStorage::StoreLog(uint64_t localid, std::shared_ptr<CCLogEntry> log_entry)
+{
+    uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
+    log_store_.PutAllocated(localid, log_entry);
+    AdvanceShardProgress(engine_id);
+}
+
+// void
+// CCStorage::StoreKV(uint64_t seqnum, uint64_t key, std::string* value)
+// {
+//     kv_store_.PutAllocated(std::make_pair(seqnum, key), value);
+// }
+
+void
+CCStorage::StoreKV(uint64_t seqnum, uint64_t key, std::shared_ptr<std::string> value)
+{
+    // kvs writes from txns are deterministic, no need to wait for replication,
+    // immediately mark as live
+    kv_store_.PutAllocated(std::make_pair(seqnum, key), value, true);
+}
+
+void
+CCStorage::PollBlockingKVSReads(const VersionedKeyType& versioned_key,
+                                std::vector<SharedLogMessage>& blocking_reads)
+{
+    if (!blocking_kvs_reads_.contains(versioned_key)) {
+        LOG(FATAL) << fmt::format("KVS write seqnum={:#x} key={} not registered",
+                                  versioned_key.first,
+                                  versioned_key.second);
+        return;
+    }
+    blocking_reads = std::move(blocking_kvs_reads_[versioned_key]);
+    blocking_kvs_reads_.erase(versioned_key);
+}
+
+void
+CCStorage::AdvanceShardProgress(uint16_t engine_id)
+{
+    uint32_t current = shard_progresses_[engine_id];
+    while (log_store_.Contains(bits::JoinTwo32(engine_id, current))) {
+        current++;
+    }
+    if (current > shard_progresses_[engine_id]) {
+        VLOG_F(1,
+               "Update shard progress for engine {}: from={}, to={}",
+               engine_id,
+               bits::HexStr0x(shard_progresses_[engine_id]),
+               bits::HexStr0x(current));
+        shard_progress_dirty_ = true;
+        shard_progresses_[engine_id] = current;
+    }
+}
+
+std::shared_ptr<CCLogEntry>
+CCStorage::GetLog(const SharedLogMessage& request)
+{
+    absl::ReaderMutexLock lk(&store_mu_);
+    return log_store_.Get(request.localid);
+}
+
+std::optional<std::shared_ptr<std::string>>
+CCStorage::GetKV(const SharedLogMessage& request)
+{
+    absl::MutexLock lk(&store_mu_);
+    auto versioned_key = std::make_pair(request.query_seqnum, request.query_tag);
+    auto value = kv_store_.Get(versioned_key);
+    if (value) {
+        return value;
+    }
+    // 1st condition: txn not yet registered. txn writes may also arrive before
+    // registration, but we assume that KV store is large enough that these writes
+    // won't be flushed to DB before registration
+    // 2nd condition: txn registered but not yet written
+    if (request.query_seqnum >= indexed_seqnum_ ||
+        blocking_kvs_reads_.contains(versioned_key))
+    {
+        blocking_kvs_reads_[versioned_key].emplace_back(request);
+        return std::nullopt;
+    }
+    // lookup DB
+    return nullptr;
+}
+
+void
+CCStorage::PollShardProgress(std::vector<uint32_t>& progress)
+{
+    if (!shard_progress_dirty_) {
+        return;
+    }
+    progress.reserve(shard_progresses_.size());
+    for (uint16_t engine_id: storage_node_->GetSourceEngineNodes()) {
+        progress.push_back(shard_progresses_[engine_id]);
+    }
+    // NOTE: must preserve order(sequencer use the order of SourceEngineNodes too)
+    // the following is wrong, as the order of flat_hash_map iter may be different
+    // for (auto& [engine_id, prog]: shard_progresses_) {
+    //     progress.push_back(prog);
+    // }
+    shard_progress_dirty_ = false;
+}
 
 Storage::Storage(uint16_t node_id)
     : StorageBase(node_id),
@@ -38,6 +289,10 @@ void Storage::OnViewCreated(const View* view) {
                 }
                 storage_collection_.InstallLogSpace(std::make_unique<LogStorage>(
                     my_node_id(), view, sequencer_id));
+
+                if (use_txn_engine()) {
+                    cc_storage_.reset(new CCStorage(view, my_node_id(), sequencer_id));
+                }
             }
         }
         future_requests_.OnNewView(view, contains_myself ? &ready_requests : nullptr);
@@ -152,6 +407,15 @@ void Storage::HandleReadAtRequest(const SharedLogMessage& request) {
 
 void Storage::HandleReplicateRequest(const SharedLogMessage& message,
                                      std::span<const char> payload) {
+    if (use_txn_engine()) {
+        CCHandleReplicateRequest(message, payload);
+    } else {
+        SLogHandleReplicateRequest(message, payload);
+    }
+}
+
+void Storage::SLogHandleReplicateRequest(const SharedLogMessage& message,
+                                         std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::REPLICATE);
     LogMetaData metadata = log_utils::GetMetaDataFromMessage(message);
     std::span<const uint64_t> user_tags;
@@ -175,6 +439,15 @@ void Storage::HandleReplicateRequest(const SharedLogMessage& message,
 
 void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                 std::span<const char> payload) {
+    if (use_txn_engine()) {
+        CCRecvMetaLog(message, payload);
+    } else {
+        SLogOnRecvNewMetaLogs(message, payload);
+    }
+}
+
+void Storage::SLogOnRecvNewMetaLogs(const SharedLogMessage& message,
+                                    std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
@@ -320,6 +593,14 @@ void Storage::BackgroundThreadMain() {
 }
 
 void Storage::SendShardProgressIfNeeded() {
+    if (use_txn_engine()) {
+        CCSendShardProgress();
+    } else {
+        SLogSendShardProgressIfNeeded();
+    }
+}
+
+void Storage::SLogSendShardProgressIfNeeded() {
     std::vector<std::pair<uint32_t, std::vector<uint32_t>>> progress_to_send;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -349,6 +630,14 @@ void Storage::SendShardProgressIfNeeded() {
 }
 
 void Storage::FlushLogEntries() {
+    if (use_txn_engine()) {
+        CCFlushToDB();
+    } else {
+        SLogFlushLogEntries();
+    }
+}
+
+void Storage::SLogFlushLogEntries() {
     std::vector<std::shared_ptr<const LogEntry>> log_entires;
     std::vector<std::pair<LockablePtr<LogStorage>, uint64_t>> storages;
     {
@@ -396,6 +685,255 @@ void Storage::FlushLogEntries() {
             }
         }
     }
+}
+
+// KVS reads can directly query the requested seqnum even if it is above indexed
+// seqnum, like txn writes
+// If the versioned key is present in InMemStore, it is immediately returned;
+// otherwise it blocks on the versioned key as in the normal case.
+// Correctness: (skip normal cases, only consider the case where the requested
+// seqnum even if it is above indexed seqnum)
+// 1. If txn write arrive after txn registration, then it must have seen the
+// blocking read
+// 2. Otherwise, either the read sees the write in InMemStore, or the write sees
+// the blocking read
+void
+Storage::HandleCCReadKVSRequest(const SharedLogMessage& request)
+{
+    if (!cc_storage_) {
+        HLOG(FATAL) << "CC storage not activated";
+        return;
+    }
+    auto optional = cc_storage_->GetKV(request);
+    if (!optional) {
+        // read blocks on future writes
+        return;
+    }
+    auto response = request;
+    auto value = optional->get();
+    if (!value) {
+        ProcessCCReadKVSFromDB(request, response);
+    } else {
+        response.op_result = static_cast<uint16_t>(SharedLogResultType::READ_OK);
+        SendEngineResponse(request, &response, STRING_AS_SPAN(*value));
+    }
+}
+
+void
+Storage::HandleCCReadLogRequest(const SharedLogMessage& request)
+{
+    if (!cc_storage_) {
+        HLOG(FATAL) << "CC storage not activated";
+        return;
+    }
+    HVLOG(1) << fmt::format(
+        "Handling CC log read at seqnum={:#x} localid={:#x}",
+        bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf),
+        request.localid);
+    auto response = request;
+    auto log_entry = cc_storage_->GetLog(request);
+    if (!log_entry) {
+        HVLOG(1) << fmt::format(
+            "fetching CC log entry seqnum={:#x} localid={:#x} from DB",
+            bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf),
+            request.localid);
+        ProcessCCReadLogFromDB(request, response);
+    } else {
+        response.op_result = static_cast<uint16_t>(SharedLogResultType::READ_OK);
+        SendEngineResponse(request, &response, STRING_AS_SPAN(log_entry->data));
+    }
+}
+
+// Txn writes can directly install at the requested seqnum
+// even if it is above indexed seqnum, like kvs reads
+// When registering future kvs writes of a txn, those that are already present in
+// InMemStore can be skipped
+// NOTE: we assume that the InMemStore capacity is large enough that the txn
+// writes stored before txn registration won't be flushed by the time
+// registration is finally done
+void
+Storage::HandleCCTxnWriteRequest(const protocol::SharedLogMessage& request,
+                                 std::span<const char> payload)
+{
+    if (!cc_storage_) {
+        HLOG(FATAL) << "CC storage not activated";
+        return;
+    }
+    DCHECK(request.logspace_id == cc_storage_->logspace_id_);
+    uint64_t seqnum = bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf);
+    auto write_data = std::make_shared<std::string>(payload.data(), payload.size());
+    // put kv, increment shard progress, poll blocking reads
+    std::vector<SharedLogMessage> blocking_reads;
+    {
+        absl::MutexLock lk(&cc_storage_->store_mu_);
+        // null log entry is ok since only localid is relevant
+        cc_storage_->StoreLog(request.localid, nullptr);
+        cc_storage_->StoreKV(seqnum, request.query_tag, write_data);
+        // poll blocking reads on this version of key
+        cc_storage_->PollBlockingKVSReads(std::make_pair(seqnum, request.query_tag),
+                                          blocking_reads);
+    }
+    if (blocking_reads.empty()) {
+        return;
+    }
+    auto response = SharedLogMessageHelper::NewCCReadKVSResponse();
+    response.query_seqnum = seqnum;
+    response.query_tag = request.query_tag;
+    for (const auto& read_request: blocking_reads) {
+        SendEngineResponse(read_request, &response, STRING_AS_SPAN(*write_data));
+    }
+}
+
+void
+Storage::CCHandleReplicateRequest(const protocol::SharedLogMessage& request,
+                                  std::span<const char> payload)
+{
+    if (!cc_storage_) {
+        HLOG(FATAL) << "CC storage not activated";
+        return;
+    }
+    HVLOG(1) << fmt::format(
+        "Replicate op type {:#x}: localid={:#x} cond_tag={} cond_pos={}",
+        request.op_type,
+        request.localid,
+        request.cond_tag,
+        request.cond_pos);
+    auto log_entry = std::make_shared<CCLogEntry>();
+    log_utils::PopulateCCLogEntry(request, payload, log_entry.get());
+    // increment shard progress
+    absl::MutexLock lk(&cc_storage_->store_mu_);
+    cc_storage_->StoreLog(request.localid, log_entry);
+    // install pending writes for CC_TXN_START upon recving metalog
+}
+
+void
+Storage::CCRecvMetaLog(const SharedLogMessage& message,
+                       std::span<const char> payload)
+{
+    if (!cc_storage_) {
+        HLOG(FATAL) << "CC storage not activated";
+        return;
+    }
+    std::optional<PerStorageIndexProto> index_data;
+    {
+        // absl::MutexLock lk(&cc_storage_->metalog_buffer_.buffer_mu_);
+        absl::MutexLock lk(&cc_storage_->store_mu_);
+        cc_storage_->metalog_buffer_.ProvideRaw(payload);
+        auto metalogs = cc_storage_->metalog_buffer_.PollBuffer();
+        if (!metalogs) {
+            return;
+        }
+        cc_storage_->ApplyMetaLogs(*metalogs);
+        cc_storage_->metalog_buffer_.Recycle(*metalogs);
+        index_data = cc_storage_->PollIndexData();
+    }
+    if (index_data) {
+        VLOG(1) << fmt::format("sending index data for {} engines",
+                               index_data->engine_indices_size());
+        CCSendIndexData(cc_storage_->view_, cc_storage_->logspace_id_, *index_data);
+    }
+}
+
+void
+Storage::CCSendShardProgress()
+{
+    if (!cc_storage_) {
+        // HLOG(FATAL) << "CC storage not activated";
+        return;
+    }
+    uint32_t logspace_id;
+    std::vector<uint32_t> progress;
+    {
+        absl::MutexLock lk(&cc_storage_->store_mu_);
+        cc_storage_->PollShardProgress(progress);
+        logspace_id = cc_storage_->logspace_id_;
+    }
+    if (progress.empty()) {
+        return;
+    }
+    // HVLOG(1) << fmt::format("Sending shard progress {}", progress);
+    SharedLogMessage message =
+        SharedLogMessageHelper::NewShardProgressMessage(logspace_id);
+    SendSequencerMessage(bits::LowHalf32(logspace_id),
+                         &message,
+                         VECTOR_AS_CHAR_SPAN(progress));
+}
+
+void
+Storage::CCFlushToDB()
+{
+    if (!cc_storage_) {
+        // HLOG(FATAL) << "CC storage not activated";
+        return;
+    }
+    uint32_t logspace_id;
+    std::vector<CCStorage::LogItemType> log_items;
+    std::vector<CCStorage::KVItemType> kv_items;
+    {
+        absl::ReaderMutexLock lk(&cc_storage_->store_mu_);
+        logspace_id = cc_storage_->logspace_id_;
+        cc_storage_->log_store_.PollItemsForPersistence(log_items);
+        cc_storage_->kv_store_.PollItemsForPersistence(kv_items);
+    }
+    if (log_items.empty() && kv_items.empty()) {
+        return;
+    }
+    for (auto& [localid, log_entry]: log_items) {
+        if (!log_entry) {
+            // txn write
+            continue;
+        }
+        PutCCLogEntryToDB(logspace_id, localid, *log_entry);
+    }
+    for (auto& [versioned_key, value]: kv_items) {
+        auto& [seqnum, key] = versioned_key;
+        if (!value) {
+            LOG(FATAL) << fmt::format("null value at seqnum={:#x} key={}",
+                                      seqnum,
+                                      key);
+        }
+        PutKVToDB(seqnum, key, *value);
+    }
+    {
+        absl::MutexLock lk(&cc_storage_->store_mu_);
+        cc_storage_->log_store_.OnItemsPersisted(log_items.size());
+        cc_storage_->kv_store_.OnItemsPersisted(kv_items.size());
+    }
+}
+
+void
+Storage::ProcessCCReadLogFromDB(const SharedLogMessage& request,
+                                SharedLogMessage& response)
+{
+    auto log_entry = GetCCLogEntryFromDB(request.logspace_id, request.localid);
+    if (!log_entry) {
+        HLOG(ERROR) << fmt::format(
+            "CC log seqnum={:#x} localid={:#x} not found",
+            bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf),
+            request.localid);
+        response.op_result = static_cast<uint16_t>(SharedLogResultType::DATA_LOST);
+        SendEngineResponse(request, &response);
+        return;
+    }
+    response.op_result = static_cast<uint16_t>(SharedLogResultType::READ_OK);
+    SendEngineResponse(request, &response, STRING_AS_SPAN(log_entry->data));
+}
+
+void
+Storage::ProcessCCReadKVSFromDB(const SharedLogMessage& request,
+                                SharedLogMessage& response)
+{
+    auto value = GetKVFromDB(request.query_seqnum, request.query_tag);
+    if (!value) {
+        HLOG(ERROR) << fmt::format("CC KV seqnum={:#x} key={} not found",
+                                   request.query_seqnum,
+                                   request.query_tag);
+        response.op_result = static_cast<uint16_t>(SharedLogResultType::DATA_LOST);
+        SendEngineResponse(request, &response);
+        return;
+    }
+    response.op_result = static_cast<uint16_t>(SharedLogResultType::READ_OK);
+    SendEngineResponse(request, &response, STRING_AS_SPAN(*value));
 }
 
 }  // namespace log

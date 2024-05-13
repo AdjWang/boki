@@ -21,7 +21,8 @@ using server::NodeWatcher;
 
 SequencerBase::SequencerBase(uint16_t node_id)
     : ServerBase(fmt::format("sequencer_{}", node_id)),
-      node_id_(node_id) {}
+      node_id_(node_id),
+      use_txn_engine_(absl::GetFlag(FLAGS_use_txn_engine)) {}
 
 SequencerBase::~SequencerBase() {}
 
@@ -79,22 +80,11 @@ void SequencerBase::MessageHandler(const SharedLogMessage& message,
     }
 }
 
-namespace {
-static std::string SerializedMetaLogs(const MetaLogProto& metalog) {
-    MetaLogsProto metalogs_proto;
-    metalogs_proto.set_logspace_id(metalog.logspace_id());
-    metalogs_proto.add_metalogs()->CopyFrom(metalog);
-    std::string serialized;
-    CHECK(metalogs_proto.SerializeToString(&serialized));
-    return serialized;
-}
-}  // namespace
-
 void SequencerBase::ReplicateMetaLog(const View* view, const MetaLogProto& metalog) {
     uint32_t logspace_id = metalog.logspace_id();
     DCHECK_EQ(bits::LowHalf32(logspace_id), my_node_id());
     SharedLogMessage message = SharedLogMessageHelper::NewMetaLogsMessage(logspace_id);
-    std::string payload = SerializedMetaLogs(metalog);
+    std::string payload = SerializedMetaLog(metalog);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
     const View::Sequencer* sequencer_node = view->GetSequencerNode(my_node_id());
@@ -137,7 +127,7 @@ void SequencerBase::PropagateMetaLog(const View* view, const MetaLogProto& metal
         UNREACHABLE();
     }
     SharedLogMessage message = SharedLogMessageHelper::NewMetaLogsMessage(metalog.logspace_id());
-    std::string payload = SerializedMetaLogs(metalog);
+    std::string payload = SerializedMetaLog(metalog);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
     for (uint16_t engine_id : engine_nodes) {
@@ -290,6 +280,30 @@ EgressHub* SequencerBase::CreateEgressHub(protocol::ConnType conn_type,
         egress_hubs_[egress_hub->id()] = std::move(egress_hub);
     }
     return hub;
+}
+
+namespace {
+static std::string HalfmoonSerializedMetaLog(const MetaLogProto& metalog) {
+    std::string serialized;
+    CHECK(metalog.SerializeToString(&serialized));
+    return serialized;
+}
+static std::string BokiSerializedMetaLog(const MetaLogProto& metalog) {
+    MetaLogsProto metalogs_proto;
+    metalogs_proto.set_logspace_id(metalog.logspace_id());
+    metalogs_proto.add_metalogs()->CopyFrom(metalog);
+    std::string serialized;
+    CHECK(metalogs_proto.SerializeToString(&serialized));
+    return serialized;
+}
+}  // namespace
+
+std::string SequencerBase::SerializedMetaLog(const MetaLogProto& metalog) {
+    if (use_txn_engine_) {
+        return HalfmoonSerializedMetaLog(metalog);
+    } else {
+        return BokiSerializedMetaLog(metalog);
+    }
 }
 
 }  // namespace log

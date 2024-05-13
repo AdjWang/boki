@@ -166,5 +166,152 @@ void FinalizedLogSpace(LockablePtr<T> logspace_ptr,
     }
 }
 
+template <class KeyType, class ValueType>
+class ThreadSafeHashBucket {
+public:
+    ThreadSafeHashBucket() = default;
+    bool Put(KeyType key, ValueType value)
+    {
+        absl::MutexLock lk(&mu_);
+        bool exists = buckets_.contains(key);
+        buckets_[key].push_back(value);
+        return exists;
+    }
+    void Poll(KeyType key, std::vector<ValueType>& result)
+    {
+        absl::MutexLock lk(&mu_);
+        if (buckets_.contains(key)) {
+            result = std::move(buckets_[key]);
+            buckets_.erase(key);
+        }
+    }
+
+private:
+    absl::Mutex mu_;
+    absl::flat_hash_map<KeyType, std::vector<ValueType>> buckets_
+        ABSL_GUARDED_BY(mu_);
+
+    DISALLOW_COPY_AND_ASSIGN(ThreadSafeHashBucket);
+};
+
+using log::UserTagVec;
+using log::CCLogMetaData;
+using log::CCLogEntry;
+using log::PerLogIndexProto;
+using protocol::SharedLogOpType;
+
+template <class T>
+inline bool
+is_aligned(const void* ptr) noexcept
+{
+    auto iptr = reinterpret_cast<std::uintptr_t>(ptr);
+    return !(iptr % alignof(T));
+}
+
+// inline CCLogMetaData
+// CCMetaDataFromOp(log::LocalOp* op)
+// {
+//     auto metadata = CCLogMetaData{
+//         .op_type = op->type,
+//         .num_tags = op->user_tags.size(),
+//         .cond_pos = op->cond_pos,
+//         .cond_tag = op->cond_tag,
+//     };
+//     if (op->type == protocol::SharedLogOpType::CC_TXN_WRITE) {
+//         metadata.write_tag = op->query_tag;
+//     }
+// }
+
+// TODO: set an option in read to indicate if full log entry(in recovery) or only the
+// data is needed. For engine cache, only the data is stored
+
+inline void
+PopulateCCMetaData(const protocol::SharedLogMessage& message,
+                   CCLogMetaData* metadata)
+{
+    metadata->op_type = message.op_type;
+    metadata->num_tags = message.num_tags;
+    metadata->cond_pos = message.cond_pos;
+    metadata->cond_tag = message.cond_tag;
+    // omit txn write; these are persisted in KVS
+    // if (message.op_type ==
+    //     static_cast<uint16_t>(protocol::SharedLogOpType::CC_TXN_WRITE))
+    // {
+    //     metadata->write_tag = message.query_tag;
+    // }
+}
+
+inline int
+PopulateIndexFlags(const CCLogMetaData& metadata)
+{
+    int flags = 0;
+    switch (static_cast<SharedLogOpType>(metadata.op_type)) {
+    case SharedLogOpType::OVERWRITE:
+        flags |= PerLogIndexProto::OVERWRITE;
+        return flags;
+    case SharedLogOpType::CC_TXN_START:
+        flags |= PerLogIndexProto::TXN;
+        break;
+    case SharedLogOpType::APPEND:
+        flags |= PerLogIndexProto::APPEND;
+        break;
+    default:
+        UNREACHABLE();
+    }
+    if (metadata.cond_tag != log::kEmptyLogTag) {
+        flags |= PerLogIndexProto::CONDITIONAL;
+    }
+    return flags;
+}
+
+inline void
+PopulateCCLogEntry(const protocol::SharedLogMessage& message,
+                   std::span<const char> payload,
+                   CCLogEntry* log_entry)
+{
+    PopulateCCMetaData(message, &log_entry->metadata);
+    const char* ptr = payload.data();
+    const uint64_t* tags_ptr = reinterpret_cast<const uint64_t*>(ptr);
+    log_entry->user_tags.insert(log_entry->user_tags.end(),
+                                tags_ptr,
+                                tags_ptr + message.num_tags);
+    size_t tags_data_size = message.num_tags * sizeof(uint64_t);
+    ptr += tags_data_size;
+    DCHECK(message.payload_size >= tags_data_size);
+    log_entry->data.assign(ptr, message.payload_size - tags_data_size);
+}
+
+// layout: data | tags | metadata
+// tags must be 8bytes-aligned
+inline void
+EncodeCCLogEntry(std::string& dst, const CCLogEntry& src)
+{
+    // cannot use move since the log entry may still be present in memory
+    // dst = std::move(src.data);
+    dst.resize(sizeof(CCLogMetaData) + src.user_tags.size() * sizeof(uint64_t) +
+               src.data.size());
+    dst.replace(0, src.data.size(), src.data);
+    char* ptr = dst.data();
+    memcpy(ptr, src.data.data(), src.data.size());
+    ptr += src.data.size();
+    memcpy(ptr, src.user_tags.data(), src.user_tags.size() * sizeof(uint64_t));
+    ptr += src.user_tags.size() * sizeof(uint64_t);
+    memcpy(ptr, &src.metadata, sizeof(CCLogMetaData));
+}
+
+inline void
+DecodeCCLogEntry(std::string& src, CCLogEntry& dst)
+{
+    char* metadata_ptr = src.data() + src.size() - sizeof(CCLogMetaData);
+    memcpy(&dst.metadata, metadata_ptr, sizeof(CCLogMetaData));
+    CHECK(is_aligned<uint64_t>(metadata_ptr)) << "tags must be 8bytes-aligned";
+    uint64_t* tags_ptr =
+        reinterpret_cast<uint64_t*>(metadata_ptr) - dst.metadata.num_tags;
+    dst.user_tags.assign(tags_ptr, tags_ptr + dst.metadata.num_tags);
+    src.resize(src.size() - sizeof(CCLogMetaData) -
+               dst.metadata.num_tags * sizeof(uint64_t));
+    dst.data = std::move(src);
+}
+
 }  // namespace log_utils
 }  // namespace faas

@@ -95,6 +95,13 @@ enum class SharedLogOpType : uint16_t {
     SET_AUXDATA       = 0x05,  // FuncWorker to Engine, Engine to Storage
     READ_NEXT_B       = 0x06,  // FuncWorker to Engine, Engine to Index
 
+    CC_TXN_START      = 0x07,  // FuncWorker to Engine, Engine to Storage
+    CC_TXN_COMMIT     = 0x08, // FuncWorker to Engine
+    CC_TXN_WRITE      = 0x09,  // FuncWorker to Engine, Engine to Storage
+    OVERWRITE         = 0x0A,  // FuncWorker to Engine, Engine to Storage
+    CC_READ_LOG       = 0x0B,   // Engine to Storage
+    CC_READ_KVS       = 0x0C,   // Engine to Storage
+
     READ_AT           = 0x11,  // Index to Storage
     REPLICATE         = 0x12,  // Engine to Storage
     INDEX_DATA        = 0x13,  // Engine to Index
@@ -140,12 +147,13 @@ enum class SharedLogResultType : uint16_t {
     AUXDATA_OK        = 0x24,
     // Async successful results
     ASYNC_APPEND_OK   = 0x30,
+    COND_FAILED       = 0x35,
     // Error results
-    BAD_ARGS    = 0x40,
-    DISCARDED   = 0x41,  // Log to append is discarded
-    EMPTY       = 0x42,  // Cannot find log entries satisfying requirements
-    DATA_LOST   = 0x43,  // Failed to extract log data
-    TRIM_FAILED = 0x44
+    BAD_ARGS          = 0x40,
+    DISCARDED         = 0x41,  // Log to append is discarded
+    EMPTY             = 0x42,  // Cannot find log entries satisfying requirements
+    DATA_LOST         = 0x43,  // Failed to extract log data
+    TRIM_FAILED       = 0x44
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -155,6 +163,7 @@ constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
 constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
+constexpr uint32_t kConditionalOpFlag             = (1 << 3);
 
 struct Message {
     struct {
@@ -193,7 +202,8 @@ struct Message {
     uint64_t log_tag;             // [40:48]
     uint64_t log_client_data;     // [48:56] will be preserved for response to clients
 
-    uint64_t _8_padding_8_;
+    uint32_t cond_pos;            // [56:60] for cond op
+    uint32_t _4_padding_4_;
 
     char inline_data[__FAAS_MESSAGE_SIZE - __FAAS_CACHE_LINE_SIZE]
         __attribute__ ((aligned (__FAAS_CACHE_LINE_SIZE)));
@@ -251,6 +261,7 @@ struct GatewayMessage {
 static_assert(sizeof(GatewayMessage) == 16, "Unexpected GatewayMessage size");
 
 constexpr uint16_t kReadInitialFlag = (1 << 0);
+constexpr uint16_t kIndexIsTxnFlag = (1 << 1);
 
 struct SharedLogMessage {
     uint16_t op_type;         // [0:2]
@@ -289,11 +300,17 @@ struct SharedLogMessage {
             uint16_t num_tags;      // [24:26]
             uint16_t aux_data_size; // [26:28]
 
-            uint32_t _5_padding_5_;
+            uint32_t cond_pos;      // [28:32]
         } __attribute__ ((packed));
     };
 
-    uint64_t user_metalog_progress;  // [32:40]
+    union {
+        // Note: all history tags must be cond tags
+        // otherwise, will have to issue a slog read next to make sure the same op
+        // isn't performed twice
+        uint64_t cond_tag;              // [32:40]
+        uint64_t user_metalog_progress; // [32:40]
+    };
 
     union {
         uint64_t localid;       // [40:48]
@@ -662,7 +679,16 @@ public:
         return NewResponse(SharedLogResultType::DATA_LOST);
     }
 
-#undef NEW_EMPTY_SHAREDLOG_MESSAGE
+    static SharedLogMessage NewCCReadKVSResponse(
+    SharedLogResultType result = SharedLogResultType::READ_OK) {
+        NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+        message.op_type = static_cast<uint16_t>(SharedLogOpType::CC_READ_KVS);
+        message.op_result = static_cast<uint16_t>(result);
+        return message;
+    }
+
+// For Halfmoon message helpers in engine_base.h
+// #undef NEW_EMPTY_SHAREDLOG_MESSAGE
 
 private:
     DISALLOW_IMPLICIT_CONSTRUCTORS(SharedLogMessageHelper);

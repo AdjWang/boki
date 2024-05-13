@@ -5,6 +5,86 @@
 namespace faas {
 namespace log {
 
+template <class T>
+class ProtoBuffer {
+public:
+    // absl::Mutex buffer_mu_;
+    // always starts from 0; seqnum of proto should be lowhalf
+    size_t buffer_position_ = 0;
+    utils::SimpleObjectPool<T> proto_pool_;
+    absl::flat_hash_map</* buffer_position */ size_t, T*>
+        pending_protos_; // ABSL_GUARDED_BY(buffer_mu_)
+
+    static size_t currentPosition(T* proto);
+    static size_t nextPosition(T* proto);
+
+    void ProvideRaw(std::span<const char> payload);
+    void ProvideAllocated(T* proto);
+    std::optional<std::vector<T*>> PollBuffer();
+    void Recycle(std::vector<T*>& protos);
+};
+
+template <class T>
+void
+ProtoBuffer<T>::ProvideRaw(std::span<const char> payload)
+{
+    T* proto = proto_pool_.Get();
+    proto->ParseFromArray(payload.data(), static_cast<int>(payload.size()));
+    size_t pos = currentPosition(proto);
+    if (pos < buffer_position_ || pending_protos_.contains(pos)) {
+        proto_pool_.Return(proto);
+        return;
+    }
+    pending_protos_[pos] = proto;
+}
+
+template <class T>
+void
+ProtoBuffer<T>::ProvideAllocated(T* proto)
+{
+    size_t pos = currentPosition(proto);
+    if (pos < buffer_position_ || pending_protos_.contains(pos)) {
+        return;
+    }
+    T* buf = proto_pool_.Get();
+    // buf->Swap(proto);
+    *buf = std::move(*proto);
+    pending_protos_[pos] = buf;
+}
+
+template <class T>
+std::optional<std::vector<T*>>
+ProtoBuffer<T>::PollBuffer()
+{
+    size_t pos = buffer_position_;
+    size_t cnt = 0;
+    while (pending_protos_.contains(pos)) {
+        pos = nextPosition(pending_protos_[pos]);
+        cnt++;
+    }
+    if (cnt == 0) {
+        return std::nullopt;
+    }
+    std::vector<T*> protos;
+    protos.reserve(cnt);
+    for (size_t i = 0; i < cnt; i++) {
+        protos.push_back(pending_protos_[buffer_position_]);
+        pending_protos_.erase(buffer_position_);
+        buffer_position_ = nextPosition(protos[i]);
+    }
+    return std::move(protos);
+}
+
+template <class T>
+void
+ProtoBuffer<T>::Recycle(std::vector<T*>& protos)
+{
+    // absl::MutexLock lk(&buffer_mu_);
+    for (T* proto: protos) {
+        proto_pool_.Return(proto);
+    }
+}
+
 // Used in Sequencer
 class MetaLogPrimary final : public LogSpaceBase {
 public:

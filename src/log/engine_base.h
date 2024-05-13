@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/protocol.h"
 #include "common/zk.h"
 #include "log/common.h"
 #include "log/view.h"
@@ -19,6 +20,27 @@ namespace log {
 
 class EngineBase {
 public:
+    struct LocalOp {
+        bool conditional;
+        uint32_t call_id;
+        uint32_t cond_pos;
+        uint64_t cond_tag;
+        uint64_t localid;
+
+        protocol::SharedLogOpType type;
+        uint16_t client_id;
+        uint32_t user_logspace;
+        uint64_t id;
+        uint64_t client_data;
+        uint64_t metalog_progress;
+        uint64_t query_tag;
+        uint64_t seqnum;
+        uint64_t func_call_id;
+        int64_t start_timestamp;
+        UserTagVec user_tags;
+        utils::AppendableBuffer data;
+    };
+
     explicit EngineBase(engine::Engine* engine);
     virtual ~EngineBase();
 
@@ -56,21 +78,6 @@ protected:
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
 
-    struct LocalOp {
-        protocol::SharedLogOpType type;
-        uint16_t client_id;
-        uint32_t user_logspace;
-        uint64_t id;
-        uint64_t client_data;
-        uint64_t metalog_progress;
-        uint64_t query_tag;
-        uint64_t seqnum;
-        uint64_t func_call_id;
-        int64_t start_timestamp;
-        UserTagVec user_tags;
-        utils::AppendableBuffer data;
-    };
-
     virtual void HandleLocalAppend(LocalOp* op) = 0;
     virtual void HandleLocalTrim(LocalOp* op) = 0;
     virtual void HandleLocalRead(LocalOp* op) = 0;
@@ -85,8 +92,10 @@ protected:
                           std::span<const char> aux_data);
 
     void IntermediateLocalOpWithResponse(LocalOp* op, protocol::Message* response);
-    void FinishLocalOpWithResponse(LocalOp* op, protocol::Message* response,
-                                   uint64_t metalog_progress);
+    void FinishLocalOpWithResponse(LocalOp* op,
+                                   protocol::Message* response,
+                                   uint64_t metalog_progress = 0,
+                                   bool recycle = true);
     void FinishLocalOpWithFailure(LocalOp* op, protocol::SharedLogResultType result,
                                   uint64_t metalog_progress = 0);
 
@@ -113,6 +122,28 @@ protected:
                               std::span<const char> payload = EMPTY_CHAR_SPAN);
 
     server::IOWorker* SomeIOWorker();
+
+    inline void RecycleLocalOp(LocalOp* op) { log_op_pool_.Return(op); }
+
+    bool ReplicateCCLogEntry(const View* view,
+                             protocol::SharedLogMessage& message,
+                             std::span<const uint64_t> user_tags,
+                             std::span<const char> log_data);
+
+    void CCLogCachePut(uint64_t localid, std::span<const char> log_data);
+    void CCLogCachePut(uint64_t seqnum,
+                       uint64_t key,
+                       std::span<const char> log_data);
+    std::optional<std::string> CCLogCacheGet(uint64_t localid);
+    std::optional<std::string> CCLogCacheGet(uint64_t seqnum, uint64_t key);
+
+    void CCLogCachePutAuxData(uint64_t seqnum,
+                              //   uint64_t key,
+                              std::span<const char> aux_data);
+    std::optional<std::string> CCLogCacheGetAuxData(uint64_t seqnum);
+
+    bool SendStorageCCReadRequest(protocol::SharedLogMessage& request,
+                                  const View::Engine* engine_node);
 
 private:
     const uint16_t node_id_;
@@ -149,6 +180,69 @@ private:
 
     DISALLOW_COPY_AND_ASSIGN(EngineBase);
 };
+
+using LocalOp = EngineBase::LocalOp;
+using protocol::SharedLogMessage;
+using protocol::SharedLogOpType;
+using protocol::SharedLogMessageHelper;
+
+inline SharedLogMessage
+NewCCReplicateMessage(log::LocalOp* op)
+{
+    NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+    // message.op_type = static_cast<uint16_t>(SharedLogOpType::REPLICATE);
+    message.op_type = static_cast<uint16_t>(op->type);
+    message.localid = op->localid;
+    message.num_tags = gsl::narrow_cast<uint16_t>(op->user_tags.size());
+    message.cond_tag = op->cond_tag;
+    message.cond_pos = op->cond_pos;
+    // // all history tags must be cond tags too
+    // if (op->cond_tag != kEmptyLogTag) {
+    //     message.cond_tag = op->cond_tag;
+    //     message.cond_pos = op->cond_pos;
+    //     // if (op->conditional) {
+    //     //     message.flags |= protocol::kSLogIsCondOpFlag;
+    //     // } // else this is a overwrite op
+    // }
+    return message;
+}
+
+inline SharedLogMessage
+NewCCTxnWriteMessage(log::LocalOp* op)
+{
+    NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+    message.op_type = static_cast<uint16_t>(op->type);
+    message.localid = op->localid;
+    message.query_tag = op->query_tag;
+    message.seqnum_lowhalf = bits::LowHalf64(op->seqnum);
+    // message.logspace_id = bits::HighHalf64(op->seqnum);
+    return message;
+}
+
+inline SharedLogMessage
+NewCCReadLogMessage(log::LocalOp* op)
+{
+    NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+    message.op_type = static_cast<uint16_t>(SharedLogOpType::CC_READ_LOG);
+    message.logspace_id = bits::HighHalf64(op->seqnum);
+    message.seqnum_lowhalf = bits::LowHalf64(op->seqnum); // though not used
+    message.localid = op->localid;
+    // message.origin_node_id = node_id_;
+    message.client_data = op->id;
+    return message;
+}
+
+inline SharedLogMessage
+NewCCReadKVSMessage(log::LocalOp* op)
+{
+    NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+    message.op_type = static_cast<uint16_t>(SharedLogOpType::CC_READ_KVS);
+    message.query_seqnum = op->seqnum;
+    message.query_tag = op->query_tag;
+    // message.origin_node_id = node_id_;
+    message.client_data = op->id;
+    return message;
+}
 
 }  // namespace log
 }  // namespace faas

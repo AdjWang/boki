@@ -16,6 +16,14 @@ public:
     virtual void InstallLogSpace(uint32_t logspace_id) = 0;
     virtual std::optional<std::string> Get(uint32_t logspace_id, uint32_t key) = 0;
     virtual void Put(uint32_t logspace_id, uint32_t key, std::span<const char> data) = 0;
+
+    virtual std::optional<std::string> Get(uint32_t logspace_id, uint64_t key) = 0;
+    virtual void Put(uint32_t logspace_id, uint64_t key, std::span<const char> data) = 0;
+
+    virtual std::optional<std::string> GetKV(uint64_t seqnum, uint64_t key) {
+        return std::nullopt;
+    }
+    virtual void PutKV(uint64_t seqnum, uint64_t key, std::span<const char> data) {}
 };
 
 class RocksDBBackend final : public DBInterface {
@@ -26,6 +34,12 @@ public:
     void InstallLogSpace(uint32_t logspace_id) override;
     std::optional<std::string> Get(uint32_t logspace_id, uint32_t key) override;
     void Put(uint32_t logspace_id, uint32_t key, std::span<const char> data) override;
+
+    std::optional<std::string> Get(uint32_t logspace_id, uint64_t key) override;
+    void Put(uint32_t logspace_id, uint64_t key, std::span<const char> data) override;
+
+    std::optional<std::string> GetKV(uint64_t seqnum, uint64_t key) override;
+    void PutKV(uint64_t seqnum, uint64_t key, std::span<const char> data) override;
 
 private:
     std::unique_ptr<rocksdb::DB> db_;
@@ -49,7 +63,10 @@ public:
     std::optional<std::string> Get(uint32_t logspace_id, uint32_t key) override;
     void Put(uint32_t logspace_id, uint32_t key, std::span<const char> data) override;
 
-private:
+    std::optional<std::string> Get(uint32_t logspace_id, uint64_t key) override;
+    void Put(uint32_t logspace_id, uint64_t key, std::span<const char> data) override;
+
+   private:
     Type type_;
     std::string db_path_;
 

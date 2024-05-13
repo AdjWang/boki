@@ -58,7 +58,10 @@ const (
 	SharedLogOpType_SET_AUXDATA uint16 = 0x05
 	SharedLogOpType_READ_NEXT_B uint16 = 0x06
 
-	SharedLogOpType_OVERWRITE uint16 = 0x0a
+	SharedLogOpType_CC_TXN_START  uint16 = 0x07
+	SharedLogOpType_CC_TXN_COMMIT uint16 = 0x08
+	SharedLogOpType_CC_TXN_WRITE  uint16 = 0x09
+	SharedLogOpType_OVERWRITE     uint16 = 0x0A
 
 	SharedLogOpType_ASYNC_APPEND uint16 = 0x20
 	SharedLogOpType_ASYNC_READ   uint16 = 0x21

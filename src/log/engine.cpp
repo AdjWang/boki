@@ -15,6 +15,347 @@ using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
 using protocol::SharedLogResultType;
 
+TxnEngine::TxnEngine(const View* view, uint16_t engine_id, uint16_t sequencer_id)
+    : view_(view),
+      engine_id_(engine_id),
+      next_localid_(bits::JoinTwo32(engine_id, 0))
+{
+    const View::NodeIdVec& engine_node_ids = view->GetEngineNodes();
+    engine_idx_ = static_cast<int>(absl::c_find(engine_node_ids, engine_id) -
+                                   engine_node_ids.begin());
+    DCHECK_LT(static_cast<size_t>(engine_idx_), engine_node_ids.size());
+    // const View::Engine* engine_node = view->GetEngineNode(engine_id);
+    // replica_count_ = engine_node->GetStorageNodes().size();
+    logspace_id_ = bits::JoinTwo16(view->id(), sequencer_id);
+}
+
+uint64_t
+TxnEngine::RegisterOp(LocalOp* op)
+{
+    absl::MutexLock lk(&append_mu_);
+    uint64_t localid = next_localid_++;
+    pending_ops_[localid] = op;
+    op->localid = localid;
+    return localid;
+}
+
+void
+TxnEngine::RegisterTxnCommitOp(LocalOp* op)
+{
+    absl::MutexLock lk(&append_mu_);
+    pending_txns_[bits::LowHalf64(op->seqnum)].reset(new TxnProgress(op));
+}
+
+// std::optional<std::vector<MetaLogProto*>>
+// TxnEngine::ProvideRawMetaLog(std::span<const char> payload)
+// {
+//     absl::MutexLock lk(&metalog_mu_);
+//     auto metalog_proto = metalog_pool_.Get();
+//     metalog_proto->ParseFromArray(payload.data(),
+//     static_cast<int>(payload.size()));
+//     pending_metalogs_[metalog_proto->metalog_seqnum()] = metalog_proto;
+//     uint32_t metalog_seqnum = metalog_seqnum_;
+//     while (pending_metalogs_.contains(metalog_seqnum)) {
+//         metalog_seqnum++;
+//     }
+//     if (metalog_seqnum == metalog_seqnum_) {
+//         return std::nullopt;
+//     }
+//     std::vector<MetaLogProto*> metalogs(metalog_seqnum - metalog_seqnum_);
+//     for (uint32_t i = 0; i < metalogs.size(); i++) {
+//         metalogs[i] = pending_metalogs_[metalog_seqnum_ + i];
+//         pending_metalogs_.erase(metalog_seqnum_ + i);
+//     }
+//     metalog_seqnum_ = metalog_seqnum;
+//     return metalogs;
+// }
+
+void
+TxnEngine::ApplyMetaLogs(std::vector<MetaLogProto*>& metalog_protos)
+{
+    // size_t num_ops = 0;
+    // for (MetaLogProto* metalog_proto: metalog_protos) {
+    //     num_ops += metalog_proto->new_logs_proto().shard_deltas(engine_idx_);
+    // }
+    // finished_ops_.reserve(num_ops);
+    // absl::MutexLock lk(&append_mu_);
+    for (MetaLogProto* metalog_proto: metalog_protos) {
+        VLOG_F(1,
+               "Apply metalog: metalog_seqnum={}, start_seqnum={}",
+               metalog_proto->metalog_seqnum(),
+               metalog_proto->new_logs_proto().start_seqnum());
+        DCHECK(metalog_proto->logspace_id() == logspace_id_);
+        const auto& progress_vec = metalog_proto->new_logs_proto();
+        uint64_t start_seqnum =
+            bits::JoinTwo32(logspace_id_, progress_vec.start_seqnum());
+        // CHECK(progress_vec.shard_deltas_size() ==
+        //       static_cast<int>(view_->num_engine_nodes()));
+        for (int i = 0; i < progress_vec.shard_deltas_size(); i++) {
+            if (i != engine_idx_) {
+                start_seqnum += progress_vec.shard_deltas(i);
+                continue;
+            }
+            uint64_t start_localid =
+                bits::JoinTwo32(engine_id_, progress_vec.shard_starts(i));
+            for (uint32_t j = 0; j < progress_vec.shard_deltas(i); j++) {
+                FinishOp(start_localid + j, start_seqnum + j);
+            }
+        }
+    }
+    // finished_ops.swap(finished_ops_);
+}
+
+void
+TxnEngine::FinishOp(uint64_t localid, uint64_t seqnum, bool check_cond)
+{
+    if (!pending_ops_.contains(localid)) {
+        return;
+    }
+    LocalOp* op = pending_ops_.at(localid);
+    if (op->conditional && check_cond) {
+        return;
+    }
+    pending_ops_.erase(localid);
+    finished_ops_.push_back(op);
+    // Note: async_write has already returned to caller, no need to call
+    // FinishOpWithResponse
+    if (op->type == protocol::SharedLogOpType::CC_TXN_WRITE) {
+        if (!pending_txns_.contains(bits::LowHalf64(op->seqnum))) {
+            return;
+        }
+        auto& txn_progress = pending_txns_.at(bits::LowHalf64(op->seqnum));
+        LocalOp* commit_op = txn_progress->finishOp();
+        if (commit_op != nullptr) {
+            finished_ops_.push_back(commit_op);
+            pending_txns_.erase(bits::LowHalf64(op->seqnum));
+        }
+    } else {
+        op->seqnum = seqnum;
+    }
+}
+
+void
+TxnEngine::FinishCondOps(CondOpResultVec& cond_op_results)
+{
+    // absl::MutexLock lk(&append_mu_);
+    for (auto& [localid, seqnum]: cond_op_results) {
+        FinishOp(localid, seqnum, false);
+    }
+}
+
+void
+TxnEngine::PollFinishedOps(FinishedOpVec& finished_ops)
+{
+    finished_ops.swap(finished_ops_);
+}
+
+// void
+// TxnEngine::RecycleMetaLogs(std::vector<MetaLogProto*>& metalog_protos)
+// {
+//     absl::MutexLock lk(&metalog_mu_);
+//     for (MetaLogProto* metalog_proto: metalog_protos) {
+//         metalog_pool_.Return(metalog_proto);
+//     }
+// }
+
+void
+TxnEngine::ApplyIndices(std::vector<PerEngineIndexProto*>& engine_indices)
+{
+    for (auto engine_index: engine_indices) {
+        VLOG(1) << fmt::format(
+            "Apply indices from engine {}: seqnum {}->{}, localid {:#x}->{:#x}",
+            bits::HighHalf64(engine_index->start_localid()),
+            engine_index->start_seqnum(),
+            engine_index->start_seqnum() +
+                static_cast<size_t>(engine_index->log_indices_size()),
+            engine_index->start_localid(),
+            engine_index->start_localid() +
+                static_cast<size_t>(engine_index->log_indices_size()));
+        // CHECK(engine_index->start_seqnum() == indexed_seqnum_);
+        uint64_t start_localid = engine_index->start_localid();
+        for (int i = 0; i < engine_index->log_indices_size(); i++) {
+            auto& log_index = engine_index->log_indices(i);
+            ApplyIndex(log_index, start_localid + static_cast<uint64_t>(i));
+        }
+    }
+    // TODO: check pending reads
+    auto iter = pending_queries_.begin();
+    while (iter != pending_queries_.end()) {
+        if (iter->first >= indexed_seqnum_) {
+            break;
+        }
+        LocalOp* op = iter->second;
+        IndexInfo index_info = LookUpCurrentIndexBackward(op);
+        pending_query_results_.push_back(IndexQueryResult{index_info, op});
+    }
+}
+
+void
+TxnEngine::ApplyIndex(const PerLogIndexProto& log_index, uint64_t localid)
+{
+    uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
+    uint32_t seqnum_lowhalf = indexed_seqnum_++;
+    // txn write has no tags
+    if (log_index.flags() == PerLogIndexProto::EMPTY) {
+        return;
+    }
+    if (log_index.flags() & PerLogIndexProto::OVERWRITE) {
+        uint32_t overwrite_seqnum_lowhalf =
+            seqnums_by_tag_[log_index.cond_tag()][log_index.cond_pos()];
+        seqnum_info_[overwrite_seqnum_lowhalf] = IndexInfo{
+            // .flags = 0,
+            .localid = localid,
+            // .cond_tag = log_index.cond_tag(),
+        };
+        return;
+    }
+    if (log_index.flags() & PerLogIndexProto::CONDITIONAL) {
+        size_t pos = seqnums_by_tag_[log_index.cond_tag()].size();
+        if (pos < log_index.cond_pos()) {
+            LOG(FATAL) << fmt::format("Invalid cond pos: current {}, expect {}",
+                                      pos,
+                                      log_index.cond_pos());
+        }
+        if (pos == log_index.cond_pos()) {
+            seqnums_by_tag_[log_index.cond_tag()].push_back(seqnum_lowhalf);
+        }
+        if (engine_id == engine_id_) { // pos >= log_index.cond_pos()
+            cond_op_results_.push_back(CondOpResult{
+                .localid = localid,
+                .seqnum = pos == log_index.cond_pos() ?
+                              bits::JoinTwo32(logspace_id_, seqnum_lowhalf) :
+                              kInvalidLogSeqNum});
+        }
+        if (pos > log_index.cond_pos()) {
+            return;
+        }
+    }
+    for (uint64_t user_tag: log_index.user_tags()) {
+        seqnums_by_tag_[user_tag].push_back(seqnum_lowhalf);
+    }
+    seqnum_info_[seqnum_lowhalf] = IndexInfo{
+        .localid = localid,
+        .cond_tag = log_index.cond_tag(),
+    };
+    if (log_index.flags() & PerLogIndexProto::TXN) {
+        seqnum_info_[seqnum_lowhalf].flags |= protocol::kIndexIsTxnFlag;
+    }
+}
+
+void
+TxnEngine::PollCondOpResults(CondOpResultVec& cond_op_results)
+{
+    cond_op_results.swap(cond_op_results_);
+}
+
+void
+TxnEngine::PollIndexQueryResults(IndexQueryResultVec& query_results)
+{
+    query_results.swap(pending_query_results_);
+}
+
+std::optional<TxnEngine::IndexInfo>
+TxnEngine::LookUp(LocalOp* op)
+{
+    if (op->type == SharedLogOpType::READ_PREV) {
+        return LookUpBackward(op);
+    }
+    // READ_NEXT
+    return LookUpForward(op);
+}
+
+std::optional<TxnEngine::IndexInfo>
+TxnEngine::LookUpForward(LocalOp* op)
+{
+    absl::ReaderMutexLock lk(&index_mu_);
+    // TODO: required?
+    // DCHECK(logspace_id_ == bits::HighHalf64(op->seqnum))
+    //     << fmt::format("logspace_id={:#x} op->seqnum={:#x}", logspace_id_,
+    //                    bits::HighHalf64(op->seqnum));
+    // currently not supporting snapshot and single obj read
+    DCHECK(op->query_tag != kEmptyLogTag);
+    if (!seqnums_by_tag_.contains(op->query_tag)) {
+        op->seqnum = kInvalidLogSeqNum;
+        return IndexInfo{};
+    }
+    uint32_t query_seqnum_lowhalf = bits::LowHalf64(op->seqnum);
+    auto& index_of_tag = seqnums_by_tag_.at(op->query_tag);
+    auto iter = absl::c_lower_bound(
+        index_of_tag,
+        query_seqnum_lowhalf,
+        [](uint32_t index_seqnum, uint32_t query_seqnum_lowhalf) {
+            return index_seqnum < query_seqnum_lowhalf;
+        });
+    if (iter == index_of_tag.end()) {
+        op->seqnum = kInvalidLogSeqNum;
+        return IndexInfo{};
+    }
+    uint32_t result_seqnum_lowhalf = *iter;
+    op->seqnum = bits::JoinTwo32(logspace_id_, result_seqnum_lowhalf);
+    return seqnum_info_[result_seqnum_lowhalf];
+}
+
+// NOTE: txns and functions should read prev with snapshot-1
+// snapshot is obtained by appending txn_start and function invocation logs
+std::optional<TxnEngine::IndexInfo>
+TxnEngine::LookUpBackward(LocalOp* op)
+{
+    // currently not supporting snapshot and single obj read prev
+    // snapshot(read-only txn) and single obj(non-txn) returns the current tail
+    {
+        absl::ReaderMutexLock lk(&index_mu_);
+        if (bits::JoinTwo32(logspace_id_, indexed_seqnum_) > op->seqnum) {
+            return LookUpCurrentIndexBackward(op);
+        }
+    }
+    absl::MutexLock lk(&index_mu_);
+    return LookUpFutureIndexBackward(op);
+}
+
+TxnEngine::IndexInfo
+TxnEngine::LookUpCurrentIndexBackward(LocalOp* op)
+{
+    // absl::ReaderMutexLock lk(&index_mu_);
+    // TODO: required?
+    // DCHECK(logspace_id_ == bits::HighHalf64(op->seqnum));
+    // currently not supporting snapshot and single obj read
+    DCHECK(op->query_tag != kEmptyLogTag);
+    if (!seqnums_by_tag_.contains(op->query_tag)) {
+        op->seqnum = kInvalidLogSeqNum;
+        return IndexInfo{};
+    }
+    uint32_t query_seqnum_lowhalf = bits::LowHalf64(op->seqnum);
+    auto& index_of_tag = seqnums_by_tag_.at(op->query_tag);
+    auto iter = absl::c_upper_bound(
+        index_of_tag,
+        query_seqnum_lowhalf,
+        [](uint32_t query_seqnum_lowhalf, uint32_t index_seqnum) {
+            return query_seqnum_lowhalf < index_seqnum;
+        });
+    if (iter == index_of_tag.begin()) {
+        op->seqnum = kInvalidLogSeqNum;
+        return IndexInfo{};
+    }
+    uint32_t result_seqnum_lowhalf = *(--iter);
+    op->seqnum = bits::JoinTwo32(logspace_id_, result_seqnum_lowhalf);
+    return seqnum_info_[result_seqnum_lowhalf];
+}
+
+std::optional<TxnEngine::IndexInfo>
+TxnEngine::LookUpFutureIndexBackward(LocalOp* op)
+{
+    // absl::MutexLock lk(&index_mu_);
+    DCHECK(logspace_id_ == bits::HighHalf64(op->seqnum));
+    // currently not supporting snapshot and single obj read prev
+    // snapshot(read-only txn) and single obj(non-txn) returns the current tail
+    DCHECK(op->query_tag != kEmptyLogTag);
+    if (bits::JoinTwo32(logspace_id_, indexed_seqnum_) > op->seqnum) {
+        return LookUpCurrentIndexBackward(op);
+    }
+    pending_queries_.insert(std::make_pair(bits::LowHalf64(op->seqnum), op));
+    return std::nullopt;
+}
+
 Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
@@ -46,6 +387,11 @@ void Engine::OnViewCreated(const View* view) {
                 if (engine_node->HasIndexFor(sequencer_id)) {
                     index_collection_.InstallLogSpace(std::make_unique<Index>(
                         view, sequencer_id));
+
+                    if (use_txn_engine()) {
+                        txn_engine_.reset(
+                            new TxnEngine(view, my_node_id(), sequencer_id));
+                    }
                 }
             }
         }
@@ -168,6 +514,14 @@ static Message BuildLocalReadOKResponse(uint64_t seqnum) {
     } while (0)
 
 void Engine::HandleLocalAppend(LocalOp* op) {
+    if (use_txn_engine()) {
+        TxnEngineLocalAppend(op);
+    } else {
+        SLogHandleLocalAppend(op);
+    }
+}
+
+void Engine::SLogHandleLocalAppend(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncAppend(op->type));
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
@@ -213,6 +567,14 @@ void Engine::HandleLocalTrim(LocalOp* op) {
 }
 
 void Engine::HandleLocalRead(LocalOp* op) {
+    if (use_txn_engine()) {
+        TxnEngineLocalRead(op);
+    } else {
+        SLogHandleLocalRead(op);
+    }
+}
+
+void Engine::SLogHandleLocalRead(LocalOp* op) {
     DCHECK(protocol::SharedLogOpTypeHelper::IsFuncRead(op->type));
     HVLOG_F(1, "Handle local read: op_type=0x{:02X}, op_id={}, logspace={}, tag={}, seqnum={}",
             uint16_t(op->type), op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
@@ -330,6 +692,33 @@ void Engine::HandleRemoteRead(const SharedLogMessage& request) {
 
 void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                std::span<const char> payload) {
+    if (use_txn_engine()) {
+        TxnEngineRecvMetaLog(message, payload);
+    } else {
+        SLogOnRecvNewMetaLogs(message, payload);
+    }
+}
+
+void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
+                                std::span<const char> payload) {
+    if (use_txn_engine()) {
+        TxnEngineRecvIndex(message, payload);
+    } else {
+        SLogOnRecvNewIndexData(message, payload);
+    }
+}
+
+void Engine::OnRecvResponse(const SharedLogMessage& message,
+                            std::span<const char> payload) {
+    if (use_txn_engine()) {
+        TxnEngineRecvResponse(message, payload);
+    } else {
+        SLogOnRecvResponse(message, payload);
+    }
+}
+
+void Engine::SLogOnRecvNewMetaLogs(const SharedLogMessage& message,
+                                   std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
@@ -362,8 +751,8 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
     ProcessIndexQueryResults(query_results);
 }
 
-void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
-                                std::span<const char> payload) {
+void Engine::SLogOnRecvNewIndexData(const SharedLogMessage& message,
+                                    std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::INDEX_DATA);
     IndexDataProto index_data_proto;
     if (!index_data_proto.ParseFromArray(payload.data(),
@@ -397,8 +786,8 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
 #undef IGNORE_IF_FROM_PAST_VIEW
 
-void Engine::OnRecvResponse(const SharedLogMessage& message,
-                            std::span<const char> payload) {
+void Engine::SLogOnRecvResponse(const SharedLogMessage& message,
+                                std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::RESPONSE);
     SharedLogResultType result = SharedLogMessageHelper::GetResultType(message);
     if (    result == SharedLogResultType::READ_OK
@@ -699,6 +1088,331 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
     query.metalog_progress = result.metalog_progress;
     query.prev_found_result = result.found_result;
     return query;
+}
+
+void
+Engine::ProcessFinishedOp(LocalOp* op)
+{
+    HVLOG(1) << fmt::format(
+        "finished op type={:#x} localid={:#x} seqnum={:#x} cond_tag={} cond_pos={}",
+        static_cast<uint16_t>(op->type),
+        op->localid,
+        op->seqnum,
+        op->cond_tag,
+        op->cond_pos);
+    if (op->type == SharedLogOpType::CC_TXN_WRITE) {
+        RecycleLocalOp(op);
+        return;
+    }
+    // if cond op failed, then seqnum is kInvalidLogSeqNum
+    if (op->conditional && op->seqnum == kInvalidLogSeqNum) {
+        FinishLocalOpWithFailure(op, SharedLogResultType::COND_FAILED);
+        return;
+    }
+    Message response =
+        MessageHelper::NewSharedLogOpSucceeded(SharedLogResultType::APPEND_OK,
+                                               op->seqnum);
+    FinishLocalOpWithResponse(op, &response);
+}
+
+void
+Engine::ProcessIndexQueryResults(TxnEngine::IndexInfo& index_info, LocalOp* op)
+{
+    if (op->seqnum == kInvalidLogSeqNum) {
+        FinishLocalOpWithFailure(op, SharedLogResultType::EMPTY);
+        return;
+    }
+    // TODO: process query_tag == kEmptyLogTag (snapshot); currently not
+    // supported
+    if ((index_info.flags & protocol::kIndexIsTxnFlag) &&
+        op->query_tag != index_info.cond_tag)
+    {
+        ReadFromKVS(op);
+    } else {
+        op->localid = index_info.localid;
+        ReadFromLog(op);
+    }
+}
+
+void
+Engine::ReadFromKVS(LocalOp* op)
+{
+    auto txn_write = CCLogCacheGet(op->seqnum, op->query_tag);
+    if (txn_write) {
+        Message response =
+            MessageHelper::NewSharedLogOpSucceeded(SharedLogResultType::READ_OK,
+                                                   op->seqnum);
+        MessageHelper::AppendInlineData(&response, STRING_AS_SPAN(*txn_write));
+        FinishLocalOpWithResponse(op, &response);
+        return;
+    }
+    // Cache miss
+    if (pending_kvs_reads_.Put(std::make_pair(op->seqnum, op->query_tag), op)) {
+        // read request already sent
+        return;
+    }
+    auto request = NewCCReadKVSMessage(op);
+    const View::Engine* engine_node =
+        txn_engine_->view_->GetEngineNode(my_node_id());
+    bool success = SendStorageCCReadRequest(request, engine_node);
+    if (!success) {
+        HLOG_F(FATAL,
+               "Failed to send kvs read request for seqnum {:#x} tag {}",
+               op->seqnum,
+               op->query_tag);
+        // FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+    }
+}
+
+void
+Engine::ReadFromLog(LocalOp* op)
+{
+    auto log_data = CCLogCacheGet(op->localid);
+    if (log_data) {
+        // op->seqnum has already been set by txn_engine_->LookUp
+        // op->localid has already been set by ProcessIndexQueryResults
+        HVLOG_F(1,
+                "Cache hits on CC log entry seqnum={:#x} localid={:#x}",
+                op->seqnum,
+                op->localid);
+        Message response =
+            MessageHelper::NewSharedLogOpSucceeded(SharedLogResultType::READ_OK,
+                                                   op->seqnum);
+        MessageHelper::AppendInlineData(&response, STRING_AS_SPAN(*log_data));
+        FinishLocalOpWithResponse(op, &response);
+        return;
+    }
+    // Cache miss
+    if (pending_log_reads_.Put(op->localid, op)) {
+        // read request already sent
+        HVLOG_F(1,
+                "log read op id={} seqnum={:#x} localid={:#x} already sent",
+                op->id,
+                op->seqnum,
+                op->localid);
+        return;
+    }
+    HVLOG_F(1,
+            "Sending log read op id={} seqnum={:#x} localid={:#x} to storage",
+            op->id,
+            op->seqnum,
+            op->localid);
+    auto request = NewCCReadLogMessage(op);
+    const View::Engine* engine_node =
+        txn_engine_->view_->GetEngineNode(my_node_id());
+    bool success = SendStorageCCReadRequest(request, engine_node);
+    if (!success) {
+        HLOG_F(FATAL,
+               "Failed to send log read request for seqnum {:#x} localid {:#x}",
+               op->seqnum,
+               op->localid);
+        // FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+    }
+}
+
+void
+Engine::ProcessKVSReadResult(const protocol::SharedLogMessage& message,
+                             std::span<const char> payload)
+{
+    auto result = SharedLogMessageHelper::GetResultType(message);
+    if (result == SharedLogResultType::DATA_LOST) {
+        HLOG(FATAL) << fmt::format("kvs read seqnum={:#x} tag={} data lost",
+                                   message.query_seqnum,
+                                   message.query_tag);
+        return;
+    }
+    if (result != SharedLogResultType::READ_OK) {
+        HLOG(FATAL) << "Unknown result op type: " << message.op_result;
+        return;
+    }
+    Message response =
+        MessageHelper::NewSharedLogOpSucceeded(SharedLogResultType::READ_OK,
+                                               message.query_seqnum);
+    MessageHelper::AppendInlineData(&response, payload);
+    std::vector<LocalOp*> finished_ops;
+    pending_kvs_reads_.Poll(std::make_pair(message.query_seqnum, message.query_tag),
+                            finished_ops);
+    for (LocalOp* op: finished_ops) {
+        FinishLocalOpWithResponse(op, &response);
+    }
+    CCLogCachePut(message.query_seqnum, message.query_tag, payload);
+}
+
+void
+Engine::ProcessLogReadResult(const protocol::SharedLogMessage& message,
+                             std::span<const char> payload)
+{
+    // payload only contains log data, no tags
+    auto result = SharedLogMessageHelper::GetResultType(message);
+    uint64_t query_seqnum =
+        bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
+    if (result == SharedLogResultType::DATA_LOST) {
+        HLOG(FATAL) << fmt::format("log read seqnum={:#x} localid={:#x} data lost",
+                                   query_seqnum,
+                                   message.localid);
+        return;
+    }
+    if (result != SharedLogResultType::READ_OK) {
+        HLOG(FATAL) << "Unknown result op type: " << message.op_result;
+        return;
+    }
+    Message response =
+        MessageHelper::NewSharedLogOpSucceeded(SharedLogResultType::READ_OK,
+                                               query_seqnum);
+    MessageHelper::AppendInlineData(&response, payload);
+    std::vector<LocalOp*> finished_ops;
+    pending_log_reads_.Poll(message.localid, finished_ops);
+    for (LocalOp* op: finished_ops) {
+        HVLOG(1) << fmt::format(
+            "log read op id={} seqnum={:#x} localid={:#x} returned OK",
+            op->id,
+            query_seqnum,
+            message.localid);
+        FinishLocalOpWithResponse(op, &response);
+    }
+    CCLogCachePut(message.localid, payload);
+}
+
+void
+Engine::TxnEngineLocalAppend(LocalOp* op)
+{
+    if (!txn_engine_) {
+        HLOG(FATAL) << "Txn engine not activated";
+        return;
+    }
+    txn_engine_->RegisterOp(op);
+    HVLOG_F(
+        1,
+        "Handle local append op call_id {} type {:#x}: localid={:#x} cond_tag={} cond_pos={}",
+        op->call_id,
+        static_cast<uint16_t>(op->type),
+        op->localid,
+        op->cond_tag,
+        op->cond_pos);
+    auto message = NewCCReplicateMessage(op);
+    message.logspace_id = txn_engine_->logspace_id_;
+    bool success = ReplicateCCLogEntry(txn_engine_->view_,
+                                       message,
+                                       VECTOR_AS_SPAN(op->user_tags),
+                                       op->data.to_span());
+    if (!success) {
+        HLOG(FATAL) << "Failed to replicate txn start message";
+    }
+    CCLogCachePut(op->localid, op->data.to_span());
+}
+
+void
+Engine::TxnEngineLocalRead(LocalOp* op)
+{
+    if (!txn_engine_) {
+        HLOG(FATAL) << "Txn engine not activated";
+        return;
+    }
+    HVLOG_F(1,
+            "Handle local read op id {} call_id {}: tag={}, seqnum={:#x}",
+            op->id,
+            op->call_id,
+            op->query_tag,
+            op->seqnum);
+    auto index_info = txn_engine_->LookUp(op);
+    if (!index_info) {
+        // index query blocks on future index data
+        HVLOG(1) << fmt::format("read op id={} blocked on future index", op->id);
+        return;
+    }
+    ProcessIndexQueryResults(*index_info, op);
+}
+
+void
+Engine::TxnEngineRecvMetaLog(const protocol::SharedLogMessage& message,
+                             std::span<const char> payload)
+{
+    if (!txn_engine_) {
+        HLOG(FATAL) << "Txn engine not activated";
+        return;
+    }
+    // std::optional<std::vector<MetaLogProto*>> metalogs;
+    TxnEngine::FinishedOpVec finished_ops;
+    {
+        // absl::MutexLock lk(&txn_engine_->metalog_buffer_.buffer_mu_);
+        absl::MutexLock lk(&txn_engine_->append_mu_);
+        txn_engine_->metalog_buffer_.ProvideRaw(payload);
+        auto metalogs = txn_engine_->metalog_buffer_.PollBuffer();
+        if (!metalogs) {
+            return;
+        }
+        txn_engine_->ApplyMetaLogs(*metalogs);
+        txn_engine_->metalog_buffer_.Recycle(*metalogs);
+        txn_engine_->PollFinishedOps(finished_ops);
+    }
+    for (LocalOp* op: finished_ops) {
+        ProcessFinishedOp(op);
+    }
+}
+
+void
+Engine::TxnEngineRecvIndex(const protocol::SharedLogMessage& message,
+                           std::span<const char> payload)
+{
+    if (!txn_engine_) {
+        HLOG(FATAL) << "Txn engine not activated";
+        return;
+    }
+    auto storage_index = std::make_unique<PerStorageIndexProto>();
+    storage_index->ParseFromArray(payload.data(), static_cast<int>(payload.size()));
+    TxnEngine::CondOpResultVec cond_op_results;
+    TxnEngine::IndexQueryResultVec pending_query_results;
+    {
+        // absl::MutexLock lk(&txn_engine_->index_buffer_.buffer_mu_);
+        absl::MutexLock lk(&txn_engine_->index_mu_);
+        for (auto& engine_index: *storage_index->mutable_engine_indices()) {
+            txn_engine_->index_buffer_.ProvideAllocated(&engine_index);
+        }
+        auto engine_indices = txn_engine_->index_buffer_.PollBuffer();
+        if (!engine_indices) {
+            return;
+        }
+        // apply and poll cond ops and pending reads
+        // NOTE: for append ops, applying index only finishes cond ops, while
+        // applying metalog finishes none-cond ops though it is possible that
+        // index is ahead of metalog, and non-cond ops can be finished here, we
+        // leave that completely to metalog for clarity
+        txn_engine_->ApplyIndices(*engine_indices);
+        txn_engine_->index_buffer_.Recycle(*engine_indices);
+        txn_engine_->PollCondOpResults(cond_op_results);
+        txn_engine_->PollIndexQueryResults(pending_query_results);
+    }
+    // finish cond ops
+    TxnEngine::FinishedOpVec finished_cond_ops;
+    {
+        absl::MutexLock lk(&txn_engine_->append_mu_);
+        txn_engine_->FinishCondOps(cond_op_results);
+        txn_engine_->PollFinishedOps(finished_cond_ops);
+    }
+    for (LocalOp* op: finished_cond_ops) {
+        ProcessFinishedOp(op);
+    }
+    // process pending reads
+    for (auto& [index_info, op]: pending_query_results) {
+        ProcessIndexQueryResults(index_info, op);
+    }
+}
+
+void
+Engine::TxnEngineRecvResponse(const SharedLogMessage& message,
+                              std::span<const char> payload)
+{
+    // only read responses here
+    switch (SharedLogMessageHelper::GetOpType(message)) {
+    case SharedLogOpType::CC_READ_KVS:
+        ProcessKVSReadResult(message, payload);
+        break;
+    case SharedLogOpType::CC_READ_LOG:
+        ProcessLogReadResult(message, payload);
+        break;
+    default:
+        HLOG(FATAL) << "Unknown response op type: " << message.op_type;
+    }
 }
 
 }  // namespace log
