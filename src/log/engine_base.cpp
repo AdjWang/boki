@@ -346,7 +346,6 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
     }
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
-    log_op_pool_.Return(op);
 
     if (recycle) {
         // RecycleLocalOp(op);
