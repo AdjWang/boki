@@ -55,6 +55,7 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ThreadedMap);
 };
 
+log::MetaLogProto MetaLogFromPayload(std::span<const char> payload);
 log::MetaLogsProto MetaLogsFromPayload(std::span<const char> payload);
 
 log::LogMetaData GetMetaDataFromMessage(const protocol::SharedLogMessage& message);

@@ -252,7 +252,7 @@ func (w *FuncWorker) doHandshake() error {
 	if err != nil {
 		return err
 	}
-	// DEBUG
+	// add additonal informations
 	w.outputPipe = newPipeWrapper(op)
 	// w.outputPipe = op
 

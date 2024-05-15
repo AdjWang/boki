@@ -1,6 +1,7 @@
 #include "log/sequencer.h"
 
 #include "log/flags.h"
+#include "log/utils.h"
 #include "utils/bits.h"
 
 namespace faas {
@@ -234,6 +235,44 @@ void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
 // replicas: from the primary to me
 void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                   std::span<const char> payload) {
+    if (use_txn_engine()) {
+        TxnOnRecvNewMetaLogs(message, payload);
+    } else {
+        SLogOnRecvNewMetaLogs(message, payload);
+    }
+}
+
+// Halfmoon simplified MetaLogsProto to direct MetaLogProto
+void Sequencer::TxnOnRecvNewMetaLogs(const SharedLogMessage& message,
+                                     std::span<const char> payload) {
+    DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
+    uint32_t logspace_id = message.logspace_id;
+    MetaLogProto metalog_proto = log_utils::MetaLogFromPayload(payload);
+    DCHECK_EQ(metalog_proto.logspace_id(), logspace_id);
+    uint32_t old_metalog_position;
+    uint32_t new_metalog_position;
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
+        IGNORE_IF_FROM_PAST_VIEW(message);
+        auto logspace_ptr = backup_collection_.GetLogSpaceChecked(logspace_id);
+        {
+            auto locked_logspace = logspace_ptr.Lock();
+            RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
+            old_metalog_position = locked_logspace->metalog_position();
+            locked_logspace->ProvideMetaLog(metalog_proto);
+            new_metalog_position = locked_logspace->metalog_position();
+        }
+    }
+    if (new_metalog_position > old_metalog_position) {
+        SharedLogMessage response = SharedLogMessageHelper::NewMetaLogProgressMessage(
+            logspace_id, new_metalog_position);
+        SendSequencerMessage(message.sequencer_id, &response);
+    }
+}
+
+void Sequencer::SLogOnRecvNewMetaLogs(const SharedLogMessage& message,
+                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
     uint32_t logspace_id = message.logspace_id;
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);

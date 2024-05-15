@@ -49,6 +49,15 @@ void FutureRequests::OnHoldRequest(uint16_t view_id, SharedLogRequest request) {
     onhold_requests_[view_id].push_back(std::move(request));
 }
 
+MetaLogProto MetaLogFromPayload(std::span<const char> payload) {
+    MetaLogProto metalog_proto;
+    if (!metalog_proto.ParseFromArray(payload.data(),
+                                      static_cast<int>(payload.size()))) {
+        LOG(FATAL) << "Failed to parse MetaLogsProto";
+    }
+    return metalog_proto;
+}
+
 MetaLogsProto MetaLogsFromPayload(std::span<const char> payload) {
     MetaLogsProto metalogs_proto;
     if (!metalogs_proto.ParseFromArray(payload.data(),

@@ -36,6 +36,10 @@ private:
                              std::span<const char> payload) override;
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                            std::span<const char> payload) override;
+    void TxnOnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
+                              std::span<const char> payload);
+    void SLogOnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
+                               std::span<const char> payload);
 
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 

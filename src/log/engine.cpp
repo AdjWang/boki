@@ -187,6 +187,8 @@ TxnEngine::ApplyIndices(std::vector<PerEngineIndexProto*>& engine_indices)
         LocalOp* op = iter->second;
         IndexInfo index_info = LookUpCurrentIndexBackward(op);
         pending_query_results_.push_back(IndexQueryResult{index_info, op});
+        // Missed in Halfmoon?
+        iter = pending_queries_.erase(iter);
     }
 }
 
@@ -268,10 +270,8 @@ std::optional<TxnEngine::IndexInfo>
 TxnEngine::LookUpForward(LocalOp* op)
 {
     absl::ReaderMutexLock lk(&index_mu_);
-    // TODO: required?
-    // DCHECK(logspace_id_ == bits::HighHalf64(op->seqnum))
-    //     << fmt::format("logspace_id={:#x} op->seqnum={:#x}", logspace_id_,
-    //                    bits::HighHalf64(op->seqnum));
+    // // TODO: Halfmoon satisfies this?
+    // DCHECK(logspace_id_ == bits::HighHalf64(op->seqnum));
     // currently not supporting snapshot and single obj read
     DCHECK(op->query_tag != kEmptyLogTag);
     if (!seqnums_by_tag_.contains(op->query_tag)) {
@@ -316,7 +316,7 @@ TxnEngine::IndexInfo
 TxnEngine::LookUpCurrentIndexBackward(LocalOp* op)
 {
     // absl::ReaderMutexLock lk(&index_mu_);
-    // TODO: required?
+    // TODO: Halfmoon satisfies this?
     // DCHECK(logspace_id_ == bits::HighHalf64(op->seqnum));
     // currently not supporting snapshot and single obj read
     DCHECK(op->query_tag != kEmptyLogTag);
