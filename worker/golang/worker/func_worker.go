@@ -319,6 +319,12 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 	if err != nil {
 		log.Printf("[ERROR] FuncCall failed with error: %v", err)
 	}
+	// else {
+	// 	// From Halfmoon
+	// 	log.Printf("[INFO] FuncCall %v finished, processing time %v, dispatch delay %v",
+	// 		funcCall.CallId, processingTime, dispatchDelay)
+	// }
+
 	// STAT
 	// ComposeReview
 	// if funcCall.FuncId == 6 {
