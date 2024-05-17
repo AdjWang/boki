@@ -312,7 +312,8 @@ func (w *FuncWorker) executeFunc(dispatchFuncMessage []byte) {
 	processingTime := common.GetMonotonicMicroTimestamp() - startTimestamp
 	atomic.StoreUint64(&w.currentCall, 0)
 	if err != nil {
-		log.Printf("[ERROR] FuncCall failed with error: %v", err)
+		log.Printf("[ERROR] FuncCall failed with error: %v fn id=%d client id=%d",
+			err, w.funcId, w.clientId)
 	}
 
 	var response []byte

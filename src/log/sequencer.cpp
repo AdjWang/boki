@@ -270,6 +270,7 @@ void Sequencer::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
 }
 
 void Sequencer::MarkNextCutIfDoable() {
+    bool has_replica = true;
     const View* view = nullptr;
     std::optional<MetaLogProto> meta_log_proto;
     {
@@ -281,7 +282,8 @@ void Sequencer::MarkNextCutIfDoable() {
         {
             auto locked_logspace = current_primary_.Lock();
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
-            if (!locked_logspace->all_metalog_replicated()) {
+            has_replica = !locked_logspace->no_replica();
+            if (has_replica && !locked_logspace->all_metalog_replicated()) {
                 HLOG(INFO) << "Not all meta log replicated, will not mark new cut";
                 return;
             }
@@ -289,7 +291,34 @@ void Sequencer::MarkNextCutIfDoable() {
         }
     }
     if (meta_log_proto.has_value()) {
-        ReplicateMetaLog(view, *meta_log_proto);
+        if (has_replica) {
+            // the primary: notify replicas
+            ReplicateMetaLog(view, *meta_log_proto);
+        } else {
+            absl::InlinedVector<MetaLogProto, 4> replicated_metalogs;
+            {
+                absl::ReaderMutexLock view_lk(&view_mu_);
+                view = current_view_;
+                {
+                    auto locked_logspace = current_primary_.Lock();
+                    RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
+                    uint32_t old_position = locked_logspace->replicated_metalog_position();
+                    locked_logspace->ForceUpdateReplicaProgress();
+                    uint32_t new_position = locked_logspace->replicated_metalog_position();
+                    for (uint32_t pos = old_position; pos < new_position; pos++) {
+                        if (auto metalog = locked_logspace->GetMetaLog(pos); metalog.has_value()) {
+                            replicated_metalogs.push_back(std::move(*metalog));
+                        } else {
+                            HLOG_F(FATAL, "Cannot get meta log at position {}", pos);
+                        }
+                    }
+                }
+            }
+            for (const MetaLogProto& metalog_proto : replicated_metalogs) {
+                // to storages and engines
+                PropagateMetaLog(DCHECK_NOTNULL(view), metalog_proto);
+            }
+        }
     }
 }
 
